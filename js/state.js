@@ -104,7 +104,7 @@
     const sup = App.thinkSupport(model);
     if (sup === 'qwen') return { enable_thinking: !!enabled };
     if (sup === 'doubao') return { thinking: { type: enabled ? 'enabled' : 'disabled' } };
-    if (sup === 'openai') return enabled ? { reasoning_effort: 'high' } : {};
+    if (sup === 'openai') return {};   // 不再注入 reasoning_effort，中转站兼容
     return {};
   };
 
