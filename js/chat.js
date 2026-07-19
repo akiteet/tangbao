@@ -440,8 +440,13 @@
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.apiKey },
           body: JSON.stringify(payload),
         });
+        // [DEBUG] 诊断中转站兼容性
+        console.log('[糖包DEBUG] 请求 URL:', url);
+        console.log('[糖包DEBUG] 请求 payload keys:', Object.keys(payload));
+        console.log('[糖包DEBUG] 响应 status:', res.status, 'headers:', res.headers.get('content-type'));
         if (!res.ok) {
           const txt = await res.text().catch(() => '');
+          console.log('[糖包DEBUG] 错误响应 body:', txt.slice(0, 500));
           ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(txt.slice(0, 240))}</div>`;
           ui.actions.style.display = 'flex';
           return;
@@ -449,10 +454,13 @@
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
+        let firstChunk = true;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buf += decoder.decode(value, { stream: true });
+          const chunk = decoder.decode(value, { stream: true });
+          if (firstChunk) { console.log('[糖包DEBUG] 首个响应 chunk (前500字):', chunk.slice(0, 500)); firstChunk = false; }
+          buf += chunk;
           const parts = buf.split('\n');
           buf = parts.pop();
           for (const line of parts) {
@@ -461,7 +469,8 @@
             const data = t.slice(5).trim();
             if (data === '[DONE]') break;
             let json;
-            try { json = JSON.parse(data); } catch (e) { continue; }
+            try { json = JSON.parse(data); } catch (e) { console.log('[糖包DEBUG] JSON parse 失败:', data.slice(0, 200)); continue; }
+            if (json.error) { console.log('[糖包DEBUG] 响应含 error:', JSON.stringify(json.error)); }
             const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
             if (delta.reasoning_content) {
               thinkAcc += delta.reasoning_content;
@@ -474,21 +483,25 @@
         // 兼容中转站：流未以换行结尾，或根本不返回 SSE（单条 JSON）
         if (buf.trim()) {
           const t = buf.trim();
+          console.log('[糖包DEBUG] 末尾残留 buf (前200字):', t.slice(0, 200));
           if (t.startsWith('data:')) {
             const data = t.slice(5).trim();
             if (data && data !== '[DONE]') {
               try {
                 const json = JSON.parse(data);
+                if (json.error) console.log('[糖包DEBUG] 残留 buf 含 error:', JSON.stringify(json.error));
                 const d = (json.choices && json.choices[0] && json.choices[0].delta) || {};
                 if (d.reasoning_content) { thinkAcc += d.reasoning_content; if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.textContent = thinkAcc; } started = true; }
                 if (d.content) appendDelta(d.content);
-              } catch (e) {}
+              } catch (e) { console.log('[糖包DEBUG] 残留 buf JSON parse 失败:', t.slice(0, 200)); }
             }
           } else {
             // 非流式：整段即一个 JSON 对象（部分中转站会忽略 stream:true）
             try {
               const json = JSON.parse(t);
+              if (json.error) console.log('[糖包DEBUG] 非流式响应含 error:', JSON.stringify(json.error));
               const ch = (json.choices && json.choices[0]) || {};
+              console.log('[糖包DEBUG] 非流式 choices[0]:', JSON.stringify(ch).slice(0, 400));
               if (ch.message && ch.message.reasoning_content) { thinkAcc += ch.message.reasoning_content; if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.textContent = thinkAcc; } started = true; }
               if (ch.message && ch.message.content) appendDelta(ch.message.content);
               else if (ch.delta && ch.delta.content) appendDelta(ch.delta.content);
@@ -500,7 +513,10 @@
         ui.actions.style.display = 'flex';
         return;
       }
-      if (!acc && !thinkAcc) ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容。部分中转站不支持流式输出，可尝试在“设置-聊天-自定义填写”中关闭流式，或检查模型名是否正确。</div>';
+      if (!acc && !thinkAcc) {
+        console.log('[糖包DEBUG] 未解析到任何内容！请查看上方日志中[响应 status][首个响应 chunk][残留 buf]信息');
+        ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容。请按 F12 打开控制台，查看 [糖包DEBUG] 日志，将「首个响应 chunk」和「残留 buf」的内容发给我诊断。</div>';
+      }
       conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
       conv.updatedAt = Date.now();
       ui.actions.style.display = 'flex';
