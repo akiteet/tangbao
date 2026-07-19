@@ -257,23 +257,23 @@
       App.image.renderSkeleton(n);
 
       try {
-        const apiFetch = (window.electron && window.electron.fetch) || fetch;
+        const proxyBase = 'http://localhost:' + (location.port || 4280) + '/api-proxy';
         let res, data;
         if (refImg) {
           // 图片编辑：用 chat completions vision 格式
           const url = p.apiBase.replace(/\/+$/, '') + '/chat/completions';
           const content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: refImg } }];
-          res = await apiFetch(url, {
+          res = await fetch(proxyBase, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + p.apiKey },
+            headers: { 'Content-Type': 'application/json', 'x-target-url': url, 'x-auth': 'Bearer ' + p.apiKey },
             body: JSON.stringify({ model: p.model, messages: [{ role: 'user', content }], stream: false }),
           });
         } else {
           // 文生图：标准 images/generations
           const url = p.apiBase.replace(/\/+$/, '') + '/images/generations';
-          res = await apiFetch(url, {
+          res = await fetch(proxyBase, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + p.apiKey },
+            headers: { 'Content-Type': 'application/json', 'x-target-url': url, 'x-auth': 'Bearer ' + p.apiKey },
             body: JSON.stringify({ model: p.model, prompt: finalPrompt, n, size, response_format: 'b64_json' }),
           });
         }

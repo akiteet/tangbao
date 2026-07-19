@@ -66,6 +66,8 @@ function startStaticServer() {
         if (fullUrl.split('?')[0].startsWith('/__local/')) { handleLocalFile(fullUrl, res); return; }
         // 同源代理（强制嵌入被拦站点）：剥离防嵌入响应头
         if (fullUrl.split('?')[0] === '/proxy') { handleProxy(req, res); return; }
+        // API 代理：转发到中转站，规避浏览器 CORS 限制
+        if (fullUrl.split('?')[0] === '/api-proxy') { handleApiProxy(req, res); return; }
         let urlPath = decodeURIComponent(fullUrl.split('?')[0]);
         if (urlPath === '/') urlPath = '/index.html';
         const filePath = path.normalize(path.join(root, urlPath));
@@ -192,6 +194,41 @@ function handleProxy(req, res) {
     });
 }
 
+// API 代理：转发聊天/图像请求到中转站，规避浏览器 CORS
+async function handleApiProxy(req, res) {
+  try {
+    const targetUrl = req.headers['x-target-url'];
+    if (!targetUrl) { res.writeHead(400); res.end('missing x-target-url header'); return; }
+    const bodyChunks = [];
+    for await (const chunk of req) bodyChunks.push(chunk);
+    const body = Buffer.concat(bodyChunks);
+    const fRes = await fetch(targetUrl, {
+      method: req.method,
+      headers: {
+        'Content-Type': req.headers['content-type'] || 'application/json',
+        'Authorization': req.headers['x-auth'] || '',
+      },
+      body: body.length ? body : undefined,
+    });
+    res.writeHead(fRes.status, {
+      'Content-Type': fRes.headers.get('content-type') || 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    if (fRes.body) {
+      const reader = fRes.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+    }
+    res.end();
+  } catch (e) {
+    res.writeHead(502);
+    res.end('proxy error: ' + (e.message || e));
+  }
+}
+
 function proxyTransformUrl(val, baseUrl) {
   val = (val || '').trim();
   if (!val) return val;
@@ -259,7 +296,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,   // 关闭同源策略，允许跨域请求中转站 API（桌面应用无 XSS 风险）
+      webSecurity: true,
       webviewTag: true, // 强制嵌入模块使用 <webview>，Electron 新版默认关闭，必须显式开启
       preload: path.join(__dirname, 'preload.js'),
     },

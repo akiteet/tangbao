@@ -435,11 +435,15 @@
         App.chat.scrollBottom();
       };
       try {
-        // 使用 Node.js fetch（preload 桥接），绕过浏览器 CORS 限制
-        const apiFetch = (window.electron && window.electron.fetch) || fetch;
-        const res = await apiFetch(url, {
+        // 走本地代理转发，规避浏览器 CORS
+        const proxyUrl = 'http://localhost:' + (location.port || 4280) + '/api-proxy';
+        const res = await fetch(proxyUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.apiKey },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-target-url': url,
+            'x-auth': 'Bearer ' + s.apiKey,
+          },
           body: JSON.stringify(payload),
         });
         // [DEBUG] 诊断中转站兼容性
