@@ -388,7 +388,7 @@
         btn.classList.remove('danger');
         App.state.settings.accounts = [];
         App.state.settings.defaultAccountId = '';
-        const modules = ['default', 'chat', 'image', 'doc'];
+        const modules = ['default', 'chat', 'agent', 'create', 'image', 'doc'];
         modules.forEach(m => { App.state.settings.providers[m] = { accountId: '__default__', apiBase: '', apiKey: '', model: '' }; });
         App.persist();
         App.ui.refreshSettingsUI();
@@ -512,7 +512,7 @@
       s.accounts = s.accounts.filter(a => a.id !== id);
       if (s.defaultAccountId === id) s.defaultAccountId = s.accounts.length ? s.accounts[0].id : '';
       // 清理引用了被删账户的模块选择
-      for (const m of ['default', 'chat', 'image', 'doc']) {
+      for (const m of ['default', 'chat', 'agent', 'create', 'image', 'doc']) {
         const p = s.providers[m];
         if (p && p.accountId === id) { p.accountId = '__default__'; p.model = ''; }
       }

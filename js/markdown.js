@@ -38,22 +38,46 @@
     });
     text = escapeHtml(text);
     const lines = text.split('\n');
-    let html = '', inUl = false, inOl = false, inQuote = false;
+    let html = '', inUl = false, inOl = false, inQuote = false, inTable = false;
     const closeLists = () => {
       if (inUl) { html += '</ul>'; inUl = false; }
       if (inOl) { html += '</ol>'; inOl = false; }
       if (inQuote) { html += '</blockquote>'; inQuote = false; }
+      if (inTable) { html += '</table>'; inTable = false; }
     };
+    const flushTableRows = (rows) => {
+      if (!rows.length) return '';
+      let t = '<table>';
+      rows.forEach((cols, ri) => {
+        t += '<tr>';
+        const tag = ri === 0 ? 'th' : 'td';
+        cols.forEach(c => { t += `<${tag}>${inlineMd(c.trim())}</${tag}>`; });
+        t += '</tr>';
+      });
+      t += '</table>';
+      return t;
+    };
+    let tableRows = [];
     for (const raw of lines) {
       const cp = raw.match(/^@@CODEBLOCK(\d+)@@$/);
       if (cp) {
-        closeLists();
+        if (tableRows.length) { html += flushTableRows(tableRows); tableRows = []; closeLists(); }
+        else closeLists();
         const b = blocks[+cp[1]];
         html += `<pre class="code-block"><div class="code-head"><span class="code-lang">${escapeHtml(b.lang)}</span><button class="copy-btn">复制</button></div><code class="hljs">${highlightCode(b.code, b.lang)}</code></pre>`;
         continue;
       }
-      if (/^\s*$/.test(raw)) { closeLists(); continue; }
-      const h = raw.match(/^(#{1,3})\s+(.*)$/);
+      // 表格行（跳过分隔行 ---）
+      const tblRow = raw.match(/^\|(.+)\|$/);
+      if (tblRow && !/^\|[-:| ]+\|$/.test(raw)) {
+        if (!inTable) { closeLists(); inTable = true; }
+        tableRows.push(tblRow[1].split('|'));
+        continue;
+      }
+      if (inTable && /^\|[-:| ]+\|$/.test(raw)) continue; // 分隔行，跳过
+      if (tableRows.length) { html += flushTableRows(tableRows); tableRows = []; closeLists(); }
+      if (/^\s*$/.test(raw)) continue; // 空行不关闭列表
+      const h = raw.match(/^(#{1,6})\s+(.*)$/);
       if (h) { closeLists(); const lv = h[1].length; html += `<h${lv}>${inlineMd(h[2])}</h${lv}>`; continue; }
       if (/^---+$/.test(raw.trim())) { closeLists(); html += '<hr>'; continue; }
       const q = raw.match(/^>\s?(.*)$/);
@@ -65,6 +89,7 @@
       closeLists();
       html += '<p>' + inlineMd(raw) + '</p>';
     }
+    if (tableRows.length) html += flushTableRows(tableRows);
     closeLists();
     return html;
   }

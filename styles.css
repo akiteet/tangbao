@@ -1149,8 +1149,28 @@ img { max-width: 100%; }
 .agent-msg { max-width: 92%; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: 14px; line-height: 1.6; }
 .agent-msg.user { align-self: flex-end; background: var(--user-blue); color: var(--text); }
 .agent-msg.assistant { align-self: flex-start; background: var(--hover-bg); border: none; border-radius: 4px 16px 16px 16px; }
-.agent-answer { white-space: normal; }
+.agent-answer { white-space: normal; font-size: 15px; line-height: 1.7; word-wrap: break-word; }
 .agent-answer.error { color: #d9363e; }
+.agent-answer p { margin: 0 0 10px; }
+.agent-answer p:last-child { margin-bottom: 0; }
+.agent-answer h1, .agent-answer h2, .agent-answer h3, .agent-answer h4, .agent-answer h5, .agent-answer h6 { margin: 14px 0 8px; line-height: 1.35; }
+.agent-answer h1 { font-size: 22px; } .agent-answer h2 { font-size: 19px; } .agent-answer h3 { font-size: 16px; } .agent-answer h4 { font-size: 15px; } .agent-answer h5 { font-size: 14px; } .agent-answer h6 { font-size: 13px; }
+.agent-answer ul, .agent-answer ol { margin: 0 0 10px; padding-left: 22px; }
+.agent-answer li { margin: 4px 0; }
+.agent-answer a { color: var(--primary); text-decoration: none; }
+.agent-answer a:hover { text-decoration: underline; }
+.agent-answer blockquote { margin: 0 0 10px; padding: 4px 14px; border-left: 3px solid var(--border-strong); color: var(--text-secondary); }
+.agent-answer hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+.agent-answer code { background: var(--code-bg); padding: 2px 6px; border-radius: 5px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; color: #d9466b; }
+[data-theme="dark"] .agent-answer code { color: #ff9bb3; }
+
+/* 表格 */
+table { border-collapse: collapse; margin: 0 0 12px; width: 100%; }
+th, td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; font-size: 14px; }
+th { background: var(--hover-bg); font-weight: 600; }
+.agent-answer table, .msg-card .bubble table { margin: 0 0 12px; }
+.agent-answer th, .msg-card .bubble th,
+.agent-answer td, .msg-card .bubble td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; font-size: 14px; }
 .agent-think { align-self: flex-start; max-width: 92%; font-size: 12.5px; color: var(--text-secondary); font-style: normal; padding: 8px 14px; border-left: 2px solid var(--border-strong); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: rgba(127,127,127,.06); }
 .agent-tool { align-self: stretch; border: 1px solid var(--border); border-left: 2px solid var(--primary); border-radius: var(--radius-sm); background: var(--hover-bg); overflow: hidden; }
 .agent-tool.collapsed .agent-tool-body { display: none; }

@@ -15,6 +15,8 @@
       providers: {
         default: { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
         chat:    { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
+        agent:   { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
+        create:  { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
         image:   { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
         doc:     { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
       },
