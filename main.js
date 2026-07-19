@@ -5,7 +5,7 @@
  * - 在主进程内拉起「糖码」后端（server/agent-server.js 的 startAgentServer）
  * - 退出时随进程结束自动关闭后端
  */
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, session, ipcMain, dialog, shell } = require('electron');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -265,6 +265,14 @@ function createWindow() {
     },
   });
   mainWindow.loadURL(`http://localhost:${APP_PORT}/`);
+  // 注入 CORS 响应头，解决中转站 API 跨域拦截问题（桌面应用无 XSS 风险）
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = details.responseHeaders || {};
+    headers['Access-Control-Allow-Origin'] = ['*'];
+    headers['Access-Control-Allow-Headers'] = ['*'];
+    headers['Access-Control-Allow-Methods'] = ['GET, POST, PUT, DELETE, OPTIONS'];
+    callback({ responseHeaders: headers });
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
