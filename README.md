@@ -11,11 +11,19 @@
   <img src="https://img.shields.io/badge/Node.js-22-339933?style=flat&logo=node.js&logoColor=white" />
   <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows&logoColor=white" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat" />
+  <a href="https://github.com/akiteet/tangbao/releases"><img src="https://img.shields.io/github/v/release/akiteet/tangbao?style=flat&color=ff6b6b" /></a>
+  <a href="https://github.com/akiteet/tangbao/releases/latest"><img src="https://img.shields.io/badge/下载-Windows_安装包-0078D6?style=flat&logo=windows" /></a>
 </p>
 
 ---
 
 > 一个**纯前端 + 本地后端**的 AI 桌面应用，用 Electron 打造，零云服务依赖。接入你自己的 API Key，让对话、编码、绘图、文档分析都在本地完成。
+
+## 安装
+
+[**→ 下载最新安装包**](https://github.com/akiteet/tangbao/releases/latest)（`糖包-1.0.0-setup.exe`），双击安装即可。
+
+开发者从源码运行：
 
 ## 五大模块
 
