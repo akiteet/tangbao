@@ -280,7 +280,7 @@
     refreshSettingsUI() {
       const s = App.state.settings;
       const apiModuleSel = $('apiModuleSel');
-      if (apiModuleSel) App.ui.renderApiPanel(apiModuleSel.value || 'default');
+      if (apiModuleSel) App.ui.renderApiPanel(apiModuleSel.value || 'chat');
       App.ui.renderAccounts();
       // 自定义面板：提示词 / 模块 / 外观
       App.ui.renderModulesPanel();
@@ -320,26 +320,25 @@
       const s = App.state.settings;
       const sel = $('apiAccountSel');
       if (!sel) return;
-      const cur = (s.providers[module] && s.providers[module].accountId) || '__default__';
+      const prov = s.providers[module] || {};
+      const cur = prov.accountId || s.defaultAccountId || '__custom__';
       sel.innerHTML =
-        `<option value="__default__">跟随默认账户</option>` +
         s.accounts.map(a => `<option value="${a.id}">${App.escapeHtml(a.name)}</option>`).join('') +
         `<option value="__custom__">自定义填写</option>`;
       sel.value = cur;
       const cf = $('apiCustomFields');
       if (cf) cf.hidden = cur !== '__custom__';
       if (cur === '__custom__') {
-        const p = s.providers[module] || {};
-        $('apiBaseCur').value = p.apiBase || '';
-        $('apiKeyCur').value = p.apiKey || '';
-        $('apiModelCur').value = p.model || '';
+        $('apiBaseCur').value = prov.apiBase || '';
+        $('apiKeyCur').value = prov.apiKey || '';
+        $('apiModelCur').value = prov.model || '';
       }
     },
 
     saveCurrentApiModule(module) {
-      const m = module || (($('apiModuleSel') && $('apiModuleSel').value) || 'default');
+      const m = module || (($('apiModuleSel') && $('apiModuleSel').value) || 'chat');
       const sel = $('apiAccountSel');
-      const accountId = sel ? sel.value : '__default__';
+      const accountId = sel ? sel.value : '';
       const existing = App.state.settings.providers[m] || {};
       const prov = { accountId };
       if (accountId === '__custom__') {
@@ -1003,7 +1002,7 @@
       });
       const apiModuleSel = $('apiModuleSel');
       if (apiModuleSel) apiModuleSel.addEventListener('change', () => {
-        const prev = App.ui._apiModule || 'default';
+        const prev = App.ui._apiModule || 'chat';
         App.ui.saveCurrentApiModule(prev);
         App.ui.renderApiPanel(apiModuleSel.value);
       });
@@ -1011,7 +1010,7 @@
       if (apiAccountSel) apiAccountSel.addEventListener('change', () => {
         const cf = $('apiCustomFields');
         if (cf) cf.hidden = apiAccountSel.value !== '__custom__';
-        const m = (apiModuleSel && apiModuleSel.value) || 'default';
+        const m = (apiModuleSel && apiModuleSel.value) || 'chat';
         if (m !== 'default' && App.state.settings.providers[m]) App.state.settings.providers[m].model = '';
       });
 
