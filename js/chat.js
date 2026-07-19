@@ -426,13 +426,36 @@
           }
         }
       }
-      let acc = '', thinkAcc = '', started = false;
+      let acc = '', thinkAcc = '', started = false, thinkOpen = false;
       const wantThink = App.state.think;
-      const appendDelta = (text) => {
+      const appendDelta = (text, isThink) => {
         if (!started) { ui.bubble.innerHTML = ''; started = true; }
-        acc += text;
-        ui.bubble.innerHTML = App.renderMarkdown(acc);
+        if (isThink) {
+          thinkAcc += text;
+          if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); }
+        } else {
+          acc += text;
+          ui.bubble.innerHTML = App.renderMarkdown(acc);
+        }
         App.chat.scrollBottom();
+      };
+      // 检测并拆分 <think> 标签的文本
+      const feedContent = (raw) => {
+        while (raw) {
+          if (!thinkOpen) {
+            const idx = raw.indexOf('<think>');
+            if (idx === -1) { appendDelta(raw, false); return; }
+            if (idx > 0) appendDelta(raw.slice(0, idx), false);
+            raw = raw.slice(idx + 7);
+            thinkOpen = true;
+          } else {
+            const idx = raw.indexOf('</think>');
+            if (idx === -1) { appendDelta(raw, true); return; }
+            if (idx > 0) appendDelta(raw.slice(0, idx), true);
+            raw = raw.slice(idx + 8);
+            thinkOpen = false;
+          }
+        }
       };
       try {
         // 走本地代理转发，规避浏览器 CORS
@@ -476,7 +499,7 @@
               if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); }
               started = true;
             }
-            if (delta.content) appendDelta(delta.content);
+            if (delta.content) feedContent(delta.content);
           }
         }
         // 兼容中转站：流未以换行结尾，或根本不返回 SSE（单条 JSON）
@@ -489,7 +512,7 @@
                 const json = JSON.parse(data);
                 const d = (json.choices && json.choices[0] && json.choices[0].delta) || {};
                 if (d.reasoning_content) { thinkAcc += d.reasoning_content; if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); } started = true; }
-                if (d.content) appendDelta(d.content);
+                if (d.content) feedContent(d.content);
               } catch (e) {}
             }
           } else {
@@ -498,8 +521,8 @@
               const json = JSON.parse(t);
               const ch = (json.choices && json.choices[0]) || {};
               if (ch.message && ch.message.reasoning_content) { thinkAcc += ch.message.reasoning_content; if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); } started = true; }
-              if (ch.message && ch.message.content) appendDelta(ch.message.content);
-              else if (ch.delta && ch.delta.content) appendDelta(ch.delta.content);
+              if (ch.message && ch.message.content) feedContent(ch.message.content);
+              else if (ch.delta && ch.delta.content) feedContent(ch.delta.content);
             } catch (e) {}
           }
         }
