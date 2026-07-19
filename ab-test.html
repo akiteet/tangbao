@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A/B 测试页</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; color: #1f2329; }
+  .sec { min-height: 60vh; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; }
+  .s1 { background: #e8f0fe; } .s2 { background: #fde8f0; } .s3 { background: #e8fde8; }
+  .s4 { background: #fef6e0; } .s5 { background: #f0e8fd; }
+  .top-tag, .bottom-tag { position: sticky; padding: 14px 20px; font-size: 18px; font-weight: 700; z-index: 2; }
+  .top-tag { top: 0; background: #1a5cff; color: #fff; }
+  .bottom-tag { bottom: 0; background: #d81b1b; color: #fff; text-align: center; }
+  .marker { padding: 40px; font-size: 20px; line-height: 1.8; }
+</style>
+</head>
+<body>
+  <div class="top-tag">顶部标记：如果你看到这行，说明页面顶部已渲染 ✓</div>
+  <div class="sec s1">区块 1</div>
+  <div class="sec s2">区块 2</div>
+  <div class="sec s3">区块 3</div>
+  <div class="sec s4">区块 4</div>
+  <div class="sec s5">区块 5</div>
+  <div class="marker">
+    这一页故意做得很长。判断"被挡/只显顶部"的标准：<br>
+    1) 能否看到 5 个彩色区块？<br>
+    2) 滚动到底能否看到红色"底部标记"？<br>
+    若两者都满足 → 该嵌入方式整页正常；若只看到顶部、下面空白/被盖 → 该方式有问题。
+  </div>
+  <div class="bottom-tag">底部标记：如果你看到这行红条，说明整页渲染成功 ✓（iframe 与 webview 应一致）</div>
+</body>
+</html>
