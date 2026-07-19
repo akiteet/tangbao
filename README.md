@@ -7,12 +7,12 @@
   <strong>你的全能 AI 助手桌面工作站</strong>
 </p>
 <p align="center">
-  <img src="https://img.shields.io/badge/Electron-31-47848f?style=flat&logo=electron&logoColor=white" />
-  <img src="https://img.shields.io/badge/Node.js-22-339933?style=flat&logo=node.js&logoColor=white" />
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-31-47848f?style=flat&logo=electron&logoColor=white" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-339933?style=flat&logo=node.js&logoColor=white" /></a>
   <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows&logoColor=white" />
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat" />
-  <img src="https://img.shields.io/github/v/release/akiteet/tangbao?style=flat&color=ff6b6b" />
-  <img src="https://img.shields.io/badge/下载-Windows_安装包-0078D6?style=flat&logo=windows" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" /></a>
+  <a href="https://github.com/akiteet/tangbao/releases"><img src="https://img.shields.io/github/v/release/akiteet/tangbao?style=flat&color=ff6b6b" /></a>
+  <a href="https://github.com/akiteet/tangbao/releases/latest"><img src="https://img.shields.io/badge/下载-Windows_安装包-0078D6?style=flat&logo=windows" /></a>
 </p>
 
 ---
