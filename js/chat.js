@@ -435,7 +435,9 @@
         App.chat.scrollBottom();
       };
       try {
-        const res = await fetch(url, {
+        // 使用 Node.js fetch（preload 桥接），绕过浏览器 CORS 限制
+        const apiFetch = (window.electron && window.electron.fetch) || fetch;
+        const res = await apiFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.apiKey },
           body: JSON.stringify(payload),
