@@ -251,7 +251,7 @@
                 <label>当前项目 / 工作目录</label>
                 <div class="agent-cwd-row">
                   <div class="agent-cwd-disp" id="agentCwdDisp" title="${App.escapeHtml(cwdFull)}"><span class="cwd-proj">${App.escapeHtml(proj.name)}</span>  ·  ${App.escapeHtml(cwdDisp)}</div>
-                  <button class="btn-ghost mini" id="agentProjectSettings">[设置]</button>
+                  <button class="btn-ghost mini" id="agentProjectSettings">⚙ 设置</button>
                 </div>
               </div>
               <div class="agent-field">
@@ -278,7 +278,7 @@
             <div class="agent-thread" id="agentThread"></div>
             <div class="agent-composer">
               <textarea id="agentInput" rows="1" placeholder="给糖码下达任务（Enter 发送，Shift+Enter 换行）"></textarea>
-              <button id="agentSend" disabled>发送</button>
+              <button id="agentSend" disabled>➤</button>
             </div>
           </div>
         </div>`;
@@ -297,8 +297,8 @@
       box.innerHTML = list.map(p => {
         return `<div class="agent-project${p.id === active ? ' active' : ''}" data-id="${p.id}">
           <span class="agent-project-name" title="${App.escapeHtml(p.name + (p.cwd ? ' · ' + p.cwd : ''))}">${App.escapeHtml(p.name)}</span>
-          <button class="agent-session-ren" title="设置" data-pset="${p.id}">[S]</button>
-          <button class="agent-session-del" title="删除" data-pdel="${p.id}">[X]</button>
+          <button class="agent-session-ren" title="设置" data-pset="${p.id}">⚙</button>
+          <button class="agent-session-del" title="删除" data-pdel="${p.id}">✕</button>
         </div>`;
       }).join('');
     },
@@ -314,8 +314,8 @@
         return `<div class="agent-session${t.id === active ? ' active' : ''}" data-id="${t.id}">
           <span class="agent-session-title" title="${App.escapeHtml(t.title)}">${App.escapeHtml(t.title || '新会话')}</span>
           <span class="agent-session-count">${n}</span>
-          <button class="agent-session-ren" title="重命名" data-ren="${t.id}">[R]</button>
-          <button class="agent-session-del" title="删除" data-del="${t.id}">[X]</button>
+          <button class="agent-session-ren" title="重命名" data-ren="${t.id}">✎</button>
+          <button class="agent-session-del" title="删除" data-del="${t.id}">✕</button>
         </div>`;
       }).join('');
     },
@@ -547,10 +547,10 @@
       const argStr = (args && Object.keys(args).length) ? JSON.stringify(args, null, 2) : '';
       block.innerHTML = `
         <div class="agent-tool-head">
-          <span class="agent-tool-ico">[工具]</span>
+          <span class="agent-tool-ico">⚙</span>
           <span class="agent-tool-name">${App.escapeHtml(name)}</span>
-          <span class="agent-tool-status">运行中...</span>
-          <button class="agent-tool-toggle">v</button>
+          <span class="agent-tool-status">⏳ 运行中…</span>
+          <button class="agent-tool-toggle">▾</button>
         </div>
         <div class="agent-tool-body">
           ${argStr ? `<pre class="agent-tool-args">${App.escapeHtml(argStr)}</pre>` : ''}
@@ -578,12 +578,12 @@
       if (st) {
         const elapsed = block._startTime ? ((Date.now() - block._startTime) / 1000).toFixed(1) + 's' : '';
         const isError = /error|fail|拒绝|denied|403|404|500/i.test(String(result || ''));
-        const icon = isError ? '[失败]' : '[完成]';
+        const icon = isError ? '❌' : '✅';
         st.textContent = (statusText || '完成') + (elapsed ? ' (' + elapsed + ')' : '');
         st.title = icon + ' ' + st.textContent;
       }
       const ico = block.querySelector('.agent-tool-ico');
-      if (ico) ico.textContent = /error|fail|拒绝/i.test(String(result || '')) ? '[失败]' : '[完成]';
+      if (ico) ico.textContent = /error|fail|拒绝/i.test(String(result || '')) ? '❌' : '✅';
     },
 
     wireApproval(block, callId) {
@@ -622,7 +622,7 @@
       const done = todos.filter(t => t.status === 'completed').length;
       const items = todos.map(t => {
         const cls = t.status === 'completed' ? 'done' : (t.status === 'in_progress' ? 'doing' : 'pending');
-        const mark = t.status === 'completed' ? '[\u221A]' : (t.status === 'in_progress' ? '[>]' : '[ ]');
+        const mark = t.status === 'completed' ? '✓' : (t.status === 'in_progress' ? '◐' : '○');
         const af = (t.status === 'in_progress' && t.activeForm) ? ` <span class="agent-todo-af">${App.escapeHtml(t.activeForm)}</span>` : '';
         return `<div class="agent-todo-item ${cls}"><span class="agent-todo-mark">${mark}</span><span class="agent-todo-text">${App.escapeHtml(t.content)}${af}</span></div>`;
       }).join('');
@@ -648,7 +648,7 @@
         const cls = d.type === '+' ? 'add' : (d.type === '-' ? 'del' : 'ctx');
         return `<div class="agent-diff-line ${cls}">${sign} ${App.escapeHtml(d.text)}</div>`;
       }).join('');
-      const pathLabel = filePath ? `<div class="agent-diff-path">[文件] ${App.escapeHtml(filePath)}</div>` : '';
+      const pathLabel = filePath ? `<div class="agent-diff-path">📄 ${App.escapeHtml(filePath)}</div>` : '';
       diffEl.innerHTML = pathLabel + lines;
       thread.scrollTop = thread.scrollHeight;
     },
@@ -663,7 +663,7 @@
       node.className = 'agent-job';
       node.innerHTML = `
         <div class="agent-job-head">
-          <span class="agent-job-ico">[运行]</span>
+          <span class="agent-job-ico">⏵</span>
           <span class="agent-job-title">后台任务运行中</span>
           <span class="agent-job-id">${App.escapeHtml(jobId)}</span>
         </div>
@@ -691,7 +691,7 @@
       if (!node) return;
       node.classList.add('done');
       const ico = node.querySelector('.agent-job-ico');
-      if (ico) ico.textContent = '[结束]';
+      if (ico) ico.textContent = '⏹';
       const title = node.querySelector('.agent-job-title');
       if (title) title.textContent = '后台任务已结束（exit ' + (code == null ? '?' : code) + '）';
       const thread = document.getElementById('agentThread');
@@ -732,7 +732,7 @@
       const input = document.getElementById('agentInput');
       if (send) {
         send.disabled = on ? false : !(input && input.value.trim());
-        send.textContent = on ? '[停止]' : '发送';
+        send.textContent = on ? '■' : '➤';
         send.classList.toggle('stopping', on);
         send.title = on ? '停止' : '发送';
       }
