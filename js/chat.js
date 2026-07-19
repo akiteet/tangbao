@@ -469,10 +469,8 @@
           },
           body: JSON.stringify(payload),
         });
-        console.log('[proxy] status:', res.status, 'target:', url);
         if (!res.ok) {
           const txt = await res.text().catch(() => '');
-          console.log('[proxy] error:', txt.slice(0, 300));
           ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(txt.slice(0, 240))}</div>`;
           ui.actions.style.display = 'flex';
           return;
@@ -531,10 +529,7 @@
         ui.actions.style.display = 'flex';
         return;
       }
-      if (!acc && !thinkAcc) {
-        console.log('[proxy] 空内容，status:', 'stream done but nothing parsed');
-        ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容。请按 F12 查看 Console 里 [proxy] 日志</div>';
-      }
+      if (!acc && !thinkAcc) ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
       conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
       conv.updatedAt = Date.now();
       ui.actions.style.display = 'flex';
