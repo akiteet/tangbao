@@ -2,6 +2,8 @@
 (function () {
   window.App = window.App || {};
 
+  const $ = (id) => document.getElementById(id);
+
   App.router = {
     go(module) {
       // 守卫：模块不存在或内置模块被禁用 → 回退到首个启用模块
@@ -23,6 +25,9 @@
       document.querySelectorAll('.nav-item').forEach(n => {
         n.classList.toggle('active', n.dataset.module === module);
       });
+      // 上下文条仅在聊天/糖码显示（其他模块无对话累积）
+      const ctxBar = $('chatCtxBar');
+      if (ctxBar) ctxBar.style.display = (module === 'chat' || module === 'agent') ? '' : 'none';
       if (isCustom) {
         App.modules.renderCustom(module);
       } else if (App[module] && typeof App[module].onShow === 'function') {

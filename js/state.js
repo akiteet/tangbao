@@ -36,6 +36,8 @@
       enabledModules: ['chat', 'image', 'doc', 'create', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
       search: { apiKey: '' },    // 联网搜索可选 Key（留空用内置免费搜索）
+      userMemory: '',         // 用户级长期记忆（对标 CLAUDE.md 用户级），注入糖码 system prompt
+      contextWindow: 128000,  // 模型上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
       visionModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'], // 视觉模型白名单
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
@@ -44,7 +46,7 @@
     activeProjectId: null,       // 当前激活的糖码项目 id
     agentProjectsCollapsed: false, // 糖码项目侧栏是否折叠
     agentSessionsCollapsed: false, // 糖码会话侧栏是否折叠
-    think: true,
+    thinkLevel: 'medium',         // 深度思考强度：'off' | 'low' | 'medium' | 'high'
     web: false,
   });
 
@@ -78,19 +80,27 @@
       const acc = s.accounts.find(a => a.id === aid);
       if (acc) {
         const models = Array.isArray(acc.models) ? acc.models : (acc.model ? [acc.model] : []);
+        // 模型名列表（兼容新旧格式）
+        const modelNames = models.map(x => (typeof x === 'string') ? x : (x && x.name ? x.name : '')).filter(Boolean);
         // 优先用 provider.model 中显式选中的；若不在本账户模型列表则回退首个
-        const active = (sel.model && models.includes(sel.model)) ? sel.model : (models[0] || '');
-        return { apiBase: acc.apiBase || '', apiKey: acc.apiKey || '', model: active, models };
+        const active = (sel.model && modelNames.includes(sel.model)) ? sel.model : (modelNames[0] || '');
+        return { apiBase: acc.apiBase || '', apiKey: acc.apiKey || '', model: active, models: modelNames };
       }
     }
     return { apiBase: '', apiKey: '', model: '', models: [] };
   };
 
-  // 判断模型是否支持「可控」的深度思考：返回 'qwen' | 'doubao' | 'openai' | null
-  //  null = 该模型不提供开关思考的 API 参数（如 deepseek 为原生推理、o 系列为内置推理、未知模型等），
-  //  这类模型深度思考开关只能控制“是否展示思考过程”，无法真正开/关思考。
+  // 判断模型的深度思考参数类型：返回 'qwen' | 'doubao' | 'openai' | null
+  //  优先读「添加模型时」为该模型配置的 thinkType（每模型配置，避免枚举过时的模型名）；
+  //  未配置或选“自动”时才回退到按模型名的正则自动判断（仅作兜底）。
+  //  null = 不注入任何思考参数（原生推理，如 grok/deepseek，开关仅影响是否展示思考过程）。
   App.thinkSupport = function (model) {
-    const m = (model || '').toLowerCase();
+    const name = (model || '').trim();
+    // 1) 先查该模型在账号里配置的 thinkType
+    const tt = App.thinkTypeOf(name);
+    if (tt && tt !== 'auto') return (tt === 'none') ? null : tt;
+    // 2) 回退：按模型名正则自动判断
+    const m = name.toLowerCase();
     if (/deepseek/.test(m)) return null;                       // 原生推理，API 无法开关
     if (/qwen|qwq/.test(m)) return 'qwen';
     if (/doubao|seed/.test(m)) return 'doubao';
@@ -98,13 +108,34 @@
     return null;
   };
 
-  // 深度思考参数：开关真正决定思考与否。支持可控思考的模型注入真实 API 参数；
+  // 查某模型名在所有账号里配置的 thinkType（'auto'|'openai'|'qwen'|'doubao'|'none'）；查不到返回 ''。
+  App.thinkTypeOf = function (name) {
+    if (!name) return '';
+    const accs = (App.state && App.state.settings && App.state.settings.accounts) || [];
+    for (const a of accs) {
+      const models = (a && a.models) || [];
+      for (const mm of models) {
+        if (mm && typeof mm === 'object' && mm.name === name && mm.thinkType) return mm.thinkType;
+      }
+    }
+    return '';
+  };
+
+  // 深度思考参数：支持可控思考的模型注入真实 API 参数（三档强度）。
   // 不支持的返回 {}（思考由模型原生决定，开关仅影响展示）。
-  App.buildThinkParam = function (model, enabled) {
+  // level: 'off' | 'low' | 'medium' | 'high'
+  App.buildThinkParam = function (model, level) {
     const sup = App.thinkSupport(model);
-    if (sup === 'qwen') return { enable_thinking: !!enabled };
-    if (sup === 'doubao') return { thinking: { type: enabled ? 'enabled' : 'disabled' } };
-    if (sup === 'openai') return {};   // 不再注入 reasoning_effort，中转站兼容
+    const lv = level || 'medium';
+    if (lv === 'off') {
+      const m = (model || '').toLowerCase();
+      if (sup === 'qwen') return { enable_thinking: false };
+      if (/doubao|seed/.test(m)) return { thinking: { type: 'disabled' } }; // 豆包可按模型名识别，显式关闭思考
+      return {}; // OpenAI/其他不传参
+    }
+    if (sup === 'qwen') return { enable_thinking: true };
+    if (sup === 'doubao') return {}; // 豆包不支持强度调节，开启即默认推理
+    if (sup === 'openai') return { reasoning_effort: lv === 'high' ? 'high' : lv === 'low' ? 'low' : 'medium' };
     return {};
   };
 
@@ -143,7 +174,13 @@
         const ps = (parsed.settings && typeof parsed.settings === 'object') ? parsed.settings : {};
         ns.settings = ns.settings || {};
         ns.settings.accounts = (Array.isArray(ps.accounts) ? ps.accounts : []).map(a => Object.assign({}, a, {
-          models: Array.isArray(a.models) ? a.models : (a.model ? [a.model] : []),
+          // 模型迁移：旧 string[] → 新 { name, contextWindow }[]
+          models: Array.isArray(a.models) ? a.models.map(m => {
+            if (typeof m === 'string') return { name: m, contextWindow: 128000 };
+            if (m && typeof m === 'object' && typeof m.name === 'string')
+              return { name: m.name, contextWindow: (typeof m.contextWindow === 'number' && m.contextWindow > 0) ? m.contextWindow : 128000 };
+            return null;
+          }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
         }));
         ns.settings.defaultAccountId = ps.defaultAccountId || '';
         ns.settings.profile = {
@@ -190,6 +227,18 @@
         ns.settings.search = (ps.search && typeof ps.search === 'object')
           ? { apiKey: typeof ps.search.apiKey === 'string' ? ps.search.apiKey : '' }
           : { apiKey: '' };
+        // 用户级长期记忆（CLAUDE.md 用户级对标）
+        ns.settings.userMemory = (typeof ps.userMemory === 'string') ? ps.userMemory : '';
+        // 上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
+        ns.settings.contextWindow = (typeof ps.contextWindow === 'number' && ps.contextWindow > 0) ? ps.contextWindow : 128000;
+        // 思考强度迁移：旧版 think:boolean → 新版 thinkLevel: 'off'|'low'|'medium'|'high'
+        if (ps.thinkLevel && ['off','low','medium','high'].includes(ps.thinkLevel)) {
+          ns.settings.thinkLevel = ps.thinkLevel;
+        } else if (ps.think === false) {
+          ns.settings.thinkLevel = 'off';
+        } else if (ps.think === true) {
+          ns.settings.thinkLevel = 'medium';
+        }
         // 视觉模型白名单（旧版无则给默认）
         ns.settings.visionModels = Array.isArray(ps.visionModels) && ps.visionModels.length
           ? ps.visionModels
@@ -283,6 +332,12 @@
 
   App.persist = function () {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(App.state)); } catch (e) { /* ignore */ }
+    // 文件双写：同步写入 state.json 到 userData/tangbao-data/（可读文件，便于查看/备份）
+    try {
+      if (window.electron && window.electron.saveStateJSON) {
+        window.electron.saveStateJSON(JSON.stringify(App.state, null, 2));
+      }
+    } catch (e) { /* 写文件失败不影响主流程 */ }
   };
 
   App.uid = function () {

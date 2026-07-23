@@ -12,27 +12,99 @@ const path = require('path');
 const { startAgentServer } = require('./server/agent-server');
 const { execFile } = require('child_process');
 
-// 便携化：把用户数据（localStorage/缓存/历史等）放到 exe 同级目录的 tangbao-data/ 下，
-// 这样整个安装文件夹自包含、可整体拷贝；重装到别的路径也不会带旧数据。
-// 仅在「打包后的正式程序」中重定向；开发模式（npm start）保持 Electron 默认 userData。
-// 若安装目录不可写（如装到受保护的 Program Files 且无权限），则回退到 Electron 默认 userData。
+// 便携化：优先 exe 所在盘，不落 C 盘。保护目录（Program Files）会弹窗征得用户授权。
 if (app.isPackaged) {
   let defaultUserData;
   try { defaultUserData = app.getPath('userData'); } catch (e) { defaultUserData = null; }
+  const { dialog } = require('electron');
+  let ok = false;
+
+  // 候选 1：exe 同级 tangbao-data/（非保护路径直接成功）
   try {
-    // 用 process.execPath（Node 自带，不受 Electron ready 时机影响）取 exe 目录，
-    // 把用户数据（localStorage/缓存/历史）重定向到 exe 同级的 tangbao-data/。
-    const exeDir = path.dirname(process.execPath);
-    const dataDir = path.join(exeDir, 'tangbao-data');
-    // 必须先建好目录，app.setPath 才接受（目录不存在会抛错 → 被下方 catch 回退默认路径）
+    const dataDir = path.join(path.dirname(process.execPath), 'tangbao-data');
     fs.mkdirSync(dataDir, { recursive: true });
     app.setPath('userData', dataDir);
-    // 写权限探针：写一个临时文件再删除，失败则说明目录不可写，回退默认路径，避免启动即崩
     const probe = path.join(dataDir, '.write_test');
     fs.writeFileSync(probe, 'ok');
     fs.unlinkSync(probe);
-  } catch (e) {
-    if (defaultUserData) { try { app.setPath('userData', defaultUserData); } catch (_) {} }
+    ok = true;
+  } catch (_) { /* 保护目录，进入后续候选 */ }
+
+  // 候选 2：若在保护目录（Program Files / Windows），弹窗征得用户授权后重试
+  if (!ok) {
+    const exeDir = path.dirname(process.execPath);
+    const isProtected = /Program Files/i.test(exeDir) || /Windows/i.test(exeDir);
+    if (isProtected) {
+      try {
+        const answer = dialog.showMessageBoxSync({
+          type: 'question',
+          title: '糖包 — 数据目录',
+          message: '需要在安装目录下创建数据文件夹来保存对话记录和设置。',
+          detail: '位置：' + path.join(exeDir, 'tangbao-data') + '\n\n' +
+            '「确定」将尝试创建（可能需要管理员权限）。\n' +
+            '「取消」将自动选择 D 盘其他位置。',
+          buttons: ['确定', '取消'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (answer === 0) {
+          try {
+            const dataDir = path.join(exeDir, 'tangbao-data');
+            fs.mkdirSync(dataDir, { recursive: true });
+            app.setPath('userData', dataDir);
+            const probe = path.join(dataDir, '.write_test');
+            fs.writeFileSync(probe, 'ok');
+            fs.unlinkSync(probe);
+            ok = true;
+          } catch (e) { console.error('糖包 授权后仍无法创建数据目录：' + dataDir, e); }
+        }
+      } catch (_) {}
+    }
+  }
+
+  // 候选 3：同盘 Public 目录（始终可写，不落 C 盘）
+  if (!ok) {
+    let root;
+    try {
+      root = path.parse(process.execPath).root;
+      if (root) {
+        const dataDir = path.join(root, 'Users', 'Public', 'tangbao-web-data');
+        fs.mkdirSync(dataDir, { recursive: true });
+        app.setPath('userData', dataDir);
+        const probe = path.join(dataDir, '.write_test');
+        fs.writeFileSync(probe, 'ok');
+        fs.unlinkSync(probe);
+        ok = true;
+      }
+    } catch (e) { console.error('糖包 Public 候选失败：' + root + 'Users/Public/tangbao-web-data', e); }
+  }
+
+  if (!ok && defaultUserData) {
+    try { app.setPath('userData', defaultUserData); } catch (_) {}
+    console.error('糖包 便携模式全部失败，回退默认 userData：' + defaultUserData);
+  }
+
+  // 旧数据迁移：如果成功切到了新路径且老路径有数据，自动复制 Local Storage
+  if (ok && defaultUserData) {
+    const oldDir = defaultUserData;
+    const newDir = app.getPath('userData');
+    if (oldDir !== newDir) {
+      try {
+        const oldLS = path.join(oldDir, 'Local Storage');
+        const newLS = path.join(newDir, 'Local Storage');
+        if (fs.existsSync(oldLS) && !fs.existsSync(newLS)) {
+          fs.cpSync(oldLS, newLS, { recursive: true });
+        }
+        // 同时也复制 state.json 如果存在
+        const oldState = path.join(oldDir, 'tangbao-data', 'state.json');
+        const newStateDir = path.join(newDir, 'tangbao-data');
+        const newState = path.join(newStateDir, 'state.json');
+        if (fs.existsSync(oldState) && !fs.existsSync(newState)) {
+          fs.mkdirSync(newStateDir, { recursive: true });
+          fs.copyFileSync(oldState, newState);
+        }
+      } catch (e) { console.error('糖包 旧数据迁移失败', e); }
+    }
   }
 }
 
@@ -334,6 +406,23 @@ ipcMain.handle('shell:openExternal', async (e, url) => {
     // 仍拦截 shell: / javascript: 等危险协议，避免被外部程序执行。
     if (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'file:') return { ok: false, error: '仅支持 http/https/file 链接' };
     await shell.openExternal(u.href);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// 文件双写：将应用状态写入 userData/tangbao-data/state.json（可读文件，便于查看/备份）
+// 仅允许写到 userData 子目录，防止越权访问其他文件
+ipcMain.handle('fs:writeState', async (e, jsonStr) => {
+  try {
+    const userData = app.getPath('userData');
+    const dir = path.join(userData, 'tangbao-data');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'state.json');
+    // 安全检查：最终路径必须在 userData 子树内
+    if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
+    fs.writeFileSync(file, jsonStr || '', 'utf8');
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };

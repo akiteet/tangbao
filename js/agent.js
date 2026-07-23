@@ -2,9 +2,10 @@
 (function () {
   window.App = window.App || {};
 
+  const $ = (id) => document.getElementById(id);
+
   const AGENT_BASE = 'http://localhost:3000';
-  const MAX_HISTORY = 12;
-  const MAX_THREAD_HISTORY = 60;
+  const MAX_THREAD_HISTORY = 60; // 单线程历史硬上限（超出裁剪，摘要偏移同步前移）
 
   App.agent = {
     running: false,
@@ -190,7 +191,7 @@
       return t;
     },
     createThread(persist) {
-      const t = { id: App.uid(), projectId: App.state.activeProjectId, title: '新会话', updatedAt: Date.now(), history: [] };
+      const t = { id: App.uid(), projectId: App.state.activeProjectId, title: '新会话', updatedAt: Date.now(), history: [], summary: '', summaryCount: 0 };
       App.state.agentThreads.push(t);
       App.state.activeThreadId = t.id;
       if (persist !== false) App.persist();
@@ -267,6 +268,12 @@
                 <label class="switch plan-switch"><input type="checkbox" id="agentPlanToggle" ${proj.planMode ? 'checked' : ''} /> <span>Plan 模式</span></label>
                 <span class="agent-status plan-badge ${proj.planMode ? 'on' : 'off'}" id="agentPlanBadge">${proj.planMode ? '只读探索' : '可执行'}</span>
               </div>
+              <div class="agent-ctx-row">
+                <div class="ctx-bar" id="agentCtxBar"><div class="ctx-bar-fill"></div><span class="ctx-bar-label"></span></div>
+                <button class="btn-ghost mini" id="agentCompactBtn" title="压缩较早上下文（或输入 /compact 定向压缩）">压缩</button>
+                <button class="btn-ghost mini" id="agentClearCtxBtn" title="清空当前线程上下文（重置对话历史与摘要，对标 Claude Code 清空上下文）">清空</button>
+                <button class="btn-ghost mini" id="agentMemoryBtn" title="编辑项目记忆（糖码记忆.md，对标 CLAUDE.md）">项目记忆</button>
+              </div>
             </div>
             <div class="agent-meta" id="agentMeta" style="display:none"></div>
             <div class="agent-offline" id="agentOffline" style="display:none">
@@ -286,6 +293,7 @@
       App.agent.renderProjects();
       App.agent.renderSessions();
       App.agent.restoreThread();
+      App.agent.updateCtxBar();
     },
 
     renderProjects() {
@@ -356,6 +364,7 @@
       App.persist();
       App.agent.renderSessions();
       App.agent.restoreThread();
+      App.agent.updateCtxBar();
     },
     newChat() {
       App.agent.createThread(true);
@@ -456,6 +465,12 @@
       });
       const pset = document.getElementById('agentProjectSettings');
       if (pset) pset.addEventListener('click', () => App.agent.openProjectSettings(App.state.activeProjectId));
+      const compactBtn = document.getElementById('agentCompactBtn');
+      if (compactBtn) compactBtn.addEventListener('click', () => App.agent.compactNow(''));
+      const clearBtn = document.getElementById('agentClearCtxBtn');
+      if (clearBtn) clearBtn.addEventListener('click', () => App.agent.clearContext());
+      const memBtn = document.getElementById('agentMemoryBtn');
+      if (memBtn) memBtn.addEventListener('click', () => App.agent.openMemoryEditor());
       // Plan 模式开关
       const planToggle = document.getElementById('agentPlanToggle');
       if (planToggle) planToggle.addEventListener('change', () => {
@@ -747,6 +762,17 @@
       const input = document.getElementById('agentInput');
       const prompt = input.value.trim();
       if (!prompt) return;
+      // /memory 命令：写入用户长期记忆（不进入对话），对标 Claude Code 的 /memory
+      if (prompt.startsWith('/memory')) {
+        App.agent.writeMemory(prompt.slice(7).trim());
+        return;
+      }
+      // 手动压缩：/compact [focus] 对标 Claude Code 的 /compact（定向保留重点）
+      if (prompt.startsWith('/compact')) {
+        const focus = prompt.slice(8).trim();
+        App.agent.compactNow(focus);
+        return;
+      }
       const p = App.getProvider('chat');
       if (!p.apiBase || !p.apiKey || !p.model) {
         App.ui.toast('请先在设置配置聊天 API（糖码复用聊天账户）');
@@ -776,7 +802,39 @@
         App.agent.renderSessions();
       }
 
-      const history = (thread.history || []).slice(-MAX_HISTORY).map(h => ({ role: h.role, content: h.content }));
+      // 异步压缩（#7）：同步取 finalMessages 直接发送，压缩在后台跑，不阻塞本轮 send
+      const agentSys = (App.state.settings.prompts && App.state.settings.prompts.agent) || '';
+      const ctxWindow = App.context.contextWindowOf(p.model);
+      const compact = App.context.getCompactMessages({
+        messages: (thread.history || []).map(h => ({ role: h.role, content: h.content })),
+        summary: thread.summary || '',
+        summaryCount: thread.summaryCount || 0,
+        recentKeep: App.context.RECENT_KEEP_AGENT,
+        systemContent: agentSys,
+        util: App.context.COMPACT_UTIL_AGENT,
+        window: ctxWindow,
+      });
+      // 仅发送对话历史（摘要与 system 由后端注入）
+      const history = compact.finalMessages.filter(m => m.role !== 'system');
+      // 后台压缩：fire-and-forget，结果下一轮发送时生效
+      if (compact.needsCompress && compact.middleMsgs.length && !thread._compressing) {
+        thread._compressing = true;
+        const vCheck = () => compact.newSummaryCount === (thread.summaryCount || 0) + compact.middleMsgs.length;
+        App.context.compressAsync(thread.summary || '', compact.middleMsgs, p, ctxWindow, vCheck).then(newSummary => {
+          if (newSummary) {
+            thread.summary = newSummary;
+            thread.summaryCount = compact.newSummaryCount;
+            App.persist();
+            App.agent.updateCtxBar(p.model);
+            App.ui.toast('已自动压缩较早对话上下文');
+          }
+          thread._compressing = false;
+        });
+      }
+      // /context 明细：system=系统提示，history=摘要+近期对话，memory=后端注入的 userMemory
+      const userMemTok = App.context.estimateTokens(App.state.settings.userMemory || '');
+      const agentBd = App.context.breakdownFromFinal(compact.finalMessages, userMemTok);
+      if (App.context.renderUsage) App.context.renderUsage($('agentCtxBar'), App.context.messagesTokens(compact.finalMessages) + userMemTok, App.context.contextWindowOf(p.model), agentBd);
 
       let answerEl = null;
       let answerAcc = '';
@@ -795,7 +853,11 @@
           body: JSON.stringify({
             prompt, cwd, apiBase: p.apiBase, apiKey: p.apiKey, model, auto, planMode, history, searchApiKey,
             approveTools, cmdWhitelist,
+            summary: thread.summary || '',
+            userMemory: (App.state.settings.userMemory || ''),
             systemPrompt: (App.state.settings.prompts && App.state.settings.prompts.agent) || '',
+            thinkLevel: (App.state.settings.thinkLevel || 'medium'),
+            thinkType: (App.thinkSupport(model) || 'none'),
           }),
         });
         if (!res.ok) {
@@ -887,7 +949,13 @@
     finish(thread, prompt, answerAcc) {
       thread.history.push({ role: 'user', content: prompt });
       if (answerAcc) thread.history.push({ role: 'assistant', content: answerAcc });
-      if (thread.history.length > MAX_THREAD_HISTORY) thread.history = thread.history.slice(-MAX_THREAD_HISTORY);
+      // 超出硬上限时裁剪，并同步前移摘要偏移（摘要文本保留，仍承载更早内容）
+      if (thread.history.length > MAX_THREAD_HISTORY) {
+        const dropped = thread.history.length - MAX_THREAD_HISTORY;
+        thread.history = thread.history.slice(-MAX_THREAD_HISTORY);
+        const sc = thread.summaryCount || 0;
+        thread.summaryCount = sc > dropped ? sc - dropped : 0;
+      }
       thread.updatedAt = Date.now();
       // 更新项目 lastUsedAt
       const proj = App.agent.projects().find(p => p.id === thread.projectId);
@@ -897,6 +965,147 @@
       App.agent._ctrl = null;
       App.agent.hideMeta();
       App.agent.setRunning(false);
+    },
+
+    // 手动压缩当前会话上下文（对标 /compact）：整段生成摘要并持久化，保留全部 UI 历史
+    async compactNow(focus) {
+      const thread = App.agent.activeThread();
+      if (!thread || !thread.history.length) { App.ui.toast('当前没有可压缩的对话'); return; }
+      const p = App.getProvider('chat');
+      if (!p.apiBase || !p.apiKey || !p.model) { App.ui.toast('请先配置聊天 API'); return; }
+      App.ui.toast('正在压缩上下文…');
+      const allMsgs = thread.history.map(h => ({ role: h.role, content: h.content }));
+      const summary = await App.context.summarizeFull(allMsgs, focus || '', p);
+      if (!summary) { App.ui.toast('压缩失败，稍后再试'); return; }
+      thread.summary = summary;
+      thread.summaryCount = Math.max(0, allMsgs.length - App.context.RECENT_KEEP_AGENT);
+      App.persist();
+      if (App.context.renderUsage) App.context.renderUsage($('agentCtxBar'), App.context.messagesTokens(allMsgs.slice(-App.context.RECENT_KEEP_AGENT)), App.context.contextWindowOf(p.model));
+      App.agent.updateCtxBar();
+      App.ui.toast(focus ? '已按重点压缩上下文' : '已压缩当前上下文');
+    },
+
+    // 清空当前线程上下文（重置对话历史与摘要，对标 Claude Code 清空上下文）
+    clearContext() {
+      const thread = App.agent.activeThread();
+      if (!thread) { App.ui.toast('没有活跃线程'); return; }
+      if (!thread.history || !thread.history.length) { App.ui.toast('上下文已为空'); return; }
+      // 确认弹窗（防误操作）
+      const modal = document.createElement('div');
+      modal.className = 'modal-mask';
+      modal.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" style="width:400px">
+          <div class="modal-header"><span>清空上下文</span>
+            <button class="icon-btn" id="clrCtxClose"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="modal-body"><p style="font-size:14px;line-height:1.6;color:var(--text);margin:0">清空当前线程「${App.escapeHtml(thread.title || '新会话')}」的对话历史和摘要吗？<br/><br/>此操作不可撤销，但线程本身会保留。</p></div>
+          <div class="modal-footer">
+            <button class="btn-ghost" id="clrCtxCancel">取消</button>
+            <button class="btn-danger" id="clrCtxConfirm">清空</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      const close = () => { if (modal.parentNode) modal.remove(); };
+      modal.querySelector('#clrCtxClose').addEventListener('click', close);
+      modal.querySelector('#clrCtxCancel').addEventListener('click', close);
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      modal.querySelector('#clrCtxConfirm').addEventListener('click', () => {
+        close();
+        thread.history = [];
+        thread.summary = '';
+        thread.summaryCount = 0;
+        App.persist();
+        App.agent.restoreThread();
+        App.agent.renderSessions();
+        App.agent.updateCtxBar();
+        App.ui.toast('上下文已清空');
+      });
+    },
+
+    // /memory 命令：写入用户长期记忆（userMemory），糖包与糖码共用同一份；不进入对话
+    writeMemory(content) {
+      if (!content) {
+        const cur = (App.state.settings.userMemory || '').trim();
+        App.ui.toast(cur ? ('当前用户长期记忆：\n' + cur) : '用法：/memory 要记住的内容');
+        return;
+      }
+      const cur = (App.state.settings.userMemory || '').trim();
+      const lines = cur ? cur.split('\n') : [];
+      if (lines.includes(content)) { App.ui.toast('该记忆已存在'); return; }
+      App.state.settings.userMemory = cur ? (cur + '\n' + content) : content;
+      App.persist();
+      App.agent.updateCtxBar();
+      App.ui.toast('已写入用户长期记忆');
+    },
+
+    // 渲染糖码上下文用量条（对齐 Claude Code：显示实际发送给模型的 token 数）
+    updateCtxBar(model) {
+      if (!model) model = App.getProvider('chat').model || '';
+      const el = $('agentCtxBar'); if (!el) return;
+      const t = App.agent.activeThread();
+      if (!t || !t.history) { if (el.style) el.style.display = 'none'; return; }
+      if (el.style) el.style.display = '';
+      const ctxWindow = App.context.contextWindowOf(model);
+      const allMsgs = (t.history || []).map(h => ({ role: h.role, content: h.content }));
+      const agentSys = (App.state.settings.prompts && App.state.settings.prompts.agent) || '';
+      const compact = App.context.getCompactMessages({
+        messages: allMsgs, summary: t.summary || '', summaryCount: t.summaryCount || 0,
+        recentKeep: App.context.RECENT_KEEP_AGENT, systemContent: agentSys,
+        util: App.context.COMPACT_UTIL_AGENT, window: ctxWindow,
+      });
+      const tokens = App.context.messagesTokens(compact.finalMessages);
+      const userMemTok = App.context.estimateTokens(App.state.settings.userMemory || '');
+      const bd = App.context.breakdownFromFinal(compact.finalMessages, userMemTok);
+      if (App.context.renderUsage) App.context.renderUsage(el, tokens + userMemTok, ctxWindow, bd);
+    },
+
+    // 项目记忆编辑器（读写 cwd/糖码记忆.md，对标项目级 CLAUDE.md）
+    async openMemoryEditor() {
+      const proj = App.agent.activeProject();
+      const cwd = proj.cwd || '';
+      if (!cwd) { App.ui.toast('请先在项目设置中指定工作目录'); return; }
+      const file = '糖码记忆.md';
+      let content = '';
+      try {
+        const r = await fetch(AGENT_BASE + '/api/memory?cwd=' + encodeURIComponent(cwd) + '&file=' + encodeURIComponent(file), { cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        content = (j && j.ok) ? (j.content || '') : '';
+      } catch (e) { content = ''; }
+      const modal = document.createElement('div');
+      modal.className = 'modal-mask';
+      modal.innerHTML = `
+        <div class="modal">
+          <div class="modal-header"><span>项目记忆（${App.escapeHtml(file)}）</span>
+            <button class="modal-close" id="memClose" title="关闭">×</button></div>
+          <div class="modal-body">
+            <p class="hint">该文件位于项目工作目录 <code>${App.escapeHtml(cwd)}</code>，会作为长期记忆注入糖码的系统提示（对标 CLAUDE.md）。保存即写入磁盘。</p>
+            <textarea id="memContent" rows="14" style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;resize:vertical">${App.escapeHtml(content)}</textarea>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-ghost" id="memCancel">取消</button>
+            <button class="btn-primary" id="memSave">保存</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      const close = () => modal.remove();
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      modal.querySelector('#memClose').addEventListener('click', close);
+      modal.querySelector('#memCancel').addEventListener('click', close);
+      modal.querySelector('#memSave').addEventListener('click', async () => {
+        const txt = modal.querySelector('#memContent').value;
+        const btn = modal.querySelector('#memSave'); btn.disabled = true; btn.textContent = '保存中…';
+        try {
+          const r = await fetch(AGENT_BASE + '/api/memory', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cwd, file, content: txt }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (j && j.ok) App.ui.toast('项目记忆已保存');
+          else App.ui.toast('保存失败：' + ((j && j.error) || '未知错误'));
+        } catch (e) { App.ui.toast('保存失败：' + (e.message || e)); }
+        close();
+      });
     },
   };
 

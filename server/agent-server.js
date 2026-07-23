@@ -552,10 +552,28 @@ async function walk(dir, cb, limit) {
 }
 
 // 调用 LLM（OpenAI 兼容，流式），返回 { content, toolCalls: [{id,name,arguments}] }
-async function callLLMStream({ apiBase, apiKey, model, messages }) {
+async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType }) {
   const base = String(apiBase || '').replace(/\/+$/, '');
   const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
   const payload = { model, stream: true, messages, tools: TOOLS, tool_choice: 'auto' };
+  // 思考类型：优先用前端「每模型配置」解析后透传的 thinkType；未传时回退正则自动判断（兜底）。
+  //  'openai' → reasoning_effort；'qwen' → enable_thinking；'none'/null → 不注入（原生推理，如 grok/deepseek）；豆包关闭开关按模型名识别（thinking.type=disabled）
+  let sup = thinkType;
+  if (!sup) {
+    const m = model.toLowerCase();
+    if (/qwen|qwq/.test(m)) sup = 'qwen';
+    else if (/doubao|seed/.test(m)) sup = 'doubao';
+    else if (/(^|[^a-z])o[0-9]|gpt-5/.test(m)) sup = 'openai';
+    else sup = 'none';
+  }
+  if (thinkLevel && thinkLevel !== 'off') {
+    if (sup === 'qwen') payload.enable_thinking = true;
+    else if (sup === 'openai') payload.reasoning_effort = thinkLevel === 'high' ? 'high' : thinkLevel === 'low' ? 'low' : 'medium';
+    // doubao/none：开启即原生推理，不注入强度参数
+  } else if (thinkLevel === 'off') {
+    if (sup === 'qwen') payload.enable_thinking = false;
+    else if (/doubao|seed/.test(model.toLowerCase())) payload.thinking = { type: 'disabled' }; // 豆包可按模型名识别，显式关闭思考
+  }
   const controller = new AbortController();
   const res = await fetch(url, {
     method: 'POST',
@@ -571,6 +589,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages }) {
   const decoder = new TextDecoder();
   let buf = '';
   let content = '';
+  let reasoning = ''; // 思考通道（reasoning_content）：原生推理模型可能把答案放这里
   const toolCalls = []; // {index,id,name,arguments}
   while (true) {
     const { done, value } = await reader.read();
@@ -587,6 +606,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages }) {
       try { json = JSON.parse(data); } catch (e) { continue; }
       const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
       if (delta.content) content += delta.content;
+      if (delta.reasoning_content) reasoning += delta.reasoning_content;
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
           const i = tc.index != null ? tc.index : (toolCalls.length ? toolCalls.length - 1 : 0);
@@ -599,7 +619,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages }) {
     }
   }
   const clean = toolCalls.filter(Boolean).map((t) => ({ id: t.id || ('call_' + t.index), name: t.name, arguments: t.arguments }));
-  return { content, toolCalls: clean };
+  return { content, reasoning, toolCalls: clean };
 }
 
 function handleAgent(req, res, body) {
@@ -615,6 +635,11 @@ function handleAgent(req, res, body) {
   const approveTools = Array.isArray(body.approveTools) ? body.approveTools.filter(x => typeof x === 'string') : [];
   const cmdWhitelist = Array.isArray(body.cmdWhitelist) ? body.cmdWhitelist.filter(x => typeof x === 'string') : [];
   const planMode = !!body.planMode;
+  const thinkLevel = (typeof body.thinkLevel === 'string' && ['off','low','medium','high'].includes(body.thinkLevel))
+    ? body.thinkLevel : 'medium';
+  // 思考类型由前端「每模型配置」解析后透传；未传或非法值则留空，callLLMStream 内部回退正则自动判断。
+  const thinkType = (typeof body.thinkType === 'string' && ['openai','qwen','doubao','none'].includes(body.thinkType))
+    ? body.thinkType : '';
 
   if (!apiBase || !apiKey || !model) {
     sendJSON(res, 400, { error: '缺少 API 配置（apiBase/apiKey/model）' });
@@ -653,6 +678,13 @@ function handleAgent(req, res, body) {
         } catch (e) { /* 文件不存在则跳过 */ }
       }
     }
+    // 用户级长期记忆（对标 CLAUDE.md 用户级，跨项目生效）：来自前端设置
+    const userMemory = (typeof body.userMemory === 'string' && body.userMemory.trim()) ? body.userMemory.trim() : '';
+    if (userMemory) systemContent += '\n\n# 用户长期记忆（来自用户设置，跨项目有效）\n' + userMemory;
+    // 自动压缩生成的历史摘要（由前端增量合并后随请求带来，避免后端重算全部历史）
+    if (typeof body.summary === 'string' && body.summary.trim()) {
+      systemContent += '\n\n【历史对话摘要（已自动压缩）】\n' + body.summary.trim();
+    }
     if (planMode) systemContent += '\n\n[当前处于 Plan 模式：你只能探索，不得修改文件或执行命令。]';
     const todos = []; // 本次运行的任务清单（todo_write 维护）
     const messages = [{ role: 'system', content: systemContent }];
@@ -667,7 +699,7 @@ function handleAgent(req, res, body) {
       if (aborted) { emit('error', { message: '连接已断开' }); break; }
       let r;
       try {
-        r = await callLLMStream({ apiBase, apiKey, model, messages });
+        r = await callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType });
       } catch (e) {
         emit('error', { message: String(e.message || e) });
         break;
@@ -675,7 +707,9 @@ function handleAgent(req, res, body) {
       if (aborted) { emit('error', { message: '连接已断开' }); break; }
 
       if (r.toolCalls && r.toolCalls.length) {
-        if (r.content) emit('thinking', { text: r.content });
+        // 思考事件优先用思考通道内容；若无则退回 content（部分模型把思路放在 content）
+        const thinkText = r.reasoning || r.content;
+        if (thinkText) emit('thinking', { text: thinkText });
         // 记录 assistant（含 tool_calls）供下一轮
         const asstMsg = { role: 'assistant', content: r.content || null, tool_calls: r.toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.arguments } })) };
         messages.push(asstMsg);
@@ -691,8 +725,8 @@ function handleAgent(req, res, body) {
         continue;
       }
 
-      // 最终回答
-      const text = r.content || '(无内容)';
+      // 最终回答：content 为空时兜底思考通道内容（grok 等把答案放在 reasoning_content）
+      const text = r.content || r.reasoning || '(无内容)';
       // 按自然边界模拟流式：按行分割（保留换行），长行再按 60 字符拆分，比固定 80 字符块更平滑
       const naturalChunks = [];
       const lines = text.split('\n');
@@ -749,6 +783,35 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const data = await doSearch(body && body.query ? String(body.query) : '', body && body.apiKey ? String(body.apiKey) : '');
       sendJSON(res, data.ok ? 200 : 502, data);
+      return;
+    }
+    // 项目记忆读写（糖码记忆.md，对标项目级 CLAUDE.md；safePath 限制在工作目录内）
+    if (req.method === 'GET' && url.pathname === '/api/memory') {
+      const cwd = url.searchParams.get('cwd') || '';
+      const file = url.searchParams.get('file') || '糖码记忆.md';
+      const fp = safePath(file, cwd);
+      if (!fp) { sendJSON(res, 400, { ok: false, error: '非法路径' }); return; }
+      try {
+        const mem = await fsp.readFile(fp, 'utf8');
+        sendJSON(res, 200, { ok: true, content: mem });
+      } catch (e) {
+        sendJSON(res, 200, { ok: true, content: '' }); // 文件不存在视为空
+      }
+      return;
+    }
+    if (req.method === 'PUT' && url.pathname === '/api/memory') {
+      const body = await readBody(req);
+      const cwd = String(body.cwd || '');
+      const file = String(body.file || '糖码记忆.md');
+      const content = typeof body.content === 'string' ? body.content : '';
+      const fp = safePath(file, cwd);
+      if (!fp) { sendJSON(res, 400, { ok: false, error: '非法路径' }); return; }
+      try {
+        await fsp.writeFile(fp, content, 'utf8');
+        sendJSON(res, 200, { ok: true });
+      } catch (e) {
+        sendJSON(res, 500, { ok: false, error: String(e && e.message ? e.message : e) });
+      }
       return;
     }
     sendJSON(res, 404, { error: 'Not found' });

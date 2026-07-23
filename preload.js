@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('electron', {
   showDirDialog: () => ipcRenderer.invoke('dialog:showDir'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   openChildWindow: (opts) => ipcRenderer.invoke('custom:openChildWindow', opts),
+  saveStateJSON: (jsonStr) => ipcRenderer.invoke('fs:writeState', jsonStr),
 });

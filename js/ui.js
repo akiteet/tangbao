@@ -101,24 +101,24 @@
       App.ui.syncModelSelect();
     },
 
-    syncThink(on) {
-      App.state.think = on;
-      $('thinkBtn').classList.toggle('active', on);
+    syncThink(level) {
+      if (!level) level = 'medium';
+      App.state.settings.thinkLevel = level;
+      const sel = $('thinkSelect'); if (sel) sel.value = level;
       App.persist();
-      // 立即对当前已渲染的消息生效：根据开关显示/隐藏思考块
+      // 立即对当前已渲染的消息生效
+      const show = level !== 'off';
       document.querySelectorAll('.msg.assistant .think-block').forEach(b => {
         const body = b.querySelector('.think-body');
-        b.style.display = (on && body && body.textContent.trim()) ? 'block' : 'none';
+        b.style.display = (show && body && body.textContent.trim()) ? 'block' : 'none';
       });
-      // 诚实告知：当前模型是否支持「真正开关」深度思考（避免用户以为开关坏了）
+      // 诚实告知：当前模型是否支持可控思考
       const s = App.getProvider('chat');
       const model = s.model || '';
       if (model && App.thinkSupport && !App.thinkSupport(model)) {
         if (App.ui._thinkWarnModel !== model) {
           App.ui._thinkWarnModel = model;
-          App.ui.toast(on
-            ? '当前模型（' + model + '）深度思考为原生行为，开关仅控制是否展示思考过程'
-            : '当前模型（' + model + '）无法关闭原生深度思考，开关仅控制展示');
+          App.ui.toast('当前模型（' + model + '）深度思考为原生行为，调节仅控制是否展示思考过程');
         }
       } else {
         App.ui._thinkWarnModel = null;
@@ -293,6 +293,8 @@
       if ($('pDocTranslate')) { $('pDocTranslate').value = (pr.doc && pr.doc.translate) || ''; $('pDocTranslate').placeholder = DP.doc.translate; }
       if ($('pDocOutline')) { $('pDocOutline').value = (pr.doc && pr.doc.outline) || ''; $('pDocOutline').placeholder = DP.doc.outline; }
       if ($('searchKey')) $('searchKey').value = (App.state.settings.search && App.state.settings.search.apiKey) || '';
+      if ($('userMemory')) $('userMemory').value = (App.state.settings.userMemory || '');
+      if ($('contextWindow')) $('contextWindow').value = (App.state.settings.contextWindow || 128000);
       {
         const list = $('visionChipList');
         const inp = $('visionInput');
@@ -422,7 +424,7 @@
         return `<div class="account-row" data-id="${a.id}">
           <div class="account-meta">
             <div class="account-name">${App.escapeHtml(a.name)}${isDef ? ' <span class="tag-default">默认</span>' : ''}</div>
-            <div class="account-sub">${App.escapeHtml(a.apiBase || '')} · ${App.escapeHtml(((a.models && a.models.length) ? a.models : (a.model ? [a.model] : [])).join('、') || '无模型')}</div>
+            <div class="account-sub">${App.escapeHtml(a.apiBase || '')} · ${App.escapeHtml(((a.models && a.models.length) ? a.models.map(x => (typeof x === 'string') ? x : (x && x.name ? x.name : '')).filter(Boolean) : (a.model ? [a.model] : [])).join('、') || '无模型')}</div>
           </div>
           <div class="account-ops">
             ${isDef ? '' : '<button class="mini" data-act="def">设为默认</button>'}
@@ -433,17 +435,31 @@
       }).join('');
     },
 
-    // 生成一行模型输入（带删除按钮）
+    // 生成一行模型输入（模型名 + 上下文窗口 + 删除按钮）
     makeModelRow(v) {
       const row = document.createElement('div');
       row.className = 'model-row';
+      const name = (v && typeof v === 'object') ? v.name : (v || '');
+      const cw = (v && typeof v === 'object' && v.contextWindow) ? v.contextWindow : '';
+      const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
       const input = document.createElement('input');
       input.type = 'text'; input.className = 'accModelRow';
       input.placeholder = '如 doubao-seed-1-6'; input.autocomplete = 'off';
-      input.value = v || '';
+      input.value = name;
+      const cwInput = document.createElement('input');
+      cwInput.type = 'number'; cwInput.className = 'accModelCtx';
+      cwInput.placeholder = '128000'; cwInput.min = '4000'; cwInput.step = '1000';
+      cwInput.title = '上下文窗口（token）';
+      cwInput.value = cw;
+      const ttSel = document.createElement('select');
+      ttSel.className = 'accModelThink';
+      ttSel.title = '深度思考参数类型：按模型厂商选，不确定选「自动」';
+      [['auto', '自动（推荐）'], ['openai', '强度档·OpenAI'], ['qwen', '开关式·Qwen'], ['none', '原生推理']]
+        .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; ttSel.appendChild(o); });
+      ttSel.value = tt;
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'model-row-del'; btn.dataset.rm = '1'; btn.textContent = '×'; btn.title = '删除该模型';
-      row.appendChild(input); row.appendChild(btn);
+      row.appendChild(input); row.appendChild(cwInput); row.appendChild(ttSel); row.appendChild(btn);
       return row;
     },
 
@@ -478,8 +494,17 @@
       const name = $('accName').value.trim();
       const apiBase = $('accBase').value.trim();
       const apiKey = $('accKey').value.trim();
-      const models = Array.from(document.querySelectorAll('#accModels .accModelRow'))
-        .map(i => i.value.trim()).filter(Boolean);
+      const models = [];
+      document.querySelectorAll('#accModels .model-row').forEach(row => {
+        const nameInput = row.querySelector('.accModelRow');
+        const ctxInput = row.querySelector('.accModelCtx');
+        const ttSel = row.querySelector('.accModelThink');
+        const n = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
+        if (!n) return;
+        const cw = (ctxInput && ctxInput.value) ? parseInt(ctxInput.value, 10) : 128000;
+        const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
+        models.push({ name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt });
+      });
       if (!name || !apiBase || !apiKey) { App.ui.toast('请填写名称、API Base URL 和 Key'); return; }
       if (!models.length) { App.ui.toast('请至少填写一个模型名称'); return; }
       const s = App.state.settings;
@@ -741,6 +766,8 @@
       bindPrompt('pDocPoints', v => { App.state.settings.prompts.doc.points = v; });
       bindPrompt('pDocTranslate', v => { App.state.settings.prompts.doc.translate = v; });
       bindPrompt('pDocOutline', v => { App.state.settings.prompts.doc.outline = v; });
+      bindPrompt('userMemory', v => { App.state.settings.userMemory = v; });
+      bindPrompt('contextWindow', v => { const n = parseInt(v, 10); App.state.settings.contextWindow = (n > 0) ? n : 128000; });
 
       // 提示词"恢复默认"按钮：清空对应字段（=回退内置默认）
       const promptMap = { 'chat': 'pChat', 'agent': 'pAgent',
@@ -939,7 +966,7 @@
         document.addEventListener('click', () => { modelDd.hidden = true; });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') modelDd.hidden = true; });
       }
-      $('thinkBtn').addEventListener('click', () => App.ui.syncThink(!App.state.think));
+      const ts = $('thinkSelect'); if (ts) ts.addEventListener('change', () => App.ui.syncThink(ts.value));
       { const wb = $('webBtn'); if (wb) wb.addEventListener('click', () => App.ui.syncWeb(!App.state.web, true)); }
       $('chatMenuBtn').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -955,6 +982,7 @@
         if (a === 'clear') App.chat.clear();
         if (a === 'export-md') App.ui.downloadMarkdown();
         if (a === 'share') App.ui.exportMarkdown();
+        if (a === 'compact') App.chat.compactNow();
         $('chatDropdown').hidden = true;
       });
 

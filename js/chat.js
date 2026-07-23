@@ -5,6 +5,8 @@
   const $ = (id) => document.getElementById(id);
   const SYSTEM_PROMPT = App.DEFAULT_PROMPTS.chat;
 
+  // 上下文自动压缩逻辑见 js/context.js（App.context.*），聊天与糖码共用
+
   const SUGGESTIONS = [
     { title: '写一份周报', desc: '工作总结 / 计划', prompt: '帮我写一份本周工作周报，包含完成事项、进行中和下周计划。', icon: '📅' },
     { title: '解释概念', desc: '用通俗语言讲清楚', prompt: '用通俗易懂的语言解释“量子纠缠”是什么。', icon: '💡' },
@@ -285,7 +287,7 @@
       wrap.dataset.index = index;
       if (m.role === 'assistant') {
         const thinkHtml = m.think
-          ? `<div class="think-block" style="display:${App.state.think ? 'block' : 'none'}">
+          ? `<div class="think-block" style="display:${(App.state.settings.thinkLevel || 'medium') !== 'off' ? 'block' : 'none'}">
                <div class="think-head"><span class="think-toggle">▾</span>深度思考</div>
                <div class="think-body">${App.escapeHtml(m.think)}</div>
              </div>`
@@ -333,12 +335,34 @@
 
     renderMessages() {
       const conv = App.chat.activeConv();
-      if (!conv || !conv.messages.length) { App.chat.showWelcome(); return; }
+      if (!conv || !conv.messages.length) { App.chat.showWelcome(); App.chat.updateCtxBar(); return; }
       App.chat.showChat();
       $('messages').innerHTML = '';
       conv.messages.forEach((m, i) => $('messages').appendChild(App.chat.messageNode(m, i)));
       App.chat.scrollBottom();
       App.ui.renderTopbarTitle();
+      App.chat.updateCtxBar();
+    },
+
+    // 渲染聊天上下文用量条（对齐 Claude Code：显示实际发送给模型的 token 数）
+    updateCtxBar() {
+      const el = $('chatCtxBar'); if (!el) return;
+      const conv = App.chat.activeConv();
+      if (!conv || !conv.messages) { if (el.style) el.style.display = 'none'; return; }
+      if (el.style) el.style.display = '';
+      const model = (conv && conv.model) || (App.getProvider('chat').model) || '';
+      const ctxWindow = App.context.contextWindowOf(model);
+      const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
+      const systemContent = (conv && conv.systemPrompt) || (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
+      // 用 getCompactMessages 得到与发送一致的 finalMessages → bar 显示值 = 实际发送值
+      const compact = App.context.getCompactMessages({
+        messages: allMsgs, summary: conv.summary || '', summaryCount: conv.summaryCount || 0,
+        recentKeep: App.context.RECENT_KEEP_CHAT, systemContent, window: ctxWindow,
+      });
+      const tokens = App.context.messagesTokens(compact.finalMessages);
+      const userMemTok = App.context.estimateTokens(App.state.settings.userMemory || '');
+      const bd = App.context.breakdownFromFinal(compact.finalMessages, userMemTok);
+      if (App.context.renderUsage) App.context.renderUsage(el, tokens + userMemTok, ctxWindow, bd);
     },
 
     scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight; },
@@ -378,21 +402,56 @@
       const base = s.apiBase.replace(/\/+$/, '');
       // 兼容：用户可能已写全路径，避免拼出 /chat/completions/chat/completions
       const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
-      const systemContent = conv.systemPrompt || (App.state.settings.prompts && App.state.settings.prompts.chat) || SYSTEM_PROMPT;
+      const baseSys = conv.systemPrompt || (App.state.settings.prompts && App.state.settings.prompts.chat) || SYSTEM_PROMPT;
+      const userMemory = (App.state.settings.userMemory || '').trim();
+      // 聊天端享受用户长期记忆（差距 #4）：并入系统提示，与糖码后端注入方式一致
+      const systemContent = userMemory ? (baseSys + '\n\n# 用户长期记忆\n' + userMemory) : baseSys;
       // 对话级模型优先（智能体指定），否则用聊天默认模型；联网同理
       const model = (conv.model && s.models.includes(conv.model)) ? conv.model : s.model;
       const web = (conv.web != null) ? conv.web : App.state.web;
       const AGENT_BASE = 'http://localhost:3000';
+      const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
+      // 异步压缩（#7）：同步取 finalMessages 直接发送，压缩在后台跑，不阻塞本轮 send
+      const ctxWindow = App.context.contextWindowOf(model);
+      const compact = App.context.getCompactMessages({
+        messages: allMsgs,
+        summary: conv.summary || '',
+        summaryCount: conv.summaryCount || 0,
+        recentKeep: App.context.RECENT_KEEP_CHAT,
+        systemContent,
+        window: ctxWindow,
+      });
+      const finalMessages = compact.finalMessages;
+      // 后台压缩：fire-and-forget，结果下一轮发送时生效
+      if (compact.needsCompress && compact.middleMsgs.length && !conv._compressing) {
+        conv._compressing = true;
+        const vCheck = () => compact.newSummaryCount === (conv.summaryCount || 0) + compact.middleMsgs.length;
+        App.context.compressAsync(conv.summary || '', compact.middleMsgs, s, ctxWindow, vCheck).then(newSummary => {
+          if (newSummary) {
+            conv.summary = newSummary;
+            conv.summaryCount = compact.newSummaryCount;
+            App.persist();
+            App.chat.updateCtxBar();
+            App.ui.toast('已自动压缩较早对话上下文');
+          }
+          conv._compressing = false;
+        });
+      }
+      // /context 明细：system=系统提示，memory=用户长期记忆（内联进系统提示，单独列为 memory 段），history=对话+摘要
+      const cmSys = App.context.estimateTokens(baseSys);
+      const cmMem = App.context.estimateTokens(userMemory);
+      const cmTotal = App.context.messagesTokens(finalMessages);
+      const chatBd = { system: cmSys, memory: cmMem, history: Math.max(0, cmTotal - cmSys - cmMem) };
+      if (App.context.renderUsage) App.context.renderUsage($('chatCtxBar'), cmTotal, App.context.contextWindowOf(s.model), chatBd);
       const payload = {
         model,
         stream: true,
-        messages: [{ role: 'system', content: systemContent }]
-          .concat(conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }))),
+        messages: finalMessages,
       };
       if (typeof conv.temperature === 'number') payload.temperature = conv.temperature;
       if (typeof conv.topP === 'number') payload.top_p = conv.topP;
       // 深度思考：按模型自适应注入真实 API 参数
-      Object.assign(payload, App.buildThinkParam(model, App.state.think));
+      Object.assign(payload, App.buildThinkParam(model, App.state.settings.thinkLevel || 'medium'));
       // 联网搜索：原生支持的模型直接发原生参数；不支持的（deepseek/kimi/claude 等）
       // 由本地后端(/api/search)先做真实检索，把结果注入 system 上下文，从而真正能联网。
       let webSourcesCount = 0;
@@ -427,7 +486,7 @@
         }
       }
       let acc = '', thinkAcc = '', started = false, thinkOpen = false;
-      const wantThink = App.state.think;
+      const wantThink = (App.state.settings.thinkLevel || 'medium') !== 'off';
       const appendDelta = (text, isThink) => {
         if (!started) { ui.bubble.innerHTML = ''; started = true; }
         if (isThink) {
@@ -529,14 +588,61 @@
         ui.actions.style.display = 'flex';
         return;
       }
+      // 安全网：原生推理模型（如 grok）可能把完整回答放在思考通道（reasoning_content
+      // 或未闭合 <think>），导致主 content 为空、气泡空白。此时把思考内容兜底为正文。
+      if (!acc && thinkAcc) {
+        acc = thinkAcc;
+        thinkAcc = '';
+        ui.bubble.innerHTML = App.renderMarkdown(acc);
+      }
       if (!acc && !thinkAcc) ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
       conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
       conv.updatedAt = Date.now();
       ui.actions.style.display = 'flex';
     },
 
+    // 手动压缩当前对话上下文（对标 /compact）：整段生成摘要并持久化，不裁剪 UI 历史
+    async compactNow() {
+      const conv = App.chat.activeConv();
+      if (!conv || !conv.messages.length) return;
+      const s = App.getProvider('chat');
+      if (!s.apiBase || !s.apiKey || !s.model) { App.ui.toast('请先配置聊天 API'); return; }
+      App.ui.toast('正在压缩上下文…');
+      const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
+      const summary = await App.context.summarizeFull(allMsgs, '', s);
+      if (!summary) { App.ui.toast('压缩失败，稍后再试'); return; }
+      conv.summary = summary;
+      conv.summaryCount = Math.max(0, allMsgs.length - App.context.RECENT_KEEP_CHAT);
+      App.persist();
+      App.chat.updateCtxBar();
+      App.ui.toast('已压缩当前对话上下文');
+    },
+
+    // /memory 命令：写入用户长期记忆（userMemory），糖包与糖码共用同一份；不进入对话
+    writeMemory(content) {
+      if (!content) {
+        const cur = (App.state.settings.userMemory || '').trim();
+        App.ui.toast(cur ? ('当前用户长期记忆：\n' + cur) : '用法：/memory 要记住的内容');
+        return;
+      }
+      const cur = (App.state.settings.userMemory || '').trim();
+      const lines = cur ? cur.split('\n') : [];
+      if (lines.includes(content)) { App.ui.toast('该记忆已存在'); return; }
+      App.state.settings.userMemory = cur ? (cur + '\n' + content) : content;
+      App.persist();
+      if (App.ui.refreshSettingsUI) App.ui.refreshSettingsUI();
+      App.chat.updateCtxBar();
+      App.ui.toast('已写入用户长期记忆');
+    },
+
     async send() {
       const text = $('input').value.trim();
+      // /memory 命令：写入用户长期记忆（不进入对话），对标 Claude Code 的 /memory
+      if (text.startsWith('/memory')) {
+        App.chat.writeMemory(text.slice(7).trim());
+        $('input').value = ''; App.chat.autoSize();
+        return;
+      }
       const atts = pendingAttachments.slice();
       if ((!text && !atts.length) || streaming) return;
       let conv = App.chat.activeConv();
@@ -629,7 +735,7 @@
       App.chat.renderMessages();
       App.ui.renderTopbarTitle();
       App.ui.syncModelSelect();
-      App.ui.syncThink(App.state.think);
+      App.ui.syncThink(App.state.settings.thinkLevel || 'medium');
       App.ui.syncWeb(App.state.web);
       App.chat.syncImgBtn();
     },
