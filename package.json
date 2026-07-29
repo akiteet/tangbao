@@ -1,6 +1,6 @@
 {
   "name": "tangbao-web",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "糖包 - 全能 AI 助手桌面版（含糖码本地后端）",
   "author": "糖包",
@@ -31,7 +31,7 @@
     },
     "win": {
       "target": "nsis",
-      "artifactName": "糖包-${version}-setup.${ext}"
+      "artifactName": "tangbao-${version}-setup.${ext}"
     },
     "nsis": {
       "oneClick": false,

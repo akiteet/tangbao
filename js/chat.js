@@ -237,6 +237,31 @@
       App.ui.toast('已清空对话');
     },
 
+    deleteMessage(idx) {
+      const conv = App.chat.activeConv();
+      if (!conv || idx == null || idx < 0 || idx >= conv.messages.length) return;
+      conv.messages.splice(idx, 1);
+      App.persist();
+      App.chat.renderMessages();
+      App.ui.toast('已删除该条消息');
+    },
+
+    attachTextFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        let text = String(reader.result || '');
+        const MAX = 20000;
+        if (text.length > MAX) text = text.slice(0, MAX) + '\n…（附件过长已截断）';
+        pendingAttachments.push({ id: App.uid(), name: file.name, type: file.type || 'text/plain', text, size: file.size });
+        App.chat.pendingAttachments = pendingAttachments;
+        App.chat.renderAttachChips();
+        App.chat.updateSendEnabled();
+        App.ui.toast('已附加 ' + file.name);
+      };
+      reader.onerror = () => App.ui.toast('读取文件失败：' + file.name);
+      reader.readAsText(file);
+    },
+
     startWithAgent(agent) {
       App.chat.newConversation(agent);
       $('input').focus();
@@ -306,6 +331,7 @@
                 <button data-action="copy">复制</button>
                 <button data-action="copy-md">复制 Markdown</button>
                 <button data-action="regen">重新生成</button>
+                <button data-action="delete">删除</button>
               </div>
             </div>
           </div>`;
@@ -324,7 +350,7 @@
             ${imgHtml}
             ${attHtml}
             <div class="bubble user-bubble"></div>
-            <div class="msg-actions user-actions"><button data-action="copy-user">复制</button></div>
+            <div class="msg-actions user-actions"><button data-action="copy-user">复制</button><button data-action="delete">删除</button></div>
           </div>`;
         const bubble = wrap.querySelector('.user-bubble');
         bubble.textContent = m.content || '';
@@ -339,7 +365,7 @@
       App.chat.showChat();
       $('messages').innerHTML = '';
       conv.messages.forEach((m, i) => $('messages').appendChild(App.chat.messageNode(m, i)));
-      App.chat.scrollBottom();
+      App.chat.scrollBottom(true);
       App.ui.renderTopbarTitle();
       App.chat.updateCtxBar();
     },
@@ -365,7 +391,17 @@
       if (App.context.renderUsage) App.context.renderUsage(el, tokens + userMemTok, ctxWindow, bd);
     },
 
-    scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight; },
+    isNearBottom() {
+      const c = $('chatScroll');
+      if (!c) return true;
+      return c.scrollHeight - c.scrollTop - c.clientHeight < 60;
+    },
+    scrollBottom(force) {
+      const c = $('chatScroll');
+      if (!c) return;
+      // 仅在强制或用户已贴近底部时跟随，避免打断向上翻看
+      if (force || App.chat.isNearBottom()) c.scrollTop = c.scrollHeight;
+    },
 
     appendAssistant() {
       const wrap = document.createElement('div');
@@ -487,16 +523,26 @@
       }
       let acc = '', thinkAcc = '', started = false, thinkOpen = false;
       const wantThink = (App.state.settings.thinkLevel || 'medium') !== 'off';
+      // 流式渲染节流：把「整段 markdown 重渲染 + 滚动」合并到最多每 ~120ms 一次，
+      // 避免长回复每个 delta 都重解析全文导致 O(n²) 卡顿；流末 flushNow 保证终态正确。
+      let flushTimer = null;
+      const flushRender = () => {
+        if (acc) ui.bubble.innerHTML = App.renderMarkdown(acc);
+        if (wantThink && thinkAcc) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); }
+        App.chat.scrollBottom();
+      };
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        flushTimer = setTimeout(() => { flushTimer = null; flushRender(); }, 120);
+      };
+      const flushNow = () => {
+        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+        flushRender();
+      };
       const appendDelta = (text, isThink) => {
         if (!started) { ui.bubble.innerHTML = ''; started = true; }
-        if (isThink) {
-          thinkAcc += text;
-          if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); }
-        } else {
-          acc += text;
-          ui.bubble.innerHTML = App.renderMarkdown(acc);
-        }
-        App.chat.scrollBottom();
+        if (isThink) { thinkAcc += text; } else { acc += text; }
+        scheduleFlush();
       };
       // 检测并拆分 <think> 标签的文本
       const feedContent = (raw) => {
@@ -553,8 +599,9 @@
             const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
             if (delta.reasoning_content) {
               thinkAcc += delta.reasoning_content;
-              if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); }
+              if (wantThink) ui.thinkBlock.style.display = 'block';
               started = true;
+              scheduleFlush();
             }
             if (delta.content) feedContent(delta.content);
           }
@@ -568,7 +615,7 @@
               try {
                 const json = JSON.parse(data);
                 const d = (json.choices && json.choices[0] && json.choices[0].delta) || {};
-                if (d.reasoning_content) { thinkAcc += d.reasoning_content; if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); } started = true; }
+                if (d.reasoning_content) { thinkAcc += d.reasoning_content; if (wantThink) ui.thinkBlock.style.display = 'block'; started = true; scheduleFlush(); }
                 if (d.content) feedContent(d.content);
               } catch (e) {}
             }
@@ -577,7 +624,7 @@
             try {
               const json = JSON.parse(t);
               const ch = (json.choices && json.choices[0]) || {};
-              if (ch.message && ch.message.reasoning_content) { thinkAcc += ch.message.reasoning_content; if (wantThink) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); } started = true; }
+              if (ch.message && ch.message.reasoning_content) { thinkAcc += ch.message.reasoning_content; if (wantThink) ui.thinkBlock.style.display = 'block'; started = true; scheduleFlush(); }
               if (ch.message && ch.message.content) feedContent(ch.message.content);
               else if (ch.delta && ch.delta.content) feedContent(ch.delta.content);
             } catch (e) {}
@@ -595,6 +642,7 @@
         thinkAcc = '';
         ui.bubble.innerHTML = App.renderMarkdown(acc);
       }
+      flushNow();
       if (!acc && !thinkAcc) ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
       conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
       conv.updatedAt = Date.now();
@@ -653,16 +701,18 @@
       if (conv.messages.length === 1) conv.title = (text || (atts[0] && atts[0].name) || '新对话').slice(0, 20);
       conv.updatedAt = Date.now();
       $('input').value = ''; App.chat.autoSize();
+      try { localStorage.removeItem('tb_draft_' + App.state.activeId); } catch (e) {}
       App.chat.clearAttachments();
       App.persist(); App.ui.renderSidebar();
       App.chat.showChat(); App.ui.renderTopbarTitle();
       $('messages').appendChild(App.chat.messageNode(userMsg, 0));
       const ui = App.chat.appendAssistant();
-      App.chat.scrollBottom();
+      App.chat.scrollBottom(true);
       streaming = true; App.chat.setSending(true);
       await App.chat.streamChat(conv, ui);
       streaming = false; App.chat.setSending(false);
       App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
+      if (window.electron && window.electron.floatRefresh) window.electron.floatRefresh();
     },
 
     async regen(index) {
@@ -678,6 +728,7 @@
       await App.chat.streamChat(conv, ui);
       streaming = false; App.chat.setSending(false);
       App.persist(); App.ui.renderSidebar();
+      if (window.electron && window.electron.floatRefresh) window.electron.floatRefresh();
     },
 
     setSending(on) {
@@ -732,6 +783,12 @@
     },
 
     onShow() {
+      // 恢复当前会话的输入框草稿
+      try {
+        const draft = localStorage.getItem('tb_draft_' + App.state.activeId) || '';
+        const inp = $('input');
+        if (inp) { inp.value = draft; App.chat.autoSize(); App.chat.updateSendEnabled(); }
+      } catch (e) {}
       App.chat.renderMessages();
       App.ui.renderTopbarTitle();
       App.ui.syncModelSelect();
@@ -745,9 +802,27 @@
       App.chat.renderQuickActions();
       App.chat.syncImgBtn();
 
-      $('input').addEventListener('input', () => { App.chat.autoSize(); App.chat.updateSendEnabled(); });
-      $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); App.chat.send(); } });
+      $('input').addEventListener('input', () => {
+        App.chat.autoSize();
+        App.chat.updateSendEnabled();
+        try { localStorage.setItem('tb_draft_' + App.state.activeId, $('input').value); } catch (e) {}
+      });
+      $('input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); App.chat.send(); }
+        else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); App.chat.send(); }
+      });
       $('sendBtn').addEventListener('click', () => App.chat.send());
+      // 回到底部按钮：滚动偏离底部时显示，点击平滑回到底部
+      const sbBtn = $('scrollBottomBtn'); const csEl = $('chatScroll');
+      if (sbBtn && csEl) {
+        const syncSb = () => { sbBtn.hidden = App.chat.isNearBottom(); };
+        csEl.addEventListener('scroll', syncSb, { passive: true });
+        sbBtn.addEventListener('click', () => {
+          csEl.scrollTo({ top: csEl.scrollHeight, behavior: 'smooth' });
+          sbBtn.hidden = true;
+        });
+        syncSb();
+      }
       // 附件：读取文本文件为独立卡片（发送时作为上下文注入，不写入输入框）
       const attachInput = $('attachInput');
       $('attachBtn').addEventListener('click', () => { if (attachInput) attachInput.click(); });
@@ -816,9 +891,19 @@
         composer.addEventListener('drop', (e) => {
           e.preventDefault();
           composer.classList.remove('drag-over');
-          if (!App.chat.isVisionModel()) { App.ui.toast('当前模型不支持图片输入'); return; }
           const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
-          files.forEach(f => App.chat.handleImageFile(f));
+          if (!files.length) return;
+          files.forEach((f) => {
+            if (f.type.startsWith('image/')) {
+              if (App.chat.isVisionModel()) App.chat.handleImageFile(f);
+              else App.ui.toast('当前模型不支持图片输入');
+            } else if (f.type.startsWith('text/') || /\.(txt|md|csv|json|jsonl|log)$/i.test(f.name)) {
+              App.chat.attachTextFile(f);
+            } else {
+              App.ui.toast('仅支持拖入图片或文本文件：' + f.name);
+            }
+          });
+          App.chat.updateSendEnabled();
         });
       }
 
@@ -867,6 +952,8 @@
         }
         const regen = e.target.closest('[data-action="regen"]');
         if (regen) { App.chat.regen(idx); return; }
+        const del = e.target.closest('[data-action="delete"]');
+        if (del) { App.chat.deleteMessage(idx); return; }
       });
 
       // code copy —— 委托到 document，覆盖所有模块（聊天/糖码/糖读）内的代码块复制按钮

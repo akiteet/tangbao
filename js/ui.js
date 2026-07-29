@@ -973,6 +973,11 @@
         $('chatDropdown').hidden = !$('chatDropdown').hidden;
       });
       document.addEventListener('click', () => { $('chatDropdown').hidden = true; });
+      // 浮窗入口 / 关闭
+      const floatBtn = $('floatBtn');
+      if (floatBtn) floatBtn.addEventListener('click', () => { if (window.electron && window.electron.openFloat) window.electron.openFloat(); });
+      const floatClose = $('floatClose');
+      if (floatClose) floatClose.addEventListener('click', () => { if (window.electron && window.electron.closeFloat) window.electron.closeFloat(); });
       $('chatDropdown').addEventListener('click', (e) => {
         e.stopPropagation();
         const act = e.target.closest('[data-act]');

@@ -5,7 +5,7 @@
  * - 在主进程内拉起「糖码」后端（server/agent-server.js 的 startAgentServer）
  * - 退出时随进程结束自动关闭后端
  */
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, screen, Tray, globalShortcut, Menu } = require('electron');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -374,7 +374,11 @@ function createWindow() {
     },
   });
   mainWindow.loadURL(`http://localhost:${APP_PORT}/`);
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    // 浮窗依赖主窗落盘（float:sync），主窗关闭时一并关闭所有浮窗，避免孤儿窗口
+    try { floatWindows.forEach((w) => { if (w && !w.isDestroyed()) w.close(); }); } catch (_) {}
+  });
 }
 
 // 渲染进程（主题切换时）用来同步系统标题栏叠加层的颜色，使浅/深色模式下控件都清晰
@@ -463,6 +467,209 @@ ipcMain.handle('custom:openChildWindow', async (e, {id, url, label}) => {
   }
 });
 
+// 系统级浮窗：独立的、永远置顶的小窗（聊天）。复用同源静态服务，加载 ?float=chat。
+const floatWindows = new Map();
+
+// 浮窗位置/尺寸记忆：落盘到 userData/tangbao-data/float-bounds.json
+const floatBoundsFile = () => path.join(app.getPath('userData'), 'tangbao-data', 'float-bounds.json');
+
+function loadFloatBounds() {
+  try {
+    const raw = fs.readFileSync(floatBoundsFile(), 'utf8');
+    const b = JSON.parse(raw);
+    if (b && typeof b.width === 'number' && typeof b.height === 'number') return b;
+  } catch (_) {}
+  return null;
+}
+
+// 校验记忆的位置是否落在某个可见显示器内，避免记忆到已断开的副屏导致窗口"消失"
+function isValidBounds(b) {
+  if (!b || typeof b.x !== 'number' || typeof b.y !== 'number' ||
+      typeof b.width !== 'number' || typeof b.height !== 'number') return false;
+  const disp = screen.getDisplayMatching({ x: b.x, y: b.y, width: b.width, height: b.height });
+  if (!disp || !disp.workArea) return false;
+  const wa = disp.workArea;
+  const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+  return cx >= wa.x && cx <= wa.x + wa.width && cy >= wa.y && cy <= wa.y + wa.height;
+}
+
+function writeFloatBounds(b) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'tangbao-data');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(floatBoundsFile(), JSON.stringify(b));
+  } catch (_) {}
+}
+
+// 浮窗开关/透明度/置顶状态：落盘到 userData/tangbao-data/float-state.json
+const floatStateFile = () => path.join(app.getPath('userData'), 'tangbao-data', 'float-state.json');
+function readFloatState() {
+  try {
+    const raw = fs.readFileSync(floatStateFile(), 'utf8');
+    const s = JSON.parse(raw);
+    if (s && typeof s === 'object') return Object.assign({ open: false, opacity: 1.0, alwaysOnTop: true }, s);
+  } catch (_) {}
+  return { open: false, opacity: 1.0, alwaysOnTop: true };
+}
+function writeFloatState(patch) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'tangbao-data');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const next = Object.assign(readFloatState(), patch || {});
+    fs.writeFileSync(floatStateFile(), JSON.stringify(next));
+    return next;
+  } catch (_) { return null; }
+}
+
+// 切换浮窗显隐：无窗则新建并显示，可见则隐藏（不销毁），隐藏则显示。状态同步写入 float-state.json
+function toggleFloatWindow() {
+  const win = floatWindows.get('chat');
+  if (!win || win.isDestroyed()) {
+    const w = createFloatingWindow();
+    floatWindows.set('chat', w);
+    writeFloatState({ open: true });
+    return true;
+  }
+  if (win.isVisible()) {
+    try { win.hide(); } catch (_) {}
+    writeFloatState({ open: false });
+    return false;
+  }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  writeFloatState({ open: true });
+  return true;
+}
+
+let floatBoundsSaveTimer = null;
+function saveFloatBounds(win) {
+  if (win.isDestroyed()) return;
+  const b = win.getBounds();
+  if (floatBoundsSaveTimer) clearTimeout(floatBoundsSaveTimer);
+  floatBoundsSaveTimer = setTimeout(() => writeFloatBounds(b), 500);
+}
+
+function createFloatingWindow() {
+  const saved = loadFloatBounds();
+  const valid = isValidBounds(saved);
+  const fState = readFloatState();
+  const win = new BrowserWindow({
+    width: valid ? saved.width : 380,
+    height: valid ? saved.height : 600,
+    x: valid ? saved.x : undefined,
+    y: valid ? saved.y : undefined,
+    minWidth: 320,
+    minHeight: 420,
+    alwaysOnTop: fState.alwaysOnTop !== false,
+    opacity: typeof fState.opacity === 'number' ? fState.opacity : 1,
+    frame: false,
+    backgroundColor: '#1f2329',
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  // 先挂监听，再加载，避免 did-finish-load 早于渲染进程注册监听
+  win.webContents.once('did-finish-load', () => {
+    try {
+      const file = path.join(app.getPath('userData'), 'tangbao-data', 'state.json');
+      const raw = fs.readFileSync(file, 'utf8');
+      win.webContents.send('float:init', raw);
+    } catch (_) { /* 无 state.json 时浮窗用默认空状态 */ }
+  });
+  win.once('ready-to-show', () => win.show());
+  win.on('move', () => saveFloatBounds(win));
+  win.on('resize', () => saveFloatBounds(win));
+  win.on('close', () => { try { writeFloatBounds(win.getBounds()); } catch (_) {} });
+  win.on('closed', () => {
+    floatWindows.delete('chat');
+    if (mainWindow && mainWindow.webContents) mainWindow.webContents.send('float:refresh');
+  });
+  win.loadURL(`http://localhost:${APP_PORT}/?float=chat`);
+  return win;
+}
+
+ipcMain.handle('float:open', async () => {
+  let win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+    return { ok: true };
+  }
+  try {
+    const w = createFloatingWindow();
+    floatWindows.set('chat', w);
+    writeFloatState({ open: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('float:close', async () => {
+  const win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) { try { win.hide(); } catch (_) {} }
+  writeFloatState({ open: false });
+  return { ok: true };
+});
+// 托盘/热键用：切换浮窗显隐
+ipcMain.handle('float:toggle', async () => {
+  const visible = toggleFloatWindow();
+  return { ok: true, visible };
+});
+// 托盘"退出浮窗"：真正销毁浮窗窗口
+ipcMain.handle('float:destroy', async () => {
+  const win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) { try { win.destroy(); } catch (_) {} }
+  floatWindows.delete('chat');
+  writeFloatState({ open: false });
+  return { ok: true };
+});
+
+// 浮窗 → 主窗：转发状态变更（主窗据此合并并落盘）
+ipcMain.on('float:sync', (e, s) => {
+  if (mainWindow && mainWindow.webContents) mainWindow.webContents.send('float:apply', s);
+});
+
+// 主窗 → 浮窗：通知重渲染（流式结束 / 浮窗关闭后）
+ipcMain.handle('float:refresh', async () => {
+  floatWindows.forEach((w) => { if (!w.isDestroyed()) w.webContents.send('float:refresh'); });
+  return { ok: true };
+});
+
+// 浮窗双击顶栏：最大化 / 还原
+ipcMain.handle('float:toggleMaximize', async () => {
+  const win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) { try { if (win.isMaximized()) win.unmaximize(); else win.maximize(); } catch (_) {} }
+  return { ok: true };
+});
+// 浮窗透明度：setOpacity 立即生效并持久化（默认 1.0 不透明，点击切到 0.6）；getOpacity 读取当前值
+ipcMain.handle('float:setOpacity', async (e, v) => {
+  const val = typeof v === 'number' ? v : 1;
+  const win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) { try { win.setOpacity(val); } catch (_) {} }
+  writeFloatState({ opacity: val });
+  return { ok: true };
+});
+// 浮窗置顶开关：setAlwaysOnTop 立即生效并持久化
+ipcMain.handle('float:setAlwaysOnTop', async (e, on) => {
+  const win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) { try { win.setAlwaysOnTop(!!on); } catch (_) {} }
+  writeFloatState({ alwaysOnTop: !!on });
+  return { ok: true };
+});
+ipcMain.handle('float:getOpacity', async () => {
+  const win = floatWindows.get('chat');
+  if (win && !win.isDestroyed()) { try { return win.getOpacity(); } catch (_) {} }
+  return readFloatState().opacity;
+});
+
 // 单实例：避免重复开多个窗口
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -491,6 +698,31 @@ if (!gotLock) {
     await startStaticServer();
     startAgentServer(AGENT_PORT); // 在主进程内启动糖码后端
     createWindow();
+    // 若上次退出时浮窗是开着的，自动恢复浮窗
+    try {
+      if (readFloatState().open) {
+        const w = createFloatingWindow();
+        floatWindows.set('chat', w);
+      }
+    } catch (_) {}
+    // 托盘图标（复用 app-icon.ico）：右键菜单切换浮窗 / 退出；点击托盘切换浮窗
+    try {
+      const trayIcon = path.join(__dirname, 'assets', 'app-icon.ico');
+      const tray = new Tray(trayIcon);
+      tray.setToolTip('糖包');
+      const trayMenu = Menu.buildFromTemplate([
+        { label: '显示/隐藏浮窗', click: () => { toggleFloatWindow(); } },
+        { type: 'separator' },
+        { label: '退出糖包', click: () => { app.quit(); } },
+      ]);
+      tray.setContextMenu(trayMenu);
+      tray.on('click', () => { toggleFloatWindow(); });
+    } catch (_) {}
+    // 全局快捷键 Ctrl/Cmd+Shift+F 切换浮窗显隐（注册失败静默忽略：被占用或缺少权限）
+    try {
+      const ok = globalShortcut.register('CommandOrControl+Shift+F', () => { toggleFloatWindow(); });
+      if (!ok) { /* 注册失败，静默忽略 */ }
+    } catch (_) {}
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -500,5 +732,9 @@ if (!gotLock) {
   app.on('window-all-closed', () => {
     if (staticServer) { try { staticServer.close(); } catch (e) {} staticServer = null; }
     if (process.platform !== 'darwin') app.quit();
+  });
+
+  app.on('will-quit', () => {
+    try { globalShortcut.unregisterAll(); } catch (_) {}
   });
 }
