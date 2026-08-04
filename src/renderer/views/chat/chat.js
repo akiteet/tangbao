@@ -30,6 +30,7 @@
 
   App.chat = {
     pendingAttachments,
+    editingIndex: null,     // M7：编辑模式下的用户消息下标（null=非编辑模式）
 
     activeConv() { return App.state.conversations.find(c => c.id === App.state.activeId) || null; },
 
@@ -175,12 +176,15 @@
         if (typeof agent.topP === 'number') conv.topP = agent.topP;
         if (typeof agent.web === 'boolean') conv.web = agent.web;
         if (Array.isArray(agent.starters) && agent.starters.length) conv.starters = agent.starters.slice();
+        // M12：智能体语气（tone）此前是死字段，此处落到对话，发送时注入系统提示
+        if (agent.tone) conv.tone = agent.tone;
         // 计入智能体使用次数
         if (agent.id && App.create && App.create.trackUsage) App.create.trackUsage(agent.id);
       }
       App.state.conversations.unshift(conv);
       App.state.activeId = conv.id;
       App.chat.clearAttachments();
+      App.chat.cancelEdit();
       App.persist();
       App.router.go('chat');
       App.ui.renderSidebar();
@@ -199,6 +203,7 @@
     activate(id) {
       App.state.activeId = id;
       App.chat.clearAttachments();
+      App.chat.cancelEdit();
       App.persist();
       App.router.go('chat');
       App.ui.renderSidebar();
@@ -324,6 +329,13 @@
                <div class="think-body">${App.escapeHtml(m.think)}</div>
              </div>`
           : '';
+        // M9：答案版本切换（regenerate 重新生成后旧回答归档为版本；按钮位于「重新生成」与「删除」之间）
+        const versions = (m.versions && m.versions.length > 1) ? m.versions : null;
+        const vIdx = versions ? (m.versionIdx != null ? m.versionIdx : versions.length - 1) : 0;
+        const displayContent = versions ? (versions[vIdx] || m.content || '') : (m.content || '');
+        const versionBtn = versions
+          ? `<button class="version-switch" data-version="1" title="切换回答版本">${vIdx + 1}/${versions.length}</button>`
+          : '';
         const webLabel = m.webSources ? (m.webSources + ' 个') : '多个';
         const webHtml = (m.webSources || (App.state.web && m.role === 'assistant'))
           ? '<div class="web-indicator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>基于 ' + webLabel + '搜索来源</div>'
@@ -338,17 +350,18 @@
                 <button data-action="copy">复制</button>
                 <button data-action="copy-md">复制 Markdown</button>
                 <button data-action="regen">重新生成</button>
+                ${versionBtn}
                 <button data-action="delete">删除</button>
               </div>
             </div>
           </div>`;
         let bubbleHtml;
         try {
-          bubbleHtml = App.renderMarkdown(m.content || '');
+          bubbleHtml = App.renderMarkdown(displayContent);
         } catch (e) {
           // 渲染异常时降级为纯文本 + 提示，保证消息不丢、不白屏
           bubbleHtml = '<div class="msg-error">内容渲染失败：' + App.escapeHtml(String((e && e.message) || e)) +
-            '</div><pre class="bubble-fallback">' + App.escapeHtml(m.content || '') + '</pre>';
+            '</div><pre class="bubble-fallback">' + App.escapeHtml(displayContent) + '</pre>';
         }
         wrap.querySelector('.bubble').innerHTML = bubbleHtml;
       } else {
@@ -365,7 +378,7 @@
             ${imgHtml}
             ${attHtml}
             <div class="bubble user-bubble"></div>
-            <div class="msg-actions user-actions"><button data-action="copy-user">复制</button><button data-action="delete">删除</button></div>
+            <div class="msg-actions user-actions"><button data-action="copy-user">复制</button><button data-action="edit">编辑</button><button data-action="delete">删除</button></div>
           </div>`;
         const bubble = wrap.querySelector('.user-bubble');
         bubble.textContent = m.content || '';
@@ -403,6 +416,14 @@
     },
 
     // 渲染聊天上下文用量条（对齐 Claude Code：显示实际发送给模型的 token 数）
+    // M12：统一构建发送给模型的系统提示内容（基础系统提示 + 智能体语气）；streamChat 与 updateCtxBar 共用，保证用量条与实际发送一致
+    buildSystemContent(conv) {
+      const baseSys = (conv && conv.systemPrompt) || (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
+      let sc = baseSys;
+      if (conv && conv.tone) sc += '\n\n# 语气要求\n请用「' + conv.tone + '」的语气回复用户。';
+      return sc;
+    },
+
     updateCtxBar() {
       const el = $('chatCtxBar'); if (!el) return;
       const conv = App.chat.activeConv();
@@ -411,7 +432,7 @@
       const model = (conv && conv.model) || (App.getProvider('chat').model) || '';
       const ctxWindow = App.context.contextWindowOf(model);
       const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
-      const systemContent = (conv && conv.systemPrompt) || (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
+      const systemContent = App.chat.buildSystemContent(conv);
       // 用 getCompactMessages 得到与发送一致的 finalMessages → bar 显示值 = 实际发送值
       const compact = App.context.getCompactMessages({
         messages: allMsgs, summary: conv.summary || '', summaryCount: conv.summaryCount || 0,
@@ -467,12 +488,20 @@
         ui.actions.style.display = 'flex';
         return;
       }
-      const baseSys = conv.systemPrompt || (App.state.settings.prompts && App.state.settings.prompts.chat) || SYSTEM_PROMPT;
+      const baseSys = App.chat.buildSystemContent(conv);
       const userMemory = (App.state.settings.userMemory || '').trim();
       // 聊天端享受用户长期记忆（差距 #4）：并入系统提示，与糖码后端注入方式一致
       const systemContent = userMemory ? (baseSys + '\n\n# 用户长期记忆\n' + userMemory) : baseSys;
       // 对话级模型优先（智能体指定），否则用聊天默认模型；联网同理
       const model = (conv.model && s.models.includes(conv.model)) ? conv.model : s.model;
+      // M12：智能体指定模型不可用时给出提示（按对话+模型去重，避免每次发送重复弹）
+      if (conv.model && s.models.length && !s.models.includes(conv.model)) {
+        const key = conv.id + '|' + conv.model;
+        if (App.chat._modelWarned !== key) {
+          App.chat._modelWarned = key;
+          App.ui.toast('智能体指定模型 ' + conv.model + ' 不在当前账户模型中，已改用 ' + s.model);
+        }
+      }
       const web = (conv.web != null) ? conv.web : App.state.web;
       const AGENT_BASE = App.rt.agentBase(); // 本机随机端口，运行时取
       const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
@@ -715,6 +744,30 @@
       if ((!text && !atts.length) || streaming) return;
       let conv = App.chat.activeConv();
       if (!conv) conv = App.chat.newConversation();
+      // M7：编辑上一条消息 → 截断到该条（含）、替换内容、重新生成（复用 regen 骨架）
+      // M9：编辑后生成直接覆盖（问题已变，旧回答无对比价值；版本切换仅用于「重新生成」按钮）
+      const editIdx = App.chat.editingIndex;
+      if (editIdx != null && conv.messages[editIdx] && conv.messages[editIdx].role === 'user') {
+        const um = conv.messages[editIdx];
+        conv.messages.splice(editIdx + 1);
+        um.content = text;
+        if (atts.length) um.attachments = atts;
+        App.chat.editingIndex = null;
+        conv.updatedAt = Date.now();
+        $('input').value = ''; App.chat.autoSize();
+        App.chat.clearAttachments();
+        App.chat.updateEditBanner();
+        App.persist(); App.ui.renderSidebar();
+        App.chat.renderMessages();
+        const ui = App.chat.appendAssistant();
+        App.chat.scrollBottom(true);
+        streaming = true; App.chat.setSending(true);
+        await App.chat.streamChat(conv, ui);
+        streaming = false; App.chat.setSending(false);
+        App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
+        App.services.float.refresh();
+        return;
+      }
       const userMsg = { role: 'user', content: text };
       if (atts.length) userMsg.attachments = atts;
       conv.messages.push(userMsg);
@@ -735,9 +788,37 @@
       App.services.float.refresh();
     },
 
+    // M7：编辑上一条用户消息并重新生成。editingIndex = 被编辑的用户消息下标
+    startEdit(index) {
+      const conv = App.chat.activeConv();
+      if (!conv || index == null) return;
+      const m = conv.messages[index];
+      if (!m || m.role !== 'user') return;
+      App.chat.editingIndex = index;
+      const input = $('input');
+      if (input) { input.value = m.content || ''; input.focus(); App.chat.autoSize(); }
+      App.chat.updateEditBanner();
+    },
+
+    cancelEdit() {
+      App.chat.editingIndex = null;
+      App.chat.updateEditBanner();
+    },
+
+    updateEditBanner() {
+      const banner = $('editBanner');
+      if (!banner) return;
+      banner.style.display = (App.chat.editingIndex != null) ? 'flex' : 'none';
+    },
+
     async regen(index) {
       const conv = App.chat.activeConv();
       if (!conv || index < 1 || conv.messages[index].role !== 'assistant') return;
+      // M9：旧回答归档为版本（同一问题多答案可切换对比），新回答成为最新版
+      const am = conv.messages[index];
+      const oldVersions = (am.versions && am.versions.length)
+        ? am.versions.slice()
+        : (am.content != null ? [am.content] : []);
       // remove assistant and all subsequent
       conv.messages = conv.messages.slice(0, index);
       App.persist();
@@ -747,7 +828,15 @@
       streaming = true; App.chat.setSending(true);
       await App.chat.streamChat(conv, ui);
       streaming = false; App.chat.setSending(false);
-      App.persist(); App.ui.renderSidebar();
+      // M9：新回复挂 versions（旧版本 + 新内容，上限 5 版）
+      const last = conv.messages[conv.messages.length - 1];
+      if (last && last.role === 'assistant') {
+        const v = oldVersions.concat([last.content]);
+        while (v.length > 5) v.shift();
+        last.versions = v;
+        last.versionIdx = v.length - 1;
+      }
+      App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
       App.services.float.refresh();
     },
 
@@ -830,8 +919,11 @@
       $('input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); App.chat.send(); }
         else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); App.chat.send(); }
+        else if (e.key === 'Escape' && App.chat.editingIndex != null) { App.chat.cancelEdit(); }
       });
       $('sendBtn').addEventListener('click', () => App.chat.send());
+      const editCancel = $('editCancel');
+      if (editCancel) editCancel.addEventListener('click', () => App.chat.cancelEdit());
       // 回到底部按钮：滚动偏离底部时显示，点击平滑回到底部
       const sbBtn = $('scrollBottomBtn'); const csEl = $('chatScroll');
       if (sbBtn && csEl) {
@@ -968,6 +1060,23 @@
         if (copyUser) {
           const text = (conv && idx != null && conv.messages[idx]) ? (conv.messages[idx].content || '') : '';
           navigator.clipboard.writeText(text).then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
+          return;
+        }
+        const editMsg = e.target.closest('[data-action="edit"]');
+        if (editMsg) { App.chat.startEdit(idx); return; }
+        // M9：答案版本切换（点击徽标循环切换，定向更新该消息 bubble，不整表重绘）
+        const vs = e.target.closest('[data-version]');
+        if (vs && idx != null) {
+          const m = conv && conv.messages[idx];
+          if (m && m.versions && m.versions.length > 1) {
+            const cur = m.versionIdx != null ? m.versionIdx : m.versions.length - 1;
+            m.versionIdx = (cur + 1) % m.versions.length;
+            const card = vs.closest('.msg-card');
+            const bubble = card && card.querySelector('.bubble');
+            if (bubble) bubble.innerHTML = App.renderMarkdown(m.versions[m.versionIdx] || '');
+            vs.textContent = (m.versionIdx + 1) + '/' + m.versions.length;
+            App.persist();
+          }
           return;
         }
         const regen = e.target.closest('[data-action="regen"]');

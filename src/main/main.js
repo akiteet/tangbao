@@ -663,6 +663,28 @@ safeHandle('storage:loadState', async () => {
   }
 });
 
+// M7（v1.0.8）：工作流运行历史独立持久化（不随 App.state 写穿；SQLite 不可用则静默降级）
+safeHandle('storage:saveRun', async (_e, run) => {
+  try {
+    const svc = getStorageService();
+    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    svc.saveWorkflowRun(run || {});
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: 'save-run-error', error: err && err.message ? err.message : String(err) };
+  }
+});
+
+safeHandle('storage:listRuns', async (_e, workflowId, limit) => {
+  try {
+    const svc = getStorageService();
+    if (!svc) return { ok: false, reason: 'no-sqlite', runs: [] };
+    return { ok: true, runs: svc.listWorkflowRuns(workflowId, limit) };
+  } catch (err) {
+    return { ok: false, reason: 'list-runs-error', runs: [], error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // M6 导入导出：完整数据（含对话/图片/项目）备份为 JSON 文件，经系统文件对话框读写
 safeHandle('storage:exportState', async () => {
   try {

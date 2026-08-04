@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('electron', {
   // M6 导入导出：完整数据备份（经系统文件对话框）
   exportState: () => ipcRenderer.invoke('storage:exportState'),
   importState: () => ipcRenderer.invoke('storage:importState'),
+  // M7（v1.0.8）：工作流运行历史
+  saveWorkflowRun: (run) => ipcRenderer.invoke('storage:saveRun', run),
+  listWorkflowRuns: (workflowId, limit) => ipcRenderer.invoke('storage:listRuns', workflowId, limit),
   // 浮窗（系统级独立置顶小窗）
   openFloat: () => ipcRenderer.invoke('float:open'),
   closeFloat: () => ipcRenderer.invoke('float:close'),

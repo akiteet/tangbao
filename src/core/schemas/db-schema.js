@@ -131,24 +131,57 @@ CREATE TABLE IF NOT EXISTS kv_meta (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id            TEXT PRIMARY KEY,
+  workflow_id   TEXT,
+  workflow_name TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'running',
+  input_json    TEXT,
+  output_json   TEXT,
+  error         TEXT,
+  steps_json    TEXT,
+  started_at    INTEGER NOT NULL DEFAULT 0,
+  finished_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wfruns_wf ON workflow_runs(workflow_id, started_at DESC);
 `;
 
 const TABLES = [
   'conversations', 'messages', 'accounts', 'account_models', 'providers',
   'agents', 'templates', 'workflows', 'image_history', 'image_files',
-  'docs', 'projects', 'agent_threads', 'kv_meta',
+  'docs', 'projects', 'agent_threads', 'kv_meta', 'workflow_runs',
 ];
 
 // ===== Schema 版本化迁移（M6） =====
-// 当前版本 = 1。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
+// 当前版本 = 2。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
 // 新装库 user_version=0 → 顺序执行 MIGRATIONS[0..] 建全表；未来改结构时追加新迁移并把 SCHEMA_VERSION +1。
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 /** 迁移 0（v0→v1）：建全部表。CREATE TABLE IF NOT EXISTS 幂等，可安全作用于已存在的旧库。 */
 function migration_0(db) {
   db.exec(DDL);
 }
 
-const MIGRATIONS = [migration_0];
+/** 迁移 1（v1→v2）：新增 workflow_runs 表（v1.0.8 工作流运行历史）。 */
+function migration_1(db) {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id            TEXT PRIMARY KEY,
+  workflow_id   TEXT,
+  workflow_name TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'running',
+  input_json    TEXT,
+  output_json   TEXT,
+  error         TEXT,
+  steps_json    TEXT,
+  started_at    INTEGER NOT NULL DEFAULT 0,
+  finished_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wfruns_wf ON workflow_runs(workflow_id, started_at DESC);
+`);
+}
+
+const MIGRATIONS = [migration_0, migration_1];
 
 module.exports = { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS };

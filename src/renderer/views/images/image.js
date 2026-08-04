@@ -35,7 +35,12 @@
     rawPrompt: '',
     sel: { style: 'default', size: '1024x1024', n: '1' },
     pending: false,
+    // M7：生成任务队列（串行消费，并发 1）
+    queue: [],        // 排队中的任务 id（只含 queued 状态）
+    tasks: {},        // id -> task { id, status, prompt, finalPrompt, style, size, n, refImg, error, _ctrl }
+    currentId: null,  // 正在执行的任务 id
     lbImages: [], lbPrompt: '', lbIdx: 0,
+    compareList: [],  // M7：图片对比队列（收集 2 张自动弹出对比）
     refImage: null,   // 参考图片 base64 data URL（用于图片编辑）
 
     onShow() {
@@ -61,50 +66,81 @@
           <h2>糖绘</h2>
           <p>输入描述，糖包帮你生成图片</p>
         </div>
-        <div class="image-panel" id="imgPanel">
-          <div class="image-input-wrap">
-            <textarea id="imgPrompt" rows="3" placeholder="描述你想要的画面，例如：一只宇航员猫在月球上弹吉他"></textarea>
-            <div class="img-ref-area" id="imgRefArea">
-              <div class="img-ref-chip" id="imgRefChip" style="display:none">
-                <img id="imgRefThumb" src="" alt="参考图">
-                <span id="imgRefName"></span>
-                <button type="button" id="imgRefRemove" title="移除参考图">×</button>
+        <div class="image-shell" id="imgPanel">
+          <div class="img-sec">
+            <div class="image-input-wrap">
+              <textarea id="imgPrompt" rows="3" placeholder="描述你想要的画面，例如：一只宇航员猫在月球上弹吉他"></textarea>
+              <div class="img-ref-area" id="imgRefArea">
+                <div class="img-ref-chip" id="imgRefChip" style="display:none">
+                  <img id="imgRefThumb" src="" alt="参考图">
+                  <span id="imgRefName"></span>
+                  <button type="button" id="imgRefRemove" title="移除参考图">×</button>
+                </div>
+                <button type="button" class="btn-ghost mini" id="imgRefBtn">📷 上传参考图</button>
+                <input type="file" id="imgRefInput" accept="image/*" hidden />
               </div>
-              <button type="button" class="btn-ghost mini" id="imgRefBtn">📷 上传参考图</button>
-              <input type="file" id="imgRefInput" accept="image/*" hidden />
-            </div>
-            <div class="img-examples" id="imgExamples">
-              ${EXAMPLES.map(ex => `<button type="button" class="example-chip" data-ex="${App.escapeHtml(ex)}">${App.escapeHtml(ex)}</button>`).join('')}
+              <div class="img-examples" id="imgExamples">
+                ${EXAMPLES.map(ex => `<button type="button" class="example-chip" data-ex="${App.escapeHtml(ex)}">${App.escapeHtml(ex)}</button>`).join('')}
+              </div>
+              <div class="img-presets" id="imgPresets">
+                <span class="opt-label">预设</span>
+                ${(App.state.settings.imagePresets || []).map((pr, i) =>
+                  `<span class="preset-chip" data-preset="${i}">${App.escapeHtml(pr.name)}<button type="button" class="preset-chip-x" data-preset-x="${i}" title="删除预设">×</button></span>`).join('')}
+                <button type="button" class="btn-ghost mini" id="imgPresetSave" title="把当前提示词保存为预设">＋存为预设</button>
+              </div>
             </div>
           </div>
-          <div class="image-options" id="imgOptions">
-            <div class="opt-group">
-              <span class="opt-label">风格</span>
-              <div class="chip-row" data-group="style">
-                ${Object.entries(STYLES).map(([k, v]) => `<button type="button" class="chip" data-group="style" data-val="${k}">${v.label}</button>`).join('')}
+          <div class="img-sec">
+            <div class="image-options" id="imgOptions">
+              <div class="opt-group">
+                <span class="opt-label">风格</span>
+                <div class="chip-row" data-group="style">
+                  ${Object.entries(STYLES).map(([k, v]) => `<button type="button" class="chip" data-group="style" data-val="${k}">${v.label}</button>`).join('')}
+                </div>
               </div>
-            </div>
-            <div class="opt-group">
-              <span class="opt-label">尺寸</span>
-              <div class="chip-row" data-group="size">
-                ${SIZES.map(s => `<button type="button" class="chip" data-group="size" data-val="${s.value}"><span class="size-ico ${s.ratio}"></span>${s.label}</button>`).join('')}
+              <div class="opt-group">
+                <span class="opt-label">尺寸</span>
+                <div class="chip-row" data-group="size">
+                  ${SIZES.map(s => `<button type="button" class="chip" data-group="size" data-val="${s.value}"><span class="size-ico ${s.ratio}"></span>${s.label}</button>`).join('')}
+                </div>
               </div>
-            </div>
-            <div class="opt-group">
-              <span class="opt-label">数量</span>
-              <div class="chip-row" data-group="n">
-                ${['1', '2', '3', '4'].map(v => `<button type="button" class="chip" data-group="n" data-val="${v}">${v}</button>`).join('')}
+              <div class="opt-group">
+                <span class="opt-label">数量</span>
+                <div class="chip-row" data-group="n">
+                  ${['1', '2', '3', '4'].map(v => `<button type="button" class="chip" data-group="n" data-val="${v}">${v}</button>`).join('')}
+                </div>
               </div>
-            </div>
-            <div class="opt-group">
-              <span class="opt-label">模型</span>
-              <select class="img-model-pick" id="imgModel">${modelOpts}</select>
+              <div class="opt-group">
+                <span class="opt-label">模型</span>
+                <select class="img-model-pick" id="imgModel">${modelOpts}</select>
+              </div>
+              <details class="adv-params">
+                <summary>高级参数</summary>
+                <div class="adv-grid">
+                  <label class="adv-field"><span class="adv-label">Seed</span><input type="number" id="advSeed" placeholder="随机" /></label>
+                  <label class="adv-field"><span class="adv-label">Guidance</span><input type="number" id="advGuidance" step="0.5" placeholder="自动" /></label>
+                  <label class="adv-field adv-field-full"><span class="adv-label">负面提示词</span><textarea id="advNegative" rows="2" placeholder="不希望出现的内容（部分供应商支持）"></textarea></label>
+                  <label class="adv-field"><span class="adv-label">输出格式</span>
+                    <select id="advFmt">
+                      <option value="">默认</option><option value="b64_json">b64_json</option><option value="url">url</option>
+                      <option value="png">png</option><option value="jpeg">jpeg</option><option value="webp">webp</option>
+                    </select>
+                  </label>
+                  <label class="adv-field"><span class="adv-label">质量</span>
+                    <select id="advQuality">
+                      <option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
+                    </select>
+                  </label>
+                  <label class="adv-field adv-field-full"><span class="adv-label">模型专属参数 (JSON)</span><textarea id="advExtra" rows="2" placeholder='{"style":"vivid"}'></textarea></label>
+                </div>
+                <p class="adv-hint" id="advRefHint" style="display:none">参考图编辑走视觉模型，Seed / 质量等高级参数不生效</p>
+              </details>
             </div>
           </div>
           <button class="gen-btn" id="imgGenBtn">✨ 生成图片</button>
           <div class="image-status" id="imgStatus"></div>
-          <div class="image-grid" id="imgGrid"></div>
-          <div class="history-section" id="imgHistory"></div>
+          <div class="img-sec"><div class="image-grid" id="imgGrid"></div></div>
+          <div class="img-sec"><div class="history-section" id="imgHistory"></div></div>
         </div>`;
 
       App.image.syncChips();
@@ -144,11 +180,16 @@
           if (refThumb) refThumb.src = dataUrl;
           if (refName) refName.textContent = name || '参考图';
           if (genBtn) genBtn.textContent = '🎨 编辑图片';
+          // M12：参考图模式提示高级参数不生效
+          const hint = $('advRefHint');
+          if (hint) hint.style.display = 'block';
         };
         const hideRef = () => {
           App.image.refImage = null;
           if (refChip) refChip.style.display = 'none';
           if (genBtn) genBtn.textContent = '✨ 生成图片';
+          const hint = $('advRefHint');
+          if (hint) hint.style.display = 'none';
         };
 
         const processRefImage = async (file) => {
@@ -211,6 +252,43 @@
         if (ta) { ta.value = c.dataset.ex; ta.focus(); }
       });
 
+      // M7：提示词预设（点击填入 / 删除 / 存为预设）
+      const presets = $('imgPresets');
+      if (presets) {
+        presets.addEventListener('click', (e) => {
+          const x = e.target.closest('.preset-chip-x');
+          if (x) {
+            const idx = +x.dataset.presetX;
+            const list = App.state.settings.imagePresets || [];
+            if (idx >= 0 && idx < list.length) list.splice(idx, 1);
+            App.persist();
+            App.image.render();
+            return;
+          }
+          const chip = e.target.closest('.preset-chip');
+          if (chip) {
+            const idx = +chip.dataset.preset;
+            const pr = (App.state.settings.imagePresets || [])[idx];
+            const ta = $('imgPrompt');
+            if (pr && ta) { ta.value = pr.prompt; ta.focus(); }
+          }
+        });
+        const ps = $('imgPresetSave');
+        if (ps) ps.addEventListener('click', () => {
+          const ta = $('imgPrompt');
+          const text = ta ? ta.value.trim() : '';
+          if (!text) { App.ui.toast('请先输入要保存的提示词'); return; }
+          const name = window.prompt('预设名称：', text.slice(0, 20));
+          if (!name || !name.trim()) return;
+          const list = App.state.settings.imagePresets || (App.state.settings.imagePresets = []);
+          if (list.some(p => p.name === name.trim())) { App.ui.toast('已存在同名预设'); return; }
+          list.push({ name: name.trim(), prompt: text });
+          App.persist();
+          App.image.render();
+          App.ui.toast('已保存预设：' + name.trim());
+        });
+      }
+
       // 内联图像模型选择：直接写 providers.image.model
       const msel = $('imgModel');
       if (msel) msel.addEventListener('change', () => {
@@ -257,38 +335,127 @@
       if (refImg) finalPrompt = '请根据以下描述编辑这张图片：' + finalPrompt;
       const size = App.image.sel.size;
       const n = Number(App.image.sel.n) || 1;
+      // M12：高级参数（折叠区）——收集 + JSON 预校验
+      const adv = App.image.collectAdv();
+      // M7：提交任务入队（串行执行；排队/失败可取消、重试）
+      App.image.enqueue({ prompt, finalPrompt, style: styleKey, size, n, refImg, adv });
+    },
 
-      App.image.pending = true;
+    // M12：读取高级参数区（Seed/Guidance/负面词/输出格式/质量/模型专属 JSON）；JSON 非法则 toast 并忽略该项
+    collectAdv() {
+      const adv = {};
+      const g = (id) => document.getElementById(id);
+      const seed = g('advSeed');
+      if (seed && seed.value.trim() !== '') { const v = Number(seed.value); if (!isNaN(v)) adv.seed = v; }
+      const gui = g('advGuidance');
+      if (gui && gui.value.trim() !== '') { const v = Number(gui.value); if (!isNaN(v)) adv.guidance = v; }
+      const neg = g('advNegative');
+      if (neg && neg.value.trim()) adv.negative = neg.value.trim();
+      const fmt = g('advFmt');
+      if (fmt && fmt.value) adv.format = fmt.value;
+      const q = g('advQuality');
+      if (q && q.value) adv.quality = q.value;
+      const ex = g('advExtra');
+      if (ex && ex.value.trim()) {
+        try { adv.extra = JSON.parse(ex.value.trim()); }
+        catch (e) { App.ui.toast('模型专属参数 JSON 无效，已忽略该参数'); adv.extra = null; }
+      }
+      return adv;
+    },
+
+    // M12：按供应商判定映射规则（OpenAI 兼容 / 火山 / 通义 / Stable Diffusion 系）
+    detectImageSupplier(p) {
+      const base = ((p && p.apiBase) || '').toLowerCase();
+      const model = ((p && p.model) || '').toLowerCase();
+      if (base.includes('ark') || base.includes('volcengine') || base.includes('volces') || model.includes('seedream') || model.includes('doubao')) return 'volc';
+      if (base.includes('dashscope') || base.includes('aliyun') || model.includes('wanx') || model.includes('qwen-image')) return 'qwen';
+      if (model.includes('flux') || model.includes('stable-diffusion') || model.includes('sdxl')) return 'sd';
+      return 'openai';
+    },
+
+    // M12：文生图 payload——高级参数尽力映射（OpenAI 系传 seed/quality/response_format；火山/SD 额外 cfg_scale/negative_prompt），模型专属 JSON 透传合并
+    buildImagePayload(task, p) {
+      const payload = { model: p.model, prompt: task.finalPrompt, n: task.n, size: task.size, response_format: 'b64_json' };
+      const adv = task.adv || {};
+      const sup = App.image.detectImageSupplier(p);
+      if (adv.seed != null) payload.seed = adv.seed;
+      if (adv.format && ['b64_json', 'url', 'png', 'jpeg', 'webp'].includes(adv.format)) payload.response_format = adv.format;
+      if (adv.quality && ['low', 'medium', 'high'].includes(adv.quality) && sup === 'openai') payload.quality = adv.quality;
+      if (sup === 'volc' || sup === 'sd') {
+        if (adv.guidance != null) payload.cfg_scale = adv.guidance;
+        if (adv.negative) payload.negative_prompt = adv.negative;
+      }
+      if (adv.extra && typeof adv.extra === 'object') Object.assign(payload, adv.extra);
+      return payload;
+    },
+
+    // M7：入队一个生成任务
+    enqueue(params) {
+      const id = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const task = Object.assign({ id, status: 'queued', error: null }, params);
+      App.image.tasks[id] = task;
+      App.image.queue.push(id);
+      App.image.renderQueue();
+      App.image.pump();
+      return id;
+    },
+
+    // M7：串行消费队列（并发 1）
+    pump() {
+      if (App.image.running) return;
+      // 清理已取消/失效任务
+      App.image.queue = App.image.queue.filter(id => App.image.tasks[id] && App.image.tasks[id].status === 'queued');
+      if (!App.image.queue.length) {
+        App.image.running = false;
+        App.image.renderQueue();
+        return;
+      }
+      const id = App.image.queue.shift();
+      const task = App.image.tasks[id];
+      if (!task || task.status !== 'queued') { App.image.pump(); return; }
+      App.image.running = true;
+      App.image.currentId = id;
+      App.image.runTask(task).then(() => {
+        App.image.running = false;
+        App.image.pump();
+      });
+    },
+
+    // M7：执行单个任务（原 generate 的请求/解析主体，带 AbortController 可取消）
+    async runTask(task) {
+      task.status = 'running';
+      task.startedAt = Date.now();
+      App.image.renderQueue();
+      const p = App.getProvider('image');
+      const status = $('imgStatus');
       const btn = $('imgGenBtn');
       if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
-      if (status) status.textContent = '正在生成…';
-      App.image.renderSkeleton(n);
-
+      App.image.renderSkeleton(task.n);
+      const ctrl = new AbortController();
+      task._ctrl = ctrl;
       try {
         let res, data;
-        if (refImg) {
-          // 图片编辑：用 chat completions vision 格式
-          const content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: refImg } }];
-          res = await App.rt.gatewayFetch({
-            ref: p.ref, kind: 'chat',
-            payload: { model: p.model, messages: [{ role: 'user', content }], stream: false },
-          });
+        if (task.refImg) {
+          // 图片编辑：用 chat completions vision 格式；高级参数忽略（视觉模型），仅模型专属 JSON 透传
+          const content = [{ type: 'text', text: task.finalPrompt }, { type: 'image_url', image_url: { url: task.refImg } }];
+          const chatPayload = { model: p.model, messages: [{ role: 'user', content }], stream: false };
+          if (task.adv && task.adv.extra && typeof task.adv.extra === 'object') Object.assign(chatPayload, task.adv.extra);
+          res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', payload: chatPayload, signal: ctrl.signal });
         } else {
-          // 文生图：标准 images/generations
+          // 文生图：标准 images/generations（M12：高级参数映射）
           res = await App.rt.gatewayFetch({
             ref: p.ref, kind: 'images',
-            payload: { model: p.model, prompt: finalPrompt, n, size, response_format: 'b64_json' },
+            payload: App.image.buildImagePayload(task, p),
+            signal: ctrl.signal,
           });
         }
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
-          if (status) status.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
-          App.image.renderGrid(App.image.results, App.image.lastPrompt);
-          return;
+          throw new Error('请求失败（' + res.status + '）：' + String(txt).slice(0, 200));
         }
         data = await res.json();
         let arr;
-        if (refImg) {
+        if (task.refImg) {
           // chat completions 返回：尝试从 choices[0].message.content 提取 base64
           const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
           const text = msg.content || '';
@@ -298,23 +465,50 @@
         } else {
           arr = (data.data || []).map(it => it.b64_json || '').filter(Boolean);
         }
-        if (!arr.length) {
-          if (status) status.textContent = '未返回图片。';
-          App.image.renderGrid(App.image.results, App.image.lastPrompt);
-          return;
-        }
+        if (!arr.length) throw new Error('未返回图片。');
         App.image.results = arr;
-        App.image.rawPrompt = prompt;
-        App.image.lastPrompt = finalPrompt;
-        App.image.renderGrid(arr, finalPrompt);
-        App.image.pushHistory({ prompt, style: styleKey, size, n, images: arr });
+        App.image.rawPrompt = task.prompt;
+        App.image.lastPrompt = task.finalPrompt;
+        App.image.renderGrid(arr, task.finalPrompt);
+        App.image.pushHistory({ prompt: task.prompt, style: task.style, size: task.size, n: task.n, images: arr, adv: task.adv || null });
+        task.status = 'done';
         if (status) status.textContent = `已生成 ${arr.length} 张图片`;
       } catch (err) {
-        if (status) status.innerHTML = `<span class="error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</span>`;
+        if (err && err.name === 'AbortError') task.status = 'canceled';
+        else { task.status = 'error'; task.error = String((err && err.message) || err); }
         App.image.renderGrid(App.image.results, App.image.lastPrompt);
       } finally {
-        App.image.pending = false;
-        if (btn) { btn.disabled = false; btn.textContent = refImg ? '🎨 编辑图片' : '✨ 生成图片'; }
+        task._ctrl = null;
+        if (btn) { btn.disabled = false; btn.textContent = task.refImg ? '🎨 编辑图片' : '✨ 生成图片'; }
+        // 最终状态文本（错误带重试按钮；已取消带提示）——由 runTask 直接写，不被队列收尾清空
+        const st = $('imgStatus');
+        if (task.status === 'error' && st) {
+          st.innerHTML = `<span class="error">失败：${App.escapeHtml(String(task.error || '未知错误').slice(0, 120))}</span> <button class="mini" id="imgRetryBtn">重试</button>`;
+          const rb = $('imgRetryBtn');
+          if (rb) rb.addEventListener('click', () => {
+            App.image.enqueue({ prompt: task.prompt, finalPrompt: task.finalPrompt, style: task.style, size: task.size, n: task.n, refImg: task.refImg, adv: task.adv });
+          });
+        } else if (task.status === 'canceled' && st) {
+          st.innerHTML = '<span class="warn">已取消</span>';
+        }
+        App.image.currentId = null;
+      }
+    },
+
+    // M7：渲染状态区（仅进行中/排队提示；最终结果文本由 runTask 写入）
+    renderQueue() {
+      const status = $('imgStatus');
+      if (!status) return;
+      const queued = App.image.queue.length;
+      const cur = App.image.currentId ? App.image.tasks[App.image.currentId] : null;
+      if (cur && cur.status === 'running') {
+        status.innerHTML = `正在生成…${queued ? '（队列剩余 ' + queued + '）' : ''} <button class="mini" id="imgCancelBtn">取消</button>`;
+        const cb = $('imgCancelBtn');
+        if (cb) cb.addEventListener('click', () => { if (cur._ctrl) cur._ctrl.abort(); });
+        return;
+      }
+      if (queued) {
+        status.innerHTML = `排队中（第 ${queued} 位）…`;
       }
     },
 
@@ -364,13 +558,18 @@
       if (!box) return;
       const hist = App.state.settings.imageHistory || [];
       if (!hist.length) { box.innerHTML = ''; return; }
+      // M7：对比队列状态徽标
+      const cmpN = App.image.compareList.length;
       box.innerHTML = `
-        <div class="history-head">历史记录<span class="history-count">最近 ${hist.length} 次</span></div>
+        <div class="history-head">历史记录<span class="history-count">最近 ${hist.length} 次</span>
+          ${cmpN ? `<button type="button" class="mini" id="imgCmpClear">清空对比（${cmpN}/2）</button>` : ''}
+        </div>
         ${hist.map((e, ei) => `
           <div class="history-item">
             <div class="history-meta">
               <div class="history-prompt">${App.escapeHtml(e.prompt)}</div>
               <div class="history-sub">${SIZE_LABEL[e.size] || e.size} · ${e.n} 张 · ${timeAgo(e.createdAt)}</div>
+              <button type="button" class="btn-ghost mini" data-cmp="${ei}" title="加入对比（选 2 张对比）">对比</button>
             </div>
             <div class="history-thumbs">
               ${e.images.slice(0, 4).map((b, j) => `<button type="button" class="history-thumb" data-ei="${ei}" data-j="${j}"><img src="data:image/png;base64,${b}" alt=""></button>`).join('')}
@@ -380,6 +579,46 @@
         const e = hist[+t.dataset.ei];
         if (e) App.image.openLightbox(e.images, +t.dataset.j, e.prompt + (STYLES[e.style] ? STYLES[e.style].suffix : ''));
       }));
+      // M7：对比——收集 2 张后自动弹出对比视图
+      box.querySelectorAll('[data-cmp]').forEach(b => b.addEventListener('click', () => {
+        const e = hist[+b.dataset.cmp];
+        if (!e || !e.images || !e.images.length) return;
+        App.image.compareList.push({ b64: e.images[0], prompt: e.prompt + (STYLES[e.style] ? STYLES[e.style].suffix : '') });
+        App.image.renderHistory();
+        if (App.image.compareList.length >= 2) App.image.openCompare();
+      }));
+      const cc = $('imgCmpClear');
+      if (cc) cc.addEventListener('click', () => { App.image.compareList = []; App.image.renderHistory(); });
+    },
+
+    // M7：图片对比视图（两张并排 + 各自提示词）
+    openCompare() {
+      const list = App.image.compareList.slice(0, 2);
+      if (list.length < 2) return;
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.id = 'imgCmpMask';
+      mask.innerHTML = `
+        <div class="modal agent-modal img-cmp" role="dialog" aria-modal="true">
+          <div class="modal-header">
+            <span>图片对比</span>
+            <button class="icon-btn" id="cmpClose" aria-label="关闭">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="modal-body cmp-body">
+            ${list.map((it, i) => `<div class="cmp-col">
+              <div class="cmp-img"><img src="data:image/png;base64,${it.b64}" alt="图 ${i + 1}"></div>
+              <div class="cmp-prompt">${App.escapeHtml(it.prompt)}</div>
+            </div>`).join('')}
+          </div>
+          <div class="modal-footer"><button class="btn-ghost" id="cmpOk">关闭</button></div>
+        </div>`;
+      $('imageView').appendChild(mask);
+      const close = () => { mask.remove(); App.image.compareList = []; App.image.renderHistory(); };
+      mask.querySelector('#cmpClose').addEventListener('click', close);
+      mask.querySelector('#cmpOk').addEventListener('click', close);
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
     },
 
     openLightbox(images, idx, prompt) {

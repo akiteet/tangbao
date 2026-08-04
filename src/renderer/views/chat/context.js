@@ -191,7 +191,13 @@
     }
     const k = (tokens / 1000).toFixed(1);
     const tk = (threshold / 1000).toFixed(0);
-    if (label) label.textContent = pct + '%（' + k + 'k / ' + tk + 'k）';
+    // M12：compact 模式（顶栏减负后的小角标）——只显示百分比，隐藏分段/提示
+    const compact = el.classList && el.classList.contains('compact');
+    if (label) label.textContent = compact ? (pct + '%') : (pct + '%（' + k + 'k / ' + tk + 'k）');
+    if (compact) {
+      if (wrap.classList) wrap.classList.remove('segmented');
+      if (wrap.querySelectorAll) { wrap.querySelectorAll('.seg').forEach(s => s.remove()); }
+    }
     // 清除 legend/tip（如仍存在于 DOM 中）
     const legend = el.querySelector('.ctx-bar-legend');
     if (legend) legend.innerHTML = '';

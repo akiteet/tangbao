@@ -155,6 +155,15 @@ function prepare() {
   stmt.allImgFiles = db.prepare('SELECT data FROM image_files');
   stmt.listDocsAll = db.prepare('SELECT * FROM docs ORDER BY created_at DESC');
   stmt.listThreadsAll = db.prepare('SELECT * FROM agent_threads ORDER BY updated_at DESC');
+
+  // ---- M7（v1.0.8）：工作流运行历史（独立表，不随 App.state 写穿） ----
+  stmt.insWfRun = db.prepare(
+    `INSERT INTO workflow_runs (id,workflow_id,workflow_name,status,input_json,output_json,error,steps_json,started_at,finished_at)
+     VALUES (@id,@workflow_id,@workflow_name,@status,@input_json,@output_json,@error,@steps_json,@started_at,@finished_at)
+     ON CONFLICT(id) DO UPDATE SET workflow_id=@workflow_id, workflow_name=@workflow_name, status=@status,
+       input_json=@input_json, output_json=@output_json, error=@error, steps_json=@steps_json,
+       started_at=@started_at, finished_at=@finished_at`);
+  stmt.listWfRuns = db.prepare('SELECT * FROM workflow_runs WHERE workflow_id=? ORDER BY started_at DESC LIMIT ?');
 }
 
 /* ----------------------------- 实现层（StorageService 使用） ----------------------------- */
@@ -359,6 +368,39 @@ function clearAll() {
   run();
 }
 
+// ---- M7（v1.0.8）：工作流运行历史 ----
+function saveWorkflowRun(run) {
+  const r = run || {};
+  stmt.insWfRun.run({
+    id: r.id || ('wr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
+    workflow_id: r.workflowId || null,
+    workflow_name: String(r.workflowName || ''),
+    status: String(r.status || 'running'),
+    input_json: r.inputJson != null ? JSON.stringify(r.inputJson) : null,
+    output_json: r.outputJson != null ? JSON.stringify(r.outputJson) : null,
+    error: r.error != null ? String(r.error) : null,
+    steps_json: r.steps ? JSON.stringify(r.steps) : null,
+    started_at: Number(r.startedAt) || 0,
+    finished_at: Number(r.finishedAt) || 0,
+  });
+  return true;
+}
+
+function listWorkflowRuns(workflowId, limit) {
+  try {
+    const rows = stmt.listWfRuns.all(workflowId || '', Math.min(Number(limit) || 20, 100));
+    return rows.map((row) => {
+      const parse = (s) => { try { return s ? JSON.parse(s) : null; } catch (_) { return null; } };
+      return {
+        id: row.id, workflowId: row.workflow_id, workflowName: row.workflow_name,
+        status: row.status, inputJson: parse(row.input_json), outputJson: parse(row.output_json),
+        error: row.error, steps: parse(row.steps_json),
+        startedAt: row.started_at, finishedAt: row.finished_at,
+      };
+    });
+  } catch (_) { return []; }
+}
+
 function transaction(fn) { return db.transaction(fn); }
 
 const StorageService = {
@@ -376,6 +418,7 @@ const StorageService = {
   upsertThread,
   getAccountModels, listImageHistory, listImageFiles, listDocs, listThreads,
   getImageFileNames, getDocIds, checkIntegrity,
+  saveWorkflowRun, listWorkflowRuns,
   getKV, setKV, getAllKV, setKVMulti,
   clearAll, transaction,
 };

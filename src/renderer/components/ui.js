@@ -23,7 +23,23 @@
     renderSidebar() {
       const list = $('historyList');
       const q = ($('searchInput').value || '').trim().toLowerCase();
-      const convs = App.state.conversations.filter(c => !q || (c.title || '').toLowerCase().includes(q));
+      // M7：全文搜索——q 非空时匹配标题 + 消息内容（含深度思考文本），命中对话显示命中条数徽标
+      let convs = App.state.conversations;
+      const hitsMap = {};
+      if (q) {
+        convs = [];
+        for (const c of App.state.conversations) {
+          const titleHit = (c.title || '').toLowerCase().includes(q);
+          let hits = 0;
+          if (!titleHit) {
+            for (const m of (c.messages || [])) {
+              const hay = (((m.content || '') + ' ' + (m.think || '')) || '').toLowerCase();
+              if (hay.includes(q)) hits++;
+            }
+          }
+          if (titleHit || hits) { convs.push(c); if (hits) hitsMap[c.id] = hits; }
+        }
+      }
       if (!convs.length) {
         list.innerHTML = `<div class="history-empty">${q ? '没有匹配的对话' : '暂无对话记录'}</div>`;
         return;
@@ -40,8 +56,10 @@
         html += `<div class="history-group"><div class="history-group-label">${k}</div>`;
         for (const c of groups[k]) {
           const active = c.id === App.state.activeId ? ' active' : '';
+          const hitBadge = hitsMap[c.id] ? `<span class="history-hit">${hitsMap[c.id]} 条命中</span>` : '';
           html += `<div class="history-item${active}" data-id="${c.id}">
             <span class="history-title">${App.escapeHtml(c.title || '新对话')}</span>
+            ${hitBadge}
             <button class="history-del" data-del="${c.id}" title="删除">🗑</button>
           </div>`;
         }
@@ -181,9 +199,13 @@
         const r = parseInt(ap.radius, 10);
         root.style.setProperty('--radius', r + 'px');
         root.style.setProperty('--radius-sm', Math.max(6, r - 4) + 'px');
+        root.style.setProperty('--radius-lg', (r + 4) + 'px');      // M12：大卡片/气泡圆角随滑杆
+        root.style.setProperty('--radius-pill', '999px');           // M12：胶囊圆角恒定
       } else {
         root.style.setProperty('--radius', '');
         root.style.setProperty('--radius-sm', '');
+        root.style.setProperty('--radius-lg', '');
+        root.style.setProperty('--radius-pill', '');
       }
       // 同步系统标题栏叠加层颜色（隐藏标题栏时，右上角最小/最大/关闭按钮的底色）
       try {
@@ -536,7 +558,8 @@
       }
       list.innerHTML = s.accounts.map(a => {
         const isDef = a.id === s.defaultAccountId;
-        return `<div class="account-row" data-id="${a.id}">
+        return `<div class="account-row" draggable="true" data-id="${a.id}">
+          <span class="drag-handle" title="拖拽排序">⠿</span>
           <div class="account-meta">
             <div class="account-name">${App.escapeHtml(a.name)}${isDef ? ' <span class="tag-default">默认</span>' : ''}</div>
             <div class="account-sub">${App.escapeHtml(a.apiBase || '')} · ${App.escapeHtml(((a.models && a.models.length) ? a.models.map(x => (typeof x === 'string') ? x : (x && x.name ? x.name : '')).filter(Boolean) : (a.model ? [a.model] : [])).join('、') || '无模型')}</div>
@@ -548,12 +571,24 @@
           </div>
         </div>`;
       }).join('');
+      // M8：自由拖拽排序 → dragend 按 DOM 顺序重建 accounts
+      App.ui.bindModuleDrag(list, () => {
+        const ids = Array.from(list.querySelectorAll('.account-row')).map(r => r.dataset.id);
+        const accMap = {};
+        s.accounts.forEach(a => { accMap[a.id] = a; });
+        s.accounts = ids.map(id => accMap[id]).filter(Boolean);
+        App.persist();
+        App.ui.renderAccounts();
+      }, '.account-row');
     },
 
-    // 生成一行模型输入（模型名 + 上下文窗口 + 思考类型 + 能力预设 + 删除按钮）
+    // 生成一行模型输入（拖拽手柄 + 模型名 + 上下文窗口 + 思考类型 + 能力预设 + 删除按钮）
     makeModelRow(v) {
       const row = document.createElement('div');
       row.className = 'model-row';
+      row.draggable = true;
+      const handle = document.createElement('span');
+      handle.className = 'drag-handle'; handle.textContent = '⠿'; handle.title = '拖拽排序';
       const name = (v && typeof v === 'object') ? v.name : (v || '');
       const cw = (v && typeof v === 'object' && v.contextWindow) ? v.contextWindow : '';
       const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
@@ -582,7 +617,7 @@
       capsSel.value = caps;
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'model-row-del'; btn.dataset.rm = '1'; btn.textContent = '×'; btn.title = '删除该模型';
-      row.appendChild(input); row.appendChild(cwInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
+      row.appendChild(handle); row.appendChild(input); row.appendChild(cwInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
       return row;
     },
 
@@ -592,12 +627,18 @@
       box.innerHTML = '';
       const rows = (models && models.length) ? models : [''];
       rows.forEach(v => box.appendChild(App.ui.makeModelRow(v)));
+      // M8：模型行自由拖拽（saveAccount 按 DOM 顺序收集，顺序即保存顺序）
+      App.ui.bindModuleDrag(box, null, '.model-row');
     },
 
+    // M8：账户编辑改为 modal 弹窗（点击「添加账户/编辑」才弹出；已保存账户列表保持原位）
     openAccountForm(id) {
+      const modal = $('accountModal');
       const form = $('accountForm');
-      if (!form) return;
+      if (!modal || !form) return;
       form.dataset.edit = id || '';
+      const title = $('accountModalTitle');
+      if (title) title.textContent = id ? '编辑账户' : '添加账户';
       if (id) {
         const a = App.state.settings.accounts.find(x => x.id === id);
         if (a) {
@@ -610,8 +651,15 @@
         App.ui.markKeyField($('accKey'), '__new__', '粘贴你的 API Key');
         App.ui.renderModelRows(['']);
       }
-      form.hidden = false;
+      modal.hidden = false;
       $('accName').focus();
+    },
+
+    closeAccountForm() {
+      const modal = $('accountModal');
+      if (modal) modal.hidden = true;
+      const form = $('accountForm');
+      if (form) form.dataset.edit = '';
     },
 
     async saveAccount() {
@@ -658,18 +706,8 @@
       App.persist();
       App.ui.refreshSettingsUI();
       App.ui.syncModelSelect();
-      if (id) {
-        $('accountForm').hidden = true;
-        $('accountForm').dataset.edit = '';
-        App.ui.toast('账户已保存');
-      } else {
-        // 新增：保持表单打开并清空，便于连续添加多个账户
-        $('accName').value = ''; $('accBase').value = '';
-        App.ui.markKeyField($('accKey'), '__new__', '粘贴你的 API Key');
-        App.ui.renderModelRows(['']);
-        $('accName').focus();
-        App.ui.toast('已添加，可继续添加，或点“取消”收起');
-      }
+      App.ui.closeAccountForm();
+      App.ui.toast(id ? '账户已保存' : '已添加账户');
     },
 
     deleteAccount(id) {
@@ -862,13 +900,14 @@
       }
     },
 
-    // 拖拽排序通用绑定（仿 create.js bindWfDrag）
-    bindModuleDrag(box, onReorder) {
+    // 拖拽排序通用绑定（仿 create.js bindWfDrag；rowSel 指定可拖行，默认 .mod-row）
+    bindModuleDrag(box, onReorder, rowSel) {
       if (!box || box._dragBound) return;
       box._dragBound = true;
+      const sel = rowSel || '.mod-row';
       let dragEl = null;
       const getAfter = (y) => {
-        const items = Array.from(box.querySelectorAll('.mod-row:not(.dragging)'));
+        const items = Array.from(box.querySelectorAll(sel + ':not(.dragging)'));
         let closest = null, closestOff = -Infinity;
         for (const el of items) {
           const r = el.getBoundingClientRect();
@@ -878,7 +917,7 @@
         return closest;
       };
       box.addEventListener('dragstart', (e) => {
-        const item = e.target.closest('.mod-row'); if (!item) return;
+        const item = e.target.closest(sel); if (!item) return;
         dragEl = item; item.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
         try { e.dataTransfer.setData('text/plain', ''); } catch (_) {}
@@ -1199,21 +1238,27 @@
         if (m !== 'default' && App.state.settings.providers[m]) App.state.settings.providers[m].model = '';
       });
 
-      // 账户管理
+      // 账户管理（M8：编辑表单改为 modal 弹窗；排序为自由拖拽见 renderAccounts/renderModelRows）
       $('accAdd').addEventListener('click', () => App.ui.openAccountForm());
       $('accSave').addEventListener('click', () => App.ui.saveAccount());
-      $('accCancel').addEventListener('click', () => { $('accountForm').hidden = true; $('accountForm').dataset.edit = ''; });
-      // 动态模型行：添加 / 删除
+      const accCancelBtn = $('accCancel');
+      if (accCancelBtn) accCancelBtn.addEventListener('click', () => App.ui.closeAccountForm());
+      const accModalClose = $('accountModalClose');
+      if (accModalClose) accModalClose.addEventListener('click', () => App.ui.closeAccountForm());
+      const accModal = $('accountModal');
+      if (accModal) accModal.addEventListener('click', (e) => { if (e.target === accModal) App.ui.closeAccountForm(); });
+      // 动态模型行：添加 / 删除（排序为拖拽，见 renderModelRows 的 bindModuleDrag）
       $('accModelAdd').addEventListener('click', () => { $('accModels').appendChild(App.ui.makeModelRow('')); });
       $('accModels').addEventListener('click', (e) => {
         const rm = e.target.closest('[data-rm]');
         if (rm) rm.closest('.model-row').remove();
       });
-      // 账户表单：Enter 保存，Esc 取消/收起（含动态模型行输入）
-      $('accountForm').addEventListener('keydown', (e) => {
+      // 账户表单：Enter 保存，Esc 取消（modal 内）
+      const accForm = $('accountForm');
+      if (accForm) accForm.addEventListener('keydown', (e) => {
         if (!e.target.closest('input')) return;
         if (e.key === 'Enter') { e.preventDefault(); App.ui.saveAccount(); }
-        else if (e.key === 'Escape') { $('accountForm').hidden = true; $('accountForm').dataset.edit = ''; }
+        else if (e.key === 'Escape') { App.ui.closeAccountForm(); }
       });
       $('accountList').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-act]');

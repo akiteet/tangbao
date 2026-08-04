@@ -5,10 +5,14 @@
   const MAX_DOC_CHARS = 200000;   // 单文件读取上限
   const DOC_STORE_CAP = 40000;    // 持久化时单文档截断长度
   const MAX_DOCS = 8;
-  const CHUNK_SIZE = 1800;
+  const CHUNK_TARGET = 1500;      // 结构化分块目标长度（原 1800 硬切 → 按标题/段落聚合）
   const TOP_K = 6;
   const PREVIEW_CAP = 20000;      // 预览显示上限
   const FULLTEXT_THRESHOLD = 9000;
+  const LOW_SCORE_THRESHOLD = 0.05; // BM25 top1 得分低于此值 → 低相关提示
+
+  // M7：文档分块缓存（外部 Map，避免 _chunks 字段污染 doc 对象被 persist 序列化）
+  const chunkCache = new Map(); // docId -> { key: text, chunks: [...] }
 
   const AnalysisPrompts = App.DEFAULT_PROMPTS.doc;
 
@@ -51,29 +55,56 @@
           <h2>糖读</h2>
           <p>上传文本 / PDF，向糖包提问；支持多文档、引用溯源与一键分析</p>
         </div>
-        <div class="doc-model-row">
-          <span class="opt-label">模型</span>
-          <select class="img-model-pick" id="docModel">${docModelOpts}</select>
-        </div>
-        <div class="doc-panel">
-          <div class="doc-toolbar">
-            <div class="dropzone compact" id="docDropzone">
-              <input type="file" id="docFile" accept=".txt,.md,.csv,.json,.jsonl,.log,.pdf,text/*" multiple>
-              <span class="dz-text-sm">＋ 上传文件（可多选，支持 PDF）</span>
+        <div class="doc-shell${App.state.settings.docSidebarCollapsed ? ' sidebar-collapsed' : ''}">
+          <div class="doc-model-row">
+            <span class="opt-label">模型</span>
+            <select class="img-model-pick" id="docModel">${docModelOpts}</select>
+            <span class="opt-label">提问范围</span>
+            <select class="img-model-pick" id="docScope">
+              <option value="current"${(App.state.settings.docScope || 'current') !== 'all' ? ' selected' : ''}>当前文档</option>
+              <option value="all"${App.state.settings.docScope === 'all' ? ' selected' : ''}>全部文档</option>
+            </select>
+          </div>
+          <div class="doc-main">
+            <div class="doc-sidebar">
+              <div class="doc-sidebar-head">
+                <span class="doc-sidebar-title">文档</span>
+                <button type="button" class="icon-btn" id="docSidebarToggle" title="收起/展开边栏">
+                  <svg class="ico-collapse" viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <svg class="ico-expand" viewBox="0 0 24 24" width="16" height="16" style="display:none"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+              <div class="doc-sec">
+                <div class="doc-toolbar">
+                  <div class="dropzone compact" id="docDropzone">
+                    <input type="file" id="docFile" accept=".txt,.md,.csv,.json,.jsonl,.log,.pdf,text/*" multiple>
+                    <span class="dz-text-sm">＋ 上传文件（可多选，支持 PDF）</span>
+                  </div>
+                  <button class="btn-ghost mini" id="docPasteBtn">粘贴文本</button>
+                </div>
+              </div>
+              <div class="doc-sec">
+                <div class="doc-list" id="docList">${docChips || '<span class="doc-list-empty">暂无文档</span>'}</div>
+              </div>
+              <div class="doc-sec">
+                <div class="doc-analysis-bar" id="docAnalysisBar" style="display:${App.doc.activeDoc() ? 'flex' : 'none'}">
+                  <button data-act="summary">摘要</button>
+                  <button data-act="points">要点</button>
+                  <button data-act="translate">翻译</button>
+                  <button data-act="outline">拆解</button>
+                </div>
+              </div>
+              <div class="doc-sec doc-sec-outline">
+                <div class="doc-outline" id="docOutline"></div>
+              </div>
             </div>
-            <button class="btn-ghost mini" id="docPasteBtn">粘贴文本</button>
-          </div>
-          <div class="doc-list" id="docList">${docChips || '<span class="doc-list-empty">暂无文档</span>'}</div>
-          <div class="doc-analysis-bar" id="docAnalysisBar" style="display:${App.doc.activeDoc() ? 'flex' : 'none'}">
-            <button data-act="summary">摘要</button>
-            <button data-act="points">要点</button>
-            <button data-act="translate">翻译</button>
-            <button data-act="outline">拆解</button>
-          </div>
-          <div class="doc-split">
-            <div class="doc-outline" id="docOutline"></div>
-            <div class="doc-stage">
-              <div class="doc-preview" id="docPreview" style="display:none"></div>
+            <div class="doc-chat">
+              <div class="doc-empty" id="docEmpty">
+                <div class="doc-empty-ico">📄</div>
+                <div class="doc-empty-text">上传文档开始糖读</div>
+                <div class="doc-empty-sub">支持 TXT / Markdown / PDF，上传后可提问、摘要、引用溯源</div>
+                <button class="btn-primary" id="docEmptyBtn">选择文件</button>
+              </div>
               <div class="doc-chat-area" id="docChatArea" style="display:none">
                 <div class="doc-messages" id="docMessages"></div>
                 <div class="doc-composer">
@@ -83,11 +114,20 @@
               </div>
             </div>
           </div>
+        </div>
+        <div class="doc-drawer" id="docDrawer">
+          <div class="doc-drawer-head">
+            <span class="doc-drawer-title" id="docDrawerTitle">文档预览</span>
+            <button type="button" class="icon-btn" id="docDrawerClose" aria-label="关闭预览">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="doc-preview" id="docPreview"></div>
         </div>`;
       App.doc.bind();
       App.doc.renderOutline();
       const d = App.doc.activeDoc();
-      if (d) App.doc.showDoc(d);
+      if (d) App.doc.showDoc(d); else App.doc.renderEmpty();
     },
 
     bind() {
@@ -109,6 +149,12 @@
         const prov = App.state.settings.providers.doc || (App.state.settings.providers.doc = { accountId: '__default__' });
         prov.model = val; App.persist();
         App.ui.toast('已切换文档模型：' + val);
+      });
+
+      const scopeSel = document.getElementById('docScope');
+      if (scopeSel) scopeSel.addEventListener('change', () => {
+        App.state.settings.docScope = scopeSel.value;
+        App.persist();
       });
 
       const paste = document.getElementById('docPasteBtn');
@@ -135,6 +181,57 @@
         docInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); App.doc.send(); } });
         docSend.addEventListener('click', () => App.doc.send());
       }
+
+      // M10：边栏折叠 / 空状态选文件 / 预览抽屉关闭
+      const toggle = document.getElementById('docSidebarToggle');
+      if (toggle) toggle.addEventListener('click', () => App.doc.toggleSidebar());
+      const emptyBtn = document.getElementById('docEmptyBtn');
+      if (emptyBtn) emptyBtn.addEventListener('click', () => {
+        const dz = document.getElementById('docDropzone');
+        const inp = document.getElementById('docFile');
+        if (inp) inp.click();
+      });
+      const drawerClose = document.getElementById('docDrawerClose');
+      if (drawerClose) drawerClose.addEventListener('click', () => App.doc.closeDrawer());
+    },
+
+    // M10：预览抽屉开合
+    openDrawer(name) {
+      const drawer = document.getElementById('docDrawer');
+      if (!drawer) return;
+      const title = document.getElementById('docDrawerTitle');
+      if (title) {
+        const d = App.doc.activeDoc();
+        title.textContent = name || (d && d.name) || '文档预览';
+      }
+      drawer.classList.add('open');
+    },
+
+    closeDrawer() {
+      const drawer = document.getElementById('docDrawer');
+      if (drawer) drawer.classList.remove('open');
+    },
+
+    // M10：边栏折叠（状态持久化）
+    toggleSidebar() {
+      const shell = document.querySelector('#docView .doc-shell');
+      if (!shell) return;
+      const collapsed = !shell.classList.contains('sidebar-collapsed');
+      shell.classList.toggle('sidebar-collapsed', collapsed);
+      App.state.settings.docSidebarCollapsed = !!collapsed;
+      App.persist();
+    },
+
+    // M10：空状态（无文档时主区引导卡）
+    renderEmpty() {
+      const empty = document.getElementById('docEmpty');
+      const chat = document.getElementById('docChatArea');
+      const bar = document.getElementById('docAnalysisBar');
+      if (empty) empty.style.display = 'flex';
+      if (chat) chat.style.display = 'none';
+      if (bar) bar.style.display = 'none';
+      App.doc.closeDrawer();
+      App.doc.renderOutline();
     },
 
     async readFile(file) {
@@ -239,6 +336,7 @@
       const list = App.doc.docs();
       const idx = list.findIndex(x => x.id === id);
       if (idx >= 0) list.splice(idx, 1);
+      chunkCache.delete(id);
       if (App.doc.activeId === id) App.doc.activeId = list[0] ? list[0].id : null;
       App.persist();
       App.doc.render();
@@ -247,15 +345,18 @@
     switchDoc(id) {
       App.doc.activeId = id;
       App.persist();
+      App.doc.openDrawer();
       App.doc.render();
     },
 
     showDoc(d) {
       document.getElementById('docAnalysisBar').style.display = 'flex';
+      // M10：预览移入右侧抽屉（#docPreview 在抽屉内），这里只更新内容，显示由抽屉控制
       const preview = document.getElementById('docPreview');
-      preview.style.display = 'block';
       App.doc.previewText = d.text.slice(0, PREVIEW_CAP);
-      preview.textContent = App.doc.previewText + (d.text.length > PREVIEW_CAP ? '\n…（预览已截断）' : '');
+      if (preview) preview.textContent = App.doc.previewText + (d.text.length > PREVIEW_CAP ? '\n…（预览已截断）' : '');
+      const empty = document.getElementById('docEmpty');
+      if (empty) empty.style.display = 'none';
       document.getElementById('docChatArea').style.display = 'flex';
       App.doc.renderOutline();
     },
@@ -270,7 +371,11 @@
         ? items.map((it, i) => `<div class="doc-outline-item" data-pos="${it.pos}" style="padding-left:${8 + it.level * 12}px">${App.escapeHtml(it.title)}</div>`).join('')
         : '<div class="doc-outline-empty">未识别到标题</div>');
       box.querySelectorAll('.doc-outline-item').forEach(el => {
-        el.addEventListener('click', () => App.doc.scrollToPos(Number(el.dataset.pos)));
+        // M10：点击大纲 → 打开预览抽屉并定位
+        el.addEventListener('click', () => {
+          App.doc.openDrawer();
+          App.doc.scrollToPos(Number(el.dataset.pos));
+        });
       });
     },
 
@@ -300,28 +405,119 @@
       preview.classList.add('flash');
       setTimeout(() => preview.classList.remove('flash'), 700);
     },
-
-    chunks(text) {
+    // M7：结构化分块——按标题/段落聚合，保留 { heading, content, start, end }
+    structuredChunks(text) {
+      if (!text) return [];
+      const lines = text.split('\n');
       const out = [];
-      for (let i = 0; i < text.length; i += CHUNK_SIZE) out.push(text.slice(i, i + CHUNK_SIZE));
+      let heading = '', content = '', start = 0, pos = 0;
+      const flush = (end) => {
+        if (content.trim()) out.push({ heading, content: content.trim(), start, end });
+        heading = ''; content = ''; start = pos;
+      };
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const isLast = i === lines.length - 1;
+        const lineLen = line.length + (isLast ? 0 : 1);
+        const t = line.trim();
+        let m = /^(#{1,4})\s+(.+)$/.exec(t);
+        if (!m) m = /^\s*(\d+(?:\.\d+)*)\.\s+(.+)$/.exec(t);
+        if (m && m[2].trim() && m[2].trim().length <= 80) {
+          flush(pos);           // 上一块在标题前结束
+          heading = m[2].trim();
+          start = pos;          // 新块起点指向标题行
+          pos += lineLen;
+          continue;
+        }
+        if (content && content.length + lineLen > CHUNK_TARGET) flush(pos);
+        content += line + '\n';
+        pos += lineLen;
+      }
+      flush(text.length);
+      if (!out.length && text) out.push({ heading: '', content: text, start: 0, end: text.length });
       return out;
     },
 
-    buildContext(question) {
-      const d = App.doc.activeDoc();
-      if (!d) return { context: '', refs: [] };
-      if (d.text.length <= FULLTEXT_THRESHOLD) {
-        return { context: d.text, refs: [], full: true };
+    // 带缓存的分块入口（Map 缓存，不污染 doc 对象）
+    chunksOf(d) {
+      if (!d || !d.id) return [];
+      const hit = chunkCache.get(d.id);
+      if (hit && hit.key === d.text) return hit.chunks;
+      const chunks = App.doc.structuredChunks(d.text);
+      chunkCache.set(d.id, { key: d.text, chunks });
+      return chunks;
+    },
+
+    // 分词：英文单词 + 中文 2-gram（轻量 BM25 用）
+    tokenize(text) {
+      const t = String(text || '').toLowerCase();
+      const words = t.match(/[a-z0-9_]+/g) || [];
+      const cjk = t.match(/[\u4e00-\u9fff]+/g) || [];
+      for (const seg of cjk) {
+        if (seg.length === 1) words.push(seg);
+        else for (let i = 0; i < seg.length - 1; i++) words.push(seg.slice(i, i + 2));
       }
-      const words = question.split(/\s+/).filter(w => w.length > 1);
-      const chs = App.doc.chunks(d.text);
-      const scored = chs.map((ch, i) => {
-        let s = 0; for (const w of words) if (ch.includes(w)) s += 1;
-        return { ch, i, s };
-      }).sort((a, b) => b.s - a.s).slice(0, TOP_K);
-      const picked = scored.sort((a, b) => a.i - b.i);
-      const context = picked.map((p, k) => `[${k + 1}] ${p.ch}`).join('\n---\n');
-      return { context, refs: picked.map(p => p.ch), full: false };
+      return words;
+    },
+
+    // 轻量 BM25：k1=1.5, b=0.75，IDF 基于 chunk 集合；返回按原序的 top-k（附 score）
+    bm25(query, chunks) {
+      const N = chunks.length;
+      if (!N) return [];
+      const k1 = 1.5, b = 0.75;
+      const docLen = chunks.map(c => App.doc.tokenize(c.content).length);
+      const avgdl = docLen.reduce((a, x) => a + x, 0) / N || 1;
+      const tfs = chunks.map(c => {
+        const tf = {};
+        for (const w of App.doc.tokenize(c.content)) tf[w] = (tf[w] || 0) + 1;
+        return tf;
+      });
+      const df = {};
+      for (const tf of tfs) for (const w of Object.keys(tf)) df[w] = (df[w] || 0) + 1;
+      const qToks = App.doc.tokenize(query);
+      const scored = chunks.map((c, i) => {
+        let s = 0;
+        const dl = docLen[i];
+        for (const w of qToks) {
+          const f = tfs[i][w] || 0;
+          if (!f) continue;
+          const n = df[w] || 0;
+          const idf = Math.log(1 + (N - n + 0.5) / (n + 0.5));
+          s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl));
+        }
+        return { chunk: c, score: s, i };
+      });
+      return scored.sort((a, b) => b.score - a.score).slice(0, TOP_K).sort((a, b) => a.i - b.i);
+    },
+
+    // 检索上下文：scope='all' 全部文档融合；否则当前文档。返回 { context, refs, full, lowConf }
+    buildContext(question, scope) {
+      let docs = [];
+      if (scope === 'all') docs = App.doc.docs();
+      else { const d = App.doc.activeDoc(); if (d) docs = [d]; }
+      if (!docs.length) return { context: '', refs: [], full: false, lowConf: false };
+      // 单文档小文本 → 全文直给（不检索）
+      if (docs.length === 1 && docs[0].text.length <= FULLTEXT_THRESHOLD) {
+        return { context: docs[0].text, refs: [], full: true, lowConf: false };
+      }
+      const flat = [];
+      for (const d of docs) {
+        for (const c of App.doc.chunksOf(d)) flat.push({ chunk: c, doc: d });
+      }
+      const scored = App.doc.bm25(question, flat.map(x => x.chunk));
+      const picked = scored.map(s => {
+        const ref = flat[s.i];
+        return { chunk: s.chunk, score: s.score, doc: ref.doc };
+      });
+      const topScore = picked.length ? picked[0].score : 0;
+      const lowConf = picked.length > 0 && topScore < LOW_SCORE_THRESHOLD;
+      const context = picked.map((p, k) => `[${k + 1}]${p.doc.name ? '（' + p.doc.name + '）' : ''}${p.chunk.heading ? '【' + p.chunk.heading + '】' : ''}\n${p.chunk.content}`).join('\n---\n');
+      return {
+        context,
+        refs: picked.map(p => ({ content: p.chunk.content, start: p.chunk.start, docId: p.doc.id, docName: p.doc.name })),
+        full: false,
+        lowConf,
+      };
     },
 
     async send(custom) {
@@ -332,9 +528,11 @@
       if (!d) { App.ui.toast('请先上传或粘贴文档'); return; }
 
       const area = document.getElementById('docMessages');
+      // M10：复用聊天模块视觉（.msg.user 反向布局 + user-bubble）
       const userNode = document.createElement('div');
-      userNode.className = 'doc-msg user';
-      userNode.textContent = text;
+      userNode.className = 'doc-msg msg user';
+      userNode.innerHTML = '<div class="msg-body"><div class="bubble user-bubble"></div></div>';
+      userNode.querySelector('.bubble').textContent = text;
       area.appendChild(userNode);
       if (input) { input.value = ''; document.getElementById('docSendBtn').disabled = true; }
       area.scrollTop = area.scrollHeight;
@@ -344,27 +542,37 @@
         App.doc.appendError('尚未配置文档 API。请先在设置里填写“文档”或“默认”的 API 信息。');
         return;
       }
-      const ctx = App.doc.buildContext(text);
-      let sysExtra = ctx.full
-        ? '请仅依据以下完整资料回答用户问题。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context
-        : '请仅依据以下带编号的资料片段回答（引用请用 [1]..[n] 格式标注来源）。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
+      const ctx = App.doc.buildContext(text, App.state.settings.docScope === 'all' ? 'all' : 'current');
+      let sysExtra;
+      if (ctx.full) {
+        sysExtra = '请仅依据以下完整资料回答用户问题。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
+      } else {
+        sysExtra = '请仅依据以下带编号的资料片段回答（引用请用 [1]..[n] 格式标注来源）。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
+        if (ctx.lowConf) sysExtra = '⚠️ 检索到的资料片段与问题相关性较低，资料中很可能没有答案。请如实告知用户，不要编造。\n\n' + sysExtra;
+      }
 
       const payload = {
         model: p.model, stream: true,
         messages: [{ role: 'system', content: sysExtra }, { role: 'user', content: text }],
       };
       App.doc.streaming = true;
+      // M10：复用聊天视觉（头像 + 卡片气泡 + 复制按钮）
       const ai = document.createElement('div');
-      ai.className = 'doc-msg assistant';
-      ai.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+      ai.className = 'doc-msg msg assistant';
+      ai.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
+        <div class="msg-body"><div class="msg-card">
+          <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
+          <div class="msg-actions" style="display:none"><button data-doc-copy="1">复制</button></div>
+        </div></div>`;
       area.appendChild(ai);
+      const aiBubble = ai.querySelector('.bubble');
       let acc = '', started = false;
       try {
         // 走主进程模型网关（原来是渲染进程直连，既暴露密钥又受 CORS 限制）
         const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', payload });
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
-          ai.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
+          aiBubble.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
           App.doc.streaming = false; return;
         }
         const reader = res.body.getReader();
@@ -384,17 +592,24 @@
             let json; try { json = JSON.parse(data); } catch (e) { continue; }
             const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
             if (delta.content) {
-              if (!started) { ai.innerHTML = ''; started = true; }
+              if (!started) { aiBubble.innerHTML = ''; started = true; }
               acc += delta.content;
-              ai.innerHTML = App.renderMarkdown(acc);
+              aiBubble.innerHTML = App.renderMarkdown(acc);
               area.scrollTop = area.scrollHeight;
             }
           }
         }
         // 引用溯源
         if (!ctx.full && ctx.refs.length) App.doc.renderCites(ai, acc, ctx.refs);
+        // 完成：显示复制按钮
+        const actions = ai.querySelector('.msg-actions');
+        if (actions) actions.style.display = 'flex';
+        const copyBtn = ai.querySelector('[data-doc-copy]');
+        if (copyBtn) copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(acc || '').then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
+        });
       } catch (err) {
-        ai.innerHTML = `<span class="error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</span>`;
+        aiBubble.innerHTML = `<span class="error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</span>`;
       }
       App.doc.streaming = false;
     },
@@ -405,7 +620,7 @@
       const prompt = (custom && String(custom).trim()) ? String(custom).trim() : AnalysisPrompts[act];
       const d = App.doc.activeDoc();
       if (!d) { App.ui.toast('请先上传或粘贴文档'); return; }
-      const full = d.text.length <= FULLTEXT_THRESHOLD ? d.text : d.text.slice(0, CHUNK_SIZE * TOP_K);
+      const full = d.text.length <= FULLTEXT_THRESHOLD ? d.text : d.text.slice(0, CHUNK_TARGET * TOP_K);
       App.doc.send(prompt + '\n\n资料：\n' + full);
     },
 
@@ -417,26 +632,32 @@
       const footer = document.createElement('div');
       footer.className = 'doc-cites';
       footer.innerHTML = '<div class="doc-cites-title">引用来源</div>' + Array.from(cited).sort((a, b) => a - b).map(n => {
-        const idx = n - 1;
-        const snip = (refs[idx] || '').slice(0, 160).replace(/\n/g, ' ');
-        return `<button class="doc-cite" data-n="${n}">[${n}] ${App.escapeHtml(snip)}</button>`;
+        const ref = refs[n - 1] || {};
+        const snip = (ref.content || '').slice(0, 160).replace(/\n/g, ' ');
+        const docPrefix = ref.docName ? ref.docName + ' · ' : '';
+        return `<button class="doc-cite" data-n="${n}">[${n}] ${App.escapeHtml(docPrefix + snip)}</button>`;
       }).join('');
       footer.querySelectorAll('.doc-cite').forEach(b => {
         b.addEventListener('click', () => App.doc.locateCite(Number(b.dataset.n), refs));
       });
-      aiNode.appendChild(footer);
+      // M10：引用卡片挂在 msg-card 内（头像旁不出现）
+      const card = aiNode.querySelector('.msg-card');
+      (card || aiNode).appendChild(footer);
     },
 
     locateCite(n, refs) {
-      const snip = refs[n - 1];
-      if (!snip) return;
+      const ref = refs[n - 1];
+      if (!ref) return;
+      // 多文档：引用属于非当前文档时先切换（switchDoc 会自动开抽屉）
+      if (ref.docId && ref.docId !== (App.doc.activeDoc() && App.doc.activeDoc().id)) {
+        const d = App.doc.docs().find(x => x.id === ref.docId);
+        if (d) { App.doc.switchDoc(d.id); return; }
+      }
+      App.doc.openDrawer();
       const preview = document.getElementById('docPreview');
       if (!preview || !App.doc.previewText) return;
-      const idx = App.doc.previewText.indexOf(snip.slice(0, 60));
-      if (idx >= 0) {
-        const ratio = Math.min(1, idx / App.doc.previewText.length);
-        preview.scrollTop = ratio * (preview.scrollHeight - preview.clientHeight);
-      }
+      const ratio = Math.min(1, (ref.start || 0) / (App.doc.previewText.length || 1));
+      preview.scrollTop = ratio * (preview.scrollHeight - preview.clientHeight);
       preview.classList.add('flash');
       setTimeout(() => preview.classList.remove('flash'), 700);
     },
@@ -444,8 +665,9 @@
     appendError(msg) {
       const area = document.getElementById('docMessages');
       const e = document.createElement('div');
-      e.className = 'doc-msg assistant';
-      e.innerHTML = `<span class="error">${msg}</span>`;
+      e.className = 'doc-msg msg assistant';
+      e.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
+        <div class="msg-body"><div class="msg-card"><div class="bubble"><span class="error">${msg}</span></div></div></div>`;
       area.appendChild(e);
     },
   };

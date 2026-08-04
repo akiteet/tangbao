@@ -71,12 +71,14 @@
           <h2>糖创</h2>
           <p>选择或打造专属智能体，用模板与多步工作流高效创作</p>
         </div>
-        <div class="create-tabs" id="createTabs">
-          <button class="create-tab${App.create.tab === 'agents' ? ' active' : ''}" data-tab="agents">智能体</button>
-          <button class="create-tab${App.create.tab === 'templates' ? ' active' : ''}" data-tab="templates">模板库</button>
-          <button class="create-tab${App.create.tab === 'workflows' ? ' active' : ''}" data-tab="workflows">工作流</button>
-        </div>
-        <div id="createContent"></div>`;
+        <div class="create-shell">
+          <div class="create-tabs" id="createTabs">
+            <button class="create-tab${App.create.tab === 'agents' ? ' active' : ''}" data-tab="agents">智能体</button>
+            <button class="create-tab${App.create.tab === 'templates' ? ' active' : ''}" data-tab="templates">模板库</button>
+            <button class="create-tab${App.create.tab === 'workflows' ? ' active' : ''}" data-tab="workflows">工作流</button>
+          </div>
+          <div id="createContent"></div>
+        </div>`;
       $('createTabs').addEventListener('click', (e) => {
         const b = e.target.closest('[data-tab]');
         if (!b) return;
@@ -94,22 +96,24 @@
       if (!c) return;
       const tags = App.create.allTags();
       c.innerHTML = `
-        <div class="create-toolbar">
-          <input type="text" class="create-search" id="createSearch" placeholder="搜索智能体…" value="${esc(App.create.stateSearch)}" />
-          <div class="toolbar-row">
-            <div class="cat-pills" id="catPills">
-              ${CATEGORIES.map(cat => `<button class="cat-pill${cat.key === App.create.stateCat ? ' active' : ''}" data-cat="${cat.key}">${cat.label}</button>`).join('')}
+        <div class="create-sec">
+          <div class="create-toolbar">
+            <input type="text" class="create-search" id="createSearch" placeholder="搜索智能体…" value="${esc(App.create.stateSearch)}" />
+            <div class="toolbar-row">
+              <div class="cat-pills" id="catPills">
+                ${CATEGORIES.map(cat => `<button class="cat-pill${cat.key === App.create.stateCat ? ' active' : ''}" data-cat="${cat.key}">${cat.label}</button>`).join('')}
+              </div>
+              <select class="create-sort" id="createSort">
+                <option value="default"${App.create.stateSort === 'default' ? ' selected' : ''}>默认排序</option>
+                <option value="usage"${App.create.stateSort === 'usage' ? ' selected' : ''}>最常用</option>
+                <option value="name"${App.create.stateSort === 'name' ? ' selected' : ''}>名称</option>
+              </select>
             </div>
-            <select class="create-sort" id="createSort">
-              <option value="default"${App.create.stateSort === 'default' ? ' selected' : ''}>默认排序</option>
-              <option value="usage"${App.create.stateSort === 'usage' ? ' selected' : ''}>最常用</option>
-              <option value="name"${App.create.stateSort === 'name' ? ' selected' : ''}>名称</option>
-            </select>
+            ${tags.length ? `<div class="tag-pills" id="tagPills">
+              <button class="tag-pill${App.create.stateTag === '' ? ' active' : ''}" data-tag="">全部标签</button>
+              ${tags.map(t => `<button class="tag-pill${App.create.stateTag === t ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}
+            </div>` : ''}
           </div>
-          ${tags.length ? `<div class="tag-pills" id="tagPills">
-            <button class="tag-pill${App.create.stateTag === '' ? ' active' : ''}" data-tag="">全部标签</button>
-            ${tags.map(t => `<button class="tag-pill${App.create.stateTag === t ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}
-          </div>` : ''}
         </div>
         <div class="agent-grid" id="agentGrid"></div>`;
 
@@ -536,10 +540,12 @@
       if (!c) return;
       const tpls = App.state.settings.templates || [];
       c.innerHTML = `
-        <div class="create-toolbar">
-          <div class="toolbar-row between">
-            <div class="module-sub">提示词模板库</div>
-            <button class="btn-primary sm" id="addTplBtn">+ 新建模板</button>
+        <div class="create-sec">
+          <div class="create-toolbar">
+            <div class="toolbar-row between">
+              <div class="module-sub">提示词模板库</div>
+              <button class="btn-primary sm" id="addTplBtn">+ 新建模板</button>
+            </div>
           </div>
         </div>
         <div class="tpl-grid" id="tplGrid"></div>`;
@@ -650,12 +656,14 @@
       if (!c) return;
       const wfs = App.state.settings.workflows || [];
       c.innerHTML = `
-        <div class="create-toolbar">
-          <div class="toolbar-row between">
-            <div class="module-sub">智能体工作流（多步串联）</div>
-            <button class="btn-primary sm" id="addWfBtn">+ 新建工作流</button>
+        <div class="create-sec">
+          <div class="create-toolbar">
+            <div class="toolbar-row between">
+              <div class="module-sub">智能体工作流（多步串联）</div>
+              <button class="btn-primary sm" id="addWfBtn">+ 新建工作流</button>
+            </div>
+            <div class="wf-hint">每一步可使用上一步的结果作为上下文，按顺序合成最终答案。</div>
           </div>
-          <div class="wf-hint">每一步可使用上一步的结果作为上下文，按顺序合成最终答案。</div>
         </div>
         <div class="wf-grid" id="wfGrid"></div>`;
       $('addWfBtn').addEventListener('click', () => App.create.openWorkflowForm());
@@ -671,6 +679,7 @@
           <div class="wf-ops">
             <button class="mini" data-run="${w.id}">运行</button>
             <button class="mini" data-edit="${w.id}">编辑</button>
+            <button class="mini" data-hist="${w.id}">历史</button>
             <button class="mini danger" data-del="${w.id}">删除</button>
           </div>
         </div>`).join('');
@@ -681,6 +690,10 @@
       grid.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
         const w = (App.state.settings.workflows || []).find(x => x.id === b.dataset.edit);
         if (w) App.create.openWorkflowForm(w);
+      }));
+      grid.querySelectorAll('[data-hist]').forEach(b => b.addEventListener('click', () => {
+        const w = (App.state.settings.workflows || []).find(x => x.id === b.dataset.hist);
+        if (w) App.create.showRunHistory(w);
       }));
       grid.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
         App.state.settings.workflows = (App.state.settings.workflows || []).filter(x => x.id !== b.dataset.del);
@@ -749,11 +762,20 @@
         const name = modal.querySelector('#wfName').value.trim();
         if (!name) { App.ui.toast('请填写名称'); nameInput.focus(); return; }
         const stepEls = Array.from(modal.querySelectorAll('#wfSteps .wf-step'));
-        const stepsOut = stepEls.map(row => ({
-          title: row.querySelector('.wf-step-title').value.trim(),
-          prompt: row.querySelector('.wf-step-prompt').value.trim(),
-          usePrev: row.querySelector('.wf-step-usePrev').checked,
-        })).filter(s => s.prompt.trim());
+        const stepsOut = stepEls.map(row => {
+          const st = {
+            title: row.querySelector('.wf-step-title').value.trim(),
+            prompt: row.querySelector('.wf-step-prompt').value.trim(),
+            usePrev: row.querySelector('.wf-step-usePrev').checked,
+          };
+          // M7：步骤级模型 + 失败策略
+          const mdl = row.querySelector('.wf-step-model');
+          if (mdl && mdl.value) st.model = mdl.value;
+          const oe = row.querySelector('.wf-step-onerror');
+          if (oe && oe.value && oe.value !== 'continue') st.onError = oe.value;
+          if (st.onError === 'retry') st.retries = 2;
+          return st;
+        }).filter(s => s.prompt.trim());
         if (!stepsOut.length) { App.ui.toast('请至少填写一步的提示词'); return; }
         App.state.settings.workflows = App.state.settings.workflows || [];
         if (isEdit) {
@@ -817,6 +839,10 @@
 
     wfStepHtml(s, idx) {
       const no = (typeof idx === 'number') ? idx + 1 : '';
+      // M7：步骤级模型 + 失败策略
+      const chatProv = App.getProvider('chat');
+      const models = (chatProv && chatProv.models && chatProv.models.length) ? chatProv.models : [];
+      const onErr = s.onError || 'continue';
       return `<div class="wf-step" draggable="true">
         <div class="wf-step-head">
           <span class="wf-step-drag" title="拖拽排序">⠿</span>
@@ -824,8 +850,17 @@
           <input type="text" class="wf-step-title" value="${esc(s.title || '')}" placeholder="步骤标题（可选）" />
           <button type="button" class="wf-step-del" title="删除">×</button>
         </div>
-        <textarea class="wf-step-prompt" rows="2" placeholder="这一步的提示词">${esc(s.prompt || '')}</textarea>
-        <label class="switch-min"><input type="checkbox" class="wf-step-usePrev" ${s.usePrev ? 'checked' : ''}/>用上一步结果作为上下文</label>
+        <textarea class="wf-step-prompt" rows="2" placeholder="这一步的提示词（支持 {{变量名}}）">${esc(s.prompt || '')}</textarea>
+        <div class="wf-step-opts">
+          <label class="switch-min"><input type="checkbox" class="wf-step-usePrev" ${s.usePrev ? 'checked' : ''}/>用上一步结果作为上下文</label>
+          <select class="wf-step-model" title="本步使用的模型（留空=工作流默认模型）"><option value="">默认模型</option>${models.map(m =>
+            `<option value="${esc(m)}"${s.model === m ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>
+          <select class="wf-step-onerror" title="本步失败时的处理">
+            <option value="continue"${onErr === 'continue' ? ' selected' : ''}>失败继续</option>
+            <option value="stop"${onErr === 'stop' ? ' selected' : ''}>失败停止</option>
+            <option value="retry"${onErr === 'retry' ? ' selected' : ''}>失败重试×2</option>
+          </select>
+        </div>
         ${s.usePrev ? '<span class="wf-usePrev-badge">↩ 接上一步</span>' : ''}
       </div>`;
     },
@@ -860,42 +895,108 @@
 
       const steps = (wf.steps || []).filter(st => (st.prompt || '').trim());
       if (!steps.length) { runBox.innerHTML = '<div class="wf-step-out">工作流没有有效步骤。</div>'; return; }
+      // M7（v1.0.8）：运行历史记录（独立持久化，SQLite 不可用时静默跳过）
+      const run = {
+        id: 'wr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        workflowId: wf.id, workflowName: wf.name,
+        status: 'running', steps: [],
+        startedAt: Date.now(), finishedAt: 0,
+      };
+      const saveRun = () => {
+        try { if (App.services.fs && App.services.fs.saveWorkflowRun) App.services.fs.saveWorkflowRun(run); } catch (_) {}
+      };
+      saveRun();
       const results = [];
       let prev = '';
+      // M7：输入变量——解析全部步骤 prompt 的 {{var}}，运行前收集（无变量则跳过）
+      const varNames = [];
+      for (const st of steps) {
+        const re = /\{\{([^}]+)\}\}/g; let m;
+        while ((m = re.exec(st.prompt))) { const v = m[1].trim(); if (v && !varNames.includes(v)) varNames.push(v); }
+      }
+      const varValues = {};
+      if (varNames.length) {
+        runBox.insertAdjacentHTML('afterbegin',
+          '<div class="wf-vars"><div class="wf-vars-title">输入变量</div>' +
+          varNames.map(v => `<label class="wf-var-row"><span>${esc(v)}</span><input type="text" class="wf-var-input" data-var="${esc(v)}" placeholder="输入 ${esc(v)} 的值" autocomplete="off"/></label>`).join('') +
+          '<button class="mini" id="wfVarsOk">开始运行</button></div>');
+        await new Promise((resolve) => {
+          const collect = () => {
+            runBox.querySelectorAll('.wf-var-input').forEach(inp => { varValues[inp.dataset.var] = inp.value.trim(); });
+            const boxEl = runBox.querySelector('.wf-vars'); if (boxEl) boxEl.remove();
+            resolve();
+          };
+          const okBtn = runBox.querySelector('#wfVarsOk');
+          if (okBtn) okBtn.addEventListener('click', collect);
+          runBox.querySelectorAll('.wf-var-input').forEach(inp => {
+            inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') collect(); });
+          });
+          const first = runBox.querySelector('.wf-var-input');
+          if (first) first.focus();
+        });
+      }
+      const renderPrompt = (tpl) => tpl.replace(/\{\{([^}]+)\}\}/g, (mm, name) => (name.trim() in varValues ? varValues[name.trim()] : mm));
+      const models = (s.models && s.models.length) ? s.models : [];
       for (let i = 0; i < steps.length; i++) {
         const st = steps[i];
         runBox.insertAdjacentHTML('beforeend', `<div class="wf-step-out"><div class="wf-step-title">步骤 ${i + 1}：${esc(st.title || '未命名')}</div><div class="wf-step-status">运行中…</div></div>`);
         const statusEl = runBox.lastElementChild.querySelector('.wf-step-status');
-        let promptText = st.prompt || '';
+        const stepModel = (st.model && models.includes(st.model)) ? st.model : s.model;
+        let promptText = renderPrompt(st.prompt || '');
         if (st.usePrev && prev) promptText += '\n\n【上一步的结果】\n' + prev;
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 60000);
-        try {
-          const res = await App.rt.gatewayFetch({
-            ref: s.ref, kind: 'chat',
-            payload: { model: s.model, messages: [{ role: 'user', content: promptText }], stream: false },
-            signal: ctrl.signal,
-          });
-          if (!res.ok) {
-            const txt = await App.rt.gatewayError(res);
-            statusEl.innerHTML = `<span class="error">失败（${res.status}）：${esc(String(txt).slice(0, 120))}</span>`;
-            prev = ''; continue;
+        const stepStart = Date.now();
+        // M7：单步执行（带 60s 超时），返回 { ok, out } 或 { ok:false, error }
+        const attempt = async () => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 60000);
+          try {
+            const res = await App.rt.gatewayFetch({
+              ref: s.ref, kind: 'chat',
+              payload: { model: stepModel, messages: [{ role: 'user', content: promptText }], stream: false },
+              signal: ctrl.signal,
+            });
+            if (!res.ok) {
+              const txt = await App.rt.gatewayError(res);
+              return { ok: false, error: String(txt) };
+            }
+            const data = await res.json();
+            const out = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content)
+              || (data.choices && data.choices[0] && data.choices[0].text) || '';
+            return { ok: true, out };
+          } catch (e) {
+            return { ok: false, error: (e && e.name === 'AbortError') ? '超时（60s）' : ((e && e.message) || String(e)) };
+          } finally { clearTimeout(timer); }
+        };
+        // 失败策略：continue 默认；retry 重试 retries 次（间隔 800ms）；stop 或重试仍失败 → 终止
+        let outcome = await attempt();
+        const retries = Math.max(0, parseInt(st.retries, 10) || 0);
+        if (!outcome.ok && st.onError === 'retry' && retries > 0) {
+          for (let r = 1; r <= retries; r++) {
+            statusEl.innerHTML = `<span class="warn">失败，${r}/${retries} 重试中…</span>`;
+            await new Promise((res) => setTimeout(res, 800));
+            outcome = await attempt();
+            if (outcome.ok) break;
           }
-          const data = await res.json();
-          const out = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content)
-            || (data.choices && data.choices[0] && data.choices[0].text) || '';
-          prev = out;
-          results.push({ title: st.title || ('步骤 ' + (i + 1)), content: out });
-          statusEl.innerHTML = '<span class="ok">完成</span>';
-          runBox.insertAdjacentHTML('beforeend', `<div class="wf-step-body">${esc(out.length > 600 ? out.slice(0, 600) + '…' : out)}</div>`);
-        } catch (e) {
-          clearTimeout(timer);
-          if (e && e.name === 'AbortError') statusEl.innerHTML = '<span class="error">超时（60s）</span>';
-          else statusEl.innerHTML = `<span class="error">错误：${esc(String((e && e.message) || e))}</span>`;
-          prev = ''; continue;
         }
-        clearTimeout(timer);
+        if (!outcome.ok) {
+          const msg = outcome.error || '未知错误';
+          statusEl.innerHTML = `<span class="error">失败：${esc(String(msg).slice(0, 120))}</span>`;
+          run.steps.push({ title: st.title || ('步骤 ' + (i + 1)), status: 'error', error: String(msg).slice(0, 300), startedAt: stepStart, finishedAt: Date.now() });
+          prev = '';
+          if (st.onError === 'stop' || (st.onError === 'retry' && retries > 0)) { run.status = 'failed'; break; }
+          continue;
+        }
+        const out = outcome.out;
+        prev = out;
+        results.push({ title: st.title || ('步骤 ' + (i + 1)), content: out });
+        run.steps.push({ title: st.title || ('步骤 ' + (i + 1)), status: 'done', content: out, startedAt: stepStart, finishedAt: Date.now() });
+        statusEl.innerHTML = '<span class="ok">完成</span>';
+        runBox.insertAdjacentHTML('beforeend', `<div class="wf-step-body">${esc(out.length > 600 ? out.slice(0, 600) + '…' : out)}</div>`);
       }
+      // 收尾：标记运行状态并落库
+      run.status = (run.steps.length === steps.length && run.steps.every(x => x.status === 'done')) ? 'done' : 'failed';
+      run.finishedAt = Date.now();
+      saveRun();
       const chatBtn = modal.querySelector('#wfRunChat');
       if (results.length) {
         chatBtn.style.display = '';
@@ -912,6 +1013,64 @@
       } else {
         chatBtn.style.display = 'none';
       }
+    },
+
+    // M7（v1.0.8）：工作流运行历史查看（数据来自 SQLite workflow_runs 表）
+    async showRunHistory(wf) {
+      let runs = [];
+      try {
+        if (App.services.fs && App.services.fs.listWorkflowRuns) {
+          const r = await App.services.fs.listWorkflowRuns(wf.id, 20);
+          if (r && r.ok) runs = r.runs || [];
+        }
+      } catch (_) {}
+      const modal = document.createElement('div');
+      modal.className = 'modal-mask';
+      modal.id = 'wfHistMask';
+      modal.innerHTML = `
+        <div class="modal agent-modal" role="dialog" aria-modal="true">
+          <div class="modal-header"><span>运行历史：${esc(wf.name)}</span>
+            <button class="icon-btn" id="wfHistClose" aria-label="关闭">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="modal-body"><div class="wf-run" id="wfHistList"></div></div>
+          <div class="modal-footer"><button class="btn-ghost" id="wfHistOk">关闭</button></div>
+        </div>`;
+      document.body.appendChild(modal);
+      const box = modal.querySelector('#wfHistList');
+      const close = () => modal.remove();
+      modal.querySelector('#wfHistClose').addEventListener('click', close);
+      modal.querySelector('#wfHistOk').addEventListener('click', close);
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      if (!runs.length) {
+        box.innerHTML = '<div class="wf-step-out">暂无运行记录（运行后自动保存）。</div>';
+        return;
+      }
+      const fmtTime = (ts) => ts ? new Date(ts).toLocaleString('zh-CN', { hour12: false }) : '';
+      const fmtDur = (a, b) => (a && b && b >= a) ? ((b - a) / 1000).toFixed(1) + 's' : '';
+      box.innerHTML = runs.map((run, ri) => {
+        const badge = run.status === 'done' ? '<span class="ok">完成</span>'
+          : run.status === 'failed' ? '<span class="error">失败</span>'
+          : run.status === 'stopped' ? '<span class="warn">已停止</span>' : `<span class="warn">${esc(run.status || 'running')}</span>`;
+        const steps = run.steps || [];
+        const errs = steps.filter(x => x.status === 'error');
+        const detail = steps.length ? steps.map((st, si) => `
+          <div class="wf-hist-step">
+            <div class="wf-hist-step-head"><span>${si + 1}. ${esc(st.title || '未命名')}</span>
+              ${st.status === 'done' ? '<span class="ok">完成</span>' : `<span class="error">${esc(st.error || '错误')}</span>`}
+            </div>
+            ${st.content ? `<div class="wf-hist-step-body">${esc(st.content.length > 400 ? st.content.slice(0, 400) + '…' : st.content)}</div>` : ''}
+          </div>`).join('')
+          : '<div class="wf-step-out">无步骤记录</div>';
+        return `<details class="wf-hist-item" data-ri="${ri}"${ri === 0 ? ' open' : ''}>
+          <summary>
+            <span class="wf-hist-badge">${badge}</span>
+            <span class="wf-hist-meta">${fmtTime(run.startedAt)} · ${steps.length} 步 · ${fmtDur(run.startedAt, run.finishedAt)}${errs.length ? ' · ' + errs.length + ' 步失败' : ''}</span>
+          </summary>
+          <div class="wf-hist-detail">${detail}</div>
+        </details>`;
+      }).join('');
     },
   };
 })();

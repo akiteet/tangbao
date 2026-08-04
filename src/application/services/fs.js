@@ -24,5 +24,12 @@
     importState() {
       try { return (window.electron && window.electron.importState) ? window.electron.importState() : { ok: false, error: '环境不支持' }; } catch (e) { return { ok: false }; }
     },
+    // M7（v1.0.8）：工作流运行历史（独立持久化，SQLite 不可用静默降级）
+    saveWorkflowRun(run) {
+      try { return (window.electron && window.electron.saveWorkflowRun) ? window.electron.saveWorkflowRun(run) : { ok: false }; } catch (e) { return { ok: false }; }
+    },
+    listWorkflowRuns(workflowId, limit) {
+      try { return (window.electron && window.electron.listWorkflowRuns) ? window.electron.listWorkflowRuns(workflowId, limit) : { ok: false, runs: [] }; } catch (e) { return { ok: false, runs: [] }; }
+    },
   };
 })();
