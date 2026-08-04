@@ -169,7 +169,193 @@
     return list.some(vm => m.includes(vm.toLowerCase()));
   };
 
-  App.loadState = function () {
+  // 从一段 JSON 文本还原并归一化应用状态（含旧版迁移）。oldFormat 表示来源为旧版 OLD_KEY。
+  function applyLoaded(raw, oldFormat) {
+    const parsed = JSON.parse(raw);
+    const ns = defaultState();
+    Object.assign(ns, parsed);
+    const ps = (parsed.settings && typeof parsed.settings === 'object') ? parsed.settings : {};
+    ns.settings = ns.settings || {};
+    ns.settings.accounts = (Array.isArray(ps.accounts) ? ps.accounts : []).map(a => Object.assign({}, a, {
+      // 模型迁移：旧 string[] → 新 { name, contextWindow }[]
+      models: Array.isArray(a.models) ? a.models.map(m => {
+        if (typeof m === 'string') return { name: m, contextWindow: 128000 };
+        if (m && typeof m === 'object' && typeof m.name === 'string')
+          return { name: m.name, contextWindow: (typeof m.contextWindow === 'number' && m.contextWindow > 0) ? m.contextWindow : 128000 };
+        return null;
+      }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
+    }));
+    ns.settings.defaultAccountId = ps.defaultAccountId || '';
+    ns.settings.profile = {
+      name: (ps.profile && ps.profile.name) || '糖包用户',
+      avatar: (ps.profile && ps.profile.avatar) || '',
+    };
+    ns.settings.agents = Array.isArray(ps.agents) ? ps.agents : [];
+    ns.settings.agentUsage = (ps.agentUsage && typeof ps.agentUsage === 'object') ? ps.agentUsage : {};
+    ns.settings.templates = Array.isArray(ps.templates) ? ps.templates : [];
+    ns.settings.workflows = Array.isArray(ps.workflows) ? ps.workflows : [];
+    ns.settings.imageHistory = Array.isArray(ps.imageHistory)
+      ? ps.imageHistory.filter(x => x && Array.isArray(x.images))
+      : [];
+    ns.settings.docs = Array.isArray(ps.docs)
+      ? ps.docs.filter(x => x && typeof x.text === 'string')
+      : [];
+    ns.settings.agentCwd = (typeof ps.agentCwd === 'string') ? ps.agentCwd : '';
+    // 自定义提示词（旧版无此字段则给默认空结构）
+    const psPrompts = (ps.prompts && typeof ps.prompts === 'object') ? ps.prompts : {};
+    ns.settings.prompts = {
+      chat: typeof psPrompts.chat === 'string' ? psPrompts.chat : '',
+      agent: typeof psPrompts.agent === 'string' ? psPrompts.agent : '',
+      doc: (psPrompts.doc && typeof psPrompts.doc === 'object') ? {
+        summary: psPrompts.doc.summary || '', points: psPrompts.doc.points || '',
+        translate: psPrompts.doc.translate || '', outline: psPrompts.doc.outline || '',
+      } : { summary: '', points: '', translate: '', outline: '' },
+    };
+    // 外观主题
+    const psAp = (ps.appearance && typeof ps.appearance === 'object') ? ps.appearance : {};
+    ns.settings.appearance = {
+      mode: (psAp.mode === 'dark' || psAp.mode === 'light' || psAp.mode === 'system') ? psAp.mode : 'system',
+      accent: typeof psAp.accent === 'string' ? psAp.accent : '',
+      radius: typeof psAp.radius === 'string' ? psAp.radius : '',
+    };
+    // 模块开关 / 自定义模块（保留用户自定义顺序，仅过滤非法 id）
+    const allBuiltin = ['chat', 'image', 'doc', 'create', 'agent'];
+    const validBuiltinIds = new Set(allBuiltin);
+    ns.settings.enabledModules = Array.isArray(ps.enabledModules)
+      ? ps.enabledModules.filter(id => validBuiltinIds.has(id)) : allBuiltin.slice();
+    ns.settings.customModules = Array.isArray(ps.customModules)
+      ? ps.customModules.filter(m => m && m.id && m.label && m.url).map(m => ({ id: m.id, label: String(m.label), url: String(m.url), forceEmbed: !!m.forceEmbed, hidden: !!m.hidden }))
+      : [];
+    // 联网搜索：1.0.6 起 Key 存密钥库。这里只在读到旧版明文时临时保留，
+    // 交给启动时的 App.rt.migrateSecrets() 搬进密钥库并删除。
+    ns.settings.search = {};
+    if (ps.search && typeof ps.search === 'object' && typeof ps.search.apiKey === 'string' && ps.search.apiKey) {
+      ns.settings.search.apiKey = ps.search.apiKey;
+    }
+    // 用户级长期记忆（CLAUDE.md 用户级对标）
+    ns.settings.userMemory = (typeof ps.userMemory === 'string') ? ps.userMemory : '';
+    // 上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
+    ns.settings.contextWindow = (typeof ps.contextWindow === 'number' && ps.contextWindow > 0) ? ps.contextWindow : 128000;
+    // 思考强度迁移：旧版 think:boolean → 新版 thinkLevel: 'off'|'low'|'medium'|'high'
+    if (ps.thinkLevel && ['off','low','medium','high'].includes(ps.thinkLevel)) {
+      ns.settings.thinkLevel = ps.thinkLevel;
+    } else if (ps.think === false) {
+      ns.settings.thinkLevel = 'off';
+    } else if (ps.think === true) {
+      ns.settings.thinkLevel = 'medium';
+    }
+    // 视觉模型白名单（旧版无则给默认）
+    ns.settings.visionModels = Array.isArray(ps.visionModels) && ps.visionModels.length
+      ? ps.visionModels
+      : ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'];
+    // 糖码多会话线程：归一化 + 旧版 agentHistory 迁移为首个线程
+    const cleanHist = (arr) => (Array.isArray(arr) ? arr : [])
+      .filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string')
+      .slice(-60);
+    let threads = Array.isArray(parsed.agentThreads)
+      ? parsed.agentThreads
+        .filter(t => t && typeof t === 'object')
+        .map(t => ({
+          id: t.id || App.uid(),
+          projectId: t.projectId || null,   // 归属项目（旧数据无则后续迁移补上）
+          title: (typeof t.title === 'string' && t.title.trim()) ? t.title : '新会话',
+          updatedAt: Number(t.updatedAt) || Date.now(),
+          history: cleanHist(t.history),
+        }))
+      : [];
+    // 旧版单条 agentHistory → 若无线程则包成首个会话
+    const oldHist = cleanHist(parsed.agentHistory);
+    if (!threads.length && oldHist.length) {
+      threads = [{ id: App.uid(), projectId: null, title: '会话 1', updatedAt: Date.now(), history: oldHist }];
+    }
+    // 糖码项目：归一化 + 旧版迁移（无项目时用旧 agentCwd 创建默认项目）
+    let projects = Array.isArray(parsed.projects)
+      ? parsed.projects
+        .filter(p => p && typeof p === 'object' && p.id)
+        .map(p => ({
+          id: p.id,
+          name: (typeof p.name === 'string' && p.name.trim()) ? p.name : '未命名项目',
+          cwd: typeof p.cwd === 'string' ? p.cwd : '',
+          workspaceId: typeof p.workspaceId === 'string' ? p.workspaceId : '',
+          auto: !!p.auto,
+          approveTools: Array.isArray(p.approveTools) ? p.approveTools.filter(x => typeof x === 'string') : [],
+          cmdWhitelist: Array.isArray(p.cmdWhitelist) ? p.cmdWhitelist.filter(x => typeof x === 'string') : [],
+          planMode: !!p.planMode,
+          createdAt: Number(p.createdAt) || Date.now(),
+          lastUsedAt: Number(p.lastUsedAt) || Date.now(),
+        }))
+      : [];
+    if (!projects.length) {
+      // 迁移：用旧 agentCwd 创建默认项目，approveTools 留空保持原行为
+      projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
+        auto: false, approveTools: [], cmdWhitelist: [], planMode: false, createdAt: Date.now(), lastUsedAt: Date.now() }];
+    }
+    const firstPid = projects[0].id;
+    // 把无 projectId 的线程归到首个项目
+    for (const t of threads) { if (!t.projectId) t.projectId = firstPid; }
+    ns.projects = projects;
+    ns.activeProjectId = (parsed.activeProjectId && projects.some(p => p.id === parsed.activeProjectId))
+      ? parsed.activeProjectId : firstPid;
+    ns.agentProjectsCollapsed = !!parsed.agentProjectsCollapsed;
+    ns.agentSessionsCollapsed = !!parsed.agentSessionsCollapsed;
+    ns.agentThreads = threads;
+    // 激活线程：优先用已存在的 activeThreadId，否则取首个线程
+    const wantId = parsed.activeThreadId;
+    ns.activeThreadId = (wantId && threads.some(t => t.id === wantId))
+      ? wantId
+      : (threads[0] ? threads[0].id : null);
+    const oldProviders = ps.providers || {};
+    const newProviders = {};
+    for (const m of ['default', 'chat', 'image', 'doc']) {
+      const op = oldProviders[m] || {};
+      let accountId = (op.accountId !== undefined) ? op.accountId
+        : (op.useDefault === false ? '__custom__' : '__default__');
+      newProviders[m] = {
+        accountId: accountId || '__default__',
+        apiBase: op.apiBase || '', model: op.model || '',
+      };
+      // 旧版明文 Key 暂留一手，等启动时的 migrateSecrets() 搬进密钥库后会被删掉
+      if (op.apiKey) newProviders[m].apiKey = op.apiKey;
+    }
+    ns.settings.providers = newProviders;
+    // 旧版单配置：把默认 provider 升级为一个账户
+    if (oldFormat && oldProviders.default && oldProviders.default.apiBase) {
+      const acc = {
+        id: App.uid(), name: '默认账户',
+        apiBase: oldProviders.default.apiBase,
+        models: oldProviders.default.model ? [oldProviders.default.model] : [],
+      };
+      // 同上：明文 Key 只是过渡，migrateSecrets() 迁移成功后即从 state 移除
+      if (oldProviders.default.apiKey) acc.apiKey = oldProviders.default.apiKey;
+      ns.settings.accounts = [acc];
+      ns.settings.defaultAccountId = acc.id;
+      for (const m of ['default', 'chat', 'image', 'doc']) ns.settings.providers[m].accountId = '__default__';
+    }
+    App.state = ns;
+    App.persist();
+    if (oldFormat) { try { localStorage.removeItem(OLD_KEY); } catch (e) {} }
+  }
+
+  // 载入本地持久化状态（含旧版迁移）。
+  // 关键修复：1.0.6 起静态服务端口改为系统随机分配，而 localStorage 按 origin（含端口）分区，
+  // 端口一变 origin 即变，原 localStorage 全读不到 → 升级 / 每次重启都会丢数据。
+  // 故优先从与端口无关的磁盘 state.json 读取（App.persist 一直双写它），localStorage 仅作回退。
+  App.loadState = async function () {
+    // 1) 优先：磁盘 state.json（与端口无关，可在随机端口下稳定持久化）
+    try {
+      if (window.electron && window.electron.loadStateJSON) {
+        const res = await window.electron.loadStateJSON();
+        if (res && res.ok && typeof res.data === 'string' && res.data.trim()) {
+          const parsed = JSON.parse(res.data);
+          if (parsed && typeof parsed === 'object' && (parsed.conversations || parsed.settings || parsed.agentThreads || parsed.projects || parsed.activeId)) {
+            applyLoaded(res.data, false);
+            return;
+          }
+        }
+      }
+    } catch (e) { /* 磁盘读取失败则回退 localStorage */ }
+
+    // 2) 回退：localStorage（兼容开发模式与旧版）
     try {
       let raw = localStorage.getItem(STORAGE_KEY);
       let oldFormat = false;
@@ -178,169 +364,7 @@
         if (raw) oldFormat = true;
       }
       if (raw) {
-        const parsed = JSON.parse(raw);
-        const ns = defaultState();
-        Object.assign(ns, parsed);
-        const ps = (parsed.settings && typeof parsed.settings === 'object') ? parsed.settings : {};
-        ns.settings = ns.settings || {};
-        ns.settings.accounts = (Array.isArray(ps.accounts) ? ps.accounts : []).map(a => Object.assign({}, a, {
-          // 模型迁移：旧 string[] → 新 { name, contextWindow }[]
-          models: Array.isArray(a.models) ? a.models.map(m => {
-            if (typeof m === 'string') return { name: m, contextWindow: 128000 };
-            if (m && typeof m === 'object' && typeof m.name === 'string')
-              return { name: m.name, contextWindow: (typeof m.contextWindow === 'number' && m.contextWindow > 0) ? m.contextWindow : 128000 };
-            return null;
-          }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
-        }));
-        ns.settings.defaultAccountId = ps.defaultAccountId || '';
-        ns.settings.profile = {
-          name: (ps.profile && ps.profile.name) || '糖包用户',
-          avatar: (ps.profile && ps.profile.avatar) || '',
-        };
-        ns.settings.agents = Array.isArray(ps.agents) ? ps.agents : [];
-        ns.settings.agentUsage = (ps.agentUsage && typeof ps.agentUsage === 'object') ? ps.agentUsage : {};
-        ns.settings.templates = Array.isArray(ps.templates) ? ps.templates : [];
-        ns.settings.workflows = Array.isArray(ps.workflows) ? ps.workflows : [];
-        ns.settings.imageHistory = Array.isArray(ps.imageHistory)
-          ? ps.imageHistory.filter(x => x && Array.isArray(x.images))
-          : [];
-        ns.settings.docs = Array.isArray(ps.docs)
-          ? ps.docs.filter(x => x && typeof x.text === 'string')
-          : [];
-        ns.settings.agentCwd = (typeof ps.agentCwd === 'string') ? ps.agentCwd : '';
-        // 自定义提示词（旧版无此字段则给默认空结构）
-        const psPrompts = (ps.prompts && typeof ps.prompts === 'object') ? ps.prompts : {};
-        ns.settings.prompts = {
-          chat: typeof psPrompts.chat === 'string' ? psPrompts.chat : '',
-          agent: typeof psPrompts.agent === 'string' ? psPrompts.agent : '',
-          doc: (psPrompts.doc && typeof psPrompts.doc === 'object') ? {
-            summary: psPrompts.doc.summary || '', points: psPrompts.doc.points || '',
-            translate: psPrompts.doc.translate || '', outline: psPrompts.doc.outline || '',
-          } : { summary: '', points: '', translate: '', outline: '' },
-        };
-        // 外观主题
-        const psAp = (ps.appearance && typeof ps.appearance === 'object') ? ps.appearance : {};
-        ns.settings.appearance = {
-          mode: (psAp.mode === 'dark' || psAp.mode === 'light' || psAp.mode === 'system') ? psAp.mode : 'system',
-          accent: typeof psAp.accent === 'string' ? psAp.accent : '',
-          radius: typeof psAp.radius === 'string' ? psAp.radius : '',
-        };
-        // 模块开关 / 自定义模块（保留用户自定义顺序，仅过滤非法 id）
-        const allBuiltin = ['chat', 'image', 'doc', 'create', 'agent'];
-        const validBuiltinIds = new Set(allBuiltin);
-        ns.settings.enabledModules = Array.isArray(ps.enabledModules)
-          ? ps.enabledModules.filter(id => validBuiltinIds.has(id)) : allBuiltin.slice();
-        ns.settings.customModules = Array.isArray(ps.customModules)
-          ? ps.customModules.filter(m => m && m.id && m.label && m.url).map(m => ({ id: m.id, label: String(m.label), url: String(m.url), forceEmbed: !!m.forceEmbed, hidden: !!m.hidden }))
-          : [];
-        // 联网搜索：1.0.6 起 Key 存密钥库。这里只在读到旧版明文时临时保留，
-        // 交给启动时的 App.rt.migrateSecrets() 搬进密钥库并删除。
-        ns.settings.search = {};
-        if (ps.search && typeof ps.search === 'object' && typeof ps.search.apiKey === 'string' && ps.search.apiKey) {
-          ns.settings.search.apiKey = ps.search.apiKey;
-        }
-        // 用户级长期记忆（CLAUDE.md 用户级对标）
-        ns.settings.userMemory = (typeof ps.userMemory === 'string') ? ps.userMemory : '';
-        // 上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
-        ns.settings.contextWindow = (typeof ps.contextWindow === 'number' && ps.contextWindow > 0) ? ps.contextWindow : 128000;
-        // 思考强度迁移：旧版 think:boolean → 新版 thinkLevel: 'off'|'low'|'medium'|'high'
-        if (ps.thinkLevel && ['off','low','medium','high'].includes(ps.thinkLevel)) {
-          ns.settings.thinkLevel = ps.thinkLevel;
-        } else if (ps.think === false) {
-          ns.settings.thinkLevel = 'off';
-        } else if (ps.think === true) {
-          ns.settings.thinkLevel = 'medium';
-        }
-        // 视觉模型白名单（旧版无则给默认）
-        ns.settings.visionModels = Array.isArray(ps.visionModels) && ps.visionModels.length
-          ? ps.visionModels
-          : ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'];
-        // 糖码多会话线程：归一化 + 旧版 agentHistory 迁移为首个线程
-        const cleanHist = (arr) => (Array.isArray(arr) ? arr : [])
-          .filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string')
-          .slice(-60);
-        let threads = Array.isArray(parsed.agentThreads)
-          ? parsed.agentThreads
-            .filter(t => t && typeof t === 'object')
-            .map(t => ({
-              id: t.id || App.uid(),
-              projectId: t.projectId || null,   // 归属项目（旧数据无则后续迁移补上）
-              title: (typeof t.title === 'string' && t.title.trim()) ? t.title : '新会话',
-              updatedAt: Number(t.updatedAt) || Date.now(),
-              history: cleanHist(t.history),
-            }))
-          : [];
-        // 旧版单条 agentHistory → 若无线程则包成首个会话
-        const oldHist = cleanHist(parsed.agentHistory);
-        if (!threads.length && oldHist.length) {
-          threads = [{ id: App.uid(), projectId: null, title: '会话 1', updatedAt: Date.now(), history: oldHist }];
-        }
-        // 糖码项目：归一化 + 旧版迁移（无项目时用旧 agentCwd 创建默认项目）
-        let projects = Array.isArray(parsed.projects)
-          ? parsed.projects
-            .filter(p => p && typeof p === 'object' && p.id)
-            .map(p => ({
-              id: p.id,
-              name: (typeof p.name === 'string' && p.name.trim()) ? p.name : '未命名项目',
-              cwd: typeof p.cwd === 'string' ? p.cwd : '',
-              workspaceId: typeof p.workspaceId === 'string' ? p.workspaceId : '',
-              auto: !!p.auto,
-              approveTools: Array.isArray(p.approveTools) ? p.approveTools.filter(x => typeof x === 'string') : [],
-              cmdWhitelist: Array.isArray(p.cmdWhitelist) ? p.cmdWhitelist.filter(x => typeof x === 'string') : [],
-              planMode: !!p.planMode,
-              createdAt: Number(p.createdAt) || Date.now(),
-              lastUsedAt: Number(p.lastUsedAt) || Date.now(),
-            }))
-          : [];
-        if (!projects.length) {
-          // 迁移：用旧 agentCwd 创建默认项目，approveTools 留空保持原行为
-          projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
-            auto: false, approveTools: [], cmdWhitelist: [], planMode: false, createdAt: Date.now(), lastUsedAt: Date.now() }];
-        }
-        const firstPid = projects[0].id;
-        // 把无 projectId 的线程归到首个项目
-        for (const t of threads) { if (!t.projectId) t.projectId = firstPid; }
-        ns.projects = projects;
-        ns.activeProjectId = (parsed.activeProjectId && projects.some(p => p.id === parsed.activeProjectId))
-          ? parsed.activeProjectId : firstPid;
-        ns.agentProjectsCollapsed = !!parsed.agentProjectsCollapsed;
-        ns.agentSessionsCollapsed = !!parsed.agentSessionsCollapsed;
-        ns.agentThreads = threads;
-        // 激活线程：优先用已存在的 activeThreadId，否则取首个线程
-        const wantId = parsed.activeThreadId;
-        ns.activeThreadId = (wantId && threads.some(t => t.id === wantId))
-          ? wantId
-          : (threads[0] ? threads[0].id : null);
-        const oldProviders = ps.providers || {};
-        const newProviders = {};
-        for (const m of ['default', 'chat', 'image', 'doc']) {
-          const op = oldProviders[m] || {};
-          let accountId = (op.accountId !== undefined) ? op.accountId
-            : (op.useDefault === false ? '__custom__' : '__default__');
-          newProviders[m] = {
-            accountId: accountId || '__default__',
-            apiBase: op.apiBase || '', model: op.model || '',
-          };
-          // 旧版明文 Key 暂留一手，等启动时的 migrateSecrets() 搬进密钥库后会被删掉
-          if (op.apiKey) newProviders[m].apiKey = op.apiKey;
-        }
-        ns.settings.providers = newProviders;
-        // 旧版单配置：把默认 provider 升级为一个账户
-        if (oldFormat && oldProviders.default && oldProviders.default.apiBase) {
-          const acc = {
-            id: App.uid(), name: '默认账户',
-            apiBase: oldProviders.default.apiBase,
-            models: oldProviders.default.model ? [oldProviders.default.model] : [],
-          };
-          // 同上：明文 Key 只是过渡，migrateSecrets() 迁移成功后即从 state 移除
-          if (oldProviders.default.apiKey) acc.apiKey = oldProviders.default.apiKey;
-          ns.settings.accounts = [acc];
-          ns.settings.defaultAccountId = acc.id;
-          for (const m of ['default', 'chat', 'image', 'doc']) ns.settings.providers[m].accountId = '__default__';
-        }
-        App.state = ns;
-        App.persist();
-        if (oldFormat) { try { localStorage.removeItem(OLD_KEY); } catch (e) {} }
+        applyLoaded(raw, oldFormat);
         return;
       }
     } catch (e) { /* ignore */ }

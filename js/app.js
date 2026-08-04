@@ -85,7 +85,7 @@
       }
 
       // 1) 载入本地持久化的状态（含旧版迁移）
-      App.loadState();
+      await App.loadState();
 
       // 1.5) 密钥：先取回主进程已存的密钥引用，再把 1.0.5 及更早版本残留在
       //      state.json / localStorage 里的明文 API Key 搬进系统密钥库。

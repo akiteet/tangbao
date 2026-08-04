@@ -536,6 +536,21 @@ safeHandle('fs:writeState', async (e, jsonStr) => {
   }
 });
 
+// 读取应用状态文件（与端口无关，作为 localStorage 的权威回退源）
+safeHandle('fs:readState', async () => {
+  try {
+    const userData = app.getPath('userData');
+    const file = path.join(userData, 'tangbao-data', 'state.json');
+    // 安全检查：最终路径必须在 userData 子树内
+    if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
+    if (!fs.existsSync(file)) return { ok: true, data: null };
+    const data = fs.readFileSync(file, 'utf8');
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // 外部「强制嵌入」模块：用糖包子窗口打开（webview 视口锁死 + iframe/proxy subpage 404，嵌入均不可靠，子窗口是唯一全功能方案）
 const moduleWindows = new Map();
 safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {

@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electron', {
   openPath: (absPath) => ipcRenderer.invoke('shell:openPath', absPath),
   openChildWindow: (opts) => ipcRenderer.invoke('custom:openChildWindow', opts),
   saveStateJSON: (jsonStr) => ipcRenderer.invoke('fs:writeState', jsonStr),
+  // 读取磁盘 state.json（与端口无关，用于随机端口下稳定恢复数据）
+  loadStateJSON: () => ipcRenderer.invoke('fs:readState'),
   // 浮窗（系统级独立置顶小窗）
   openFloat: () => ipcRenderer.invoke('float:open'),
   closeFloat: () => ipcRenderer.invoke('float:close'),
