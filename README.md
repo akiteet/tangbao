@@ -11,11 +11,20 @@
 
 > 一个**纯前端 + 本地后端**的 AI 桌面应用，用 Electron 打造，零云服务依赖。接入你自己的 API Key，让对话、编码、绘图、文档分析都在本地完成。
 
+## Positioning · 产品定位
+
+**Tangbao (糖包)** is an all-in-one, local-first AI assistant desktop workstation. It brings chat, coding, image generation, document analysis, and custom agents into a single glassmorphism interface — your API keys never leave your machine.
+
+糖包是一个**本地优先、隐私安全**的全能 AI 助手桌面工作站。对话、编码、绘图、文档分析与自定义智能体统一收纳进一个玻璃拟态界面，密钥全程不出本机。
+
+- **Local-first & private** — API keys are encrypted in the OS keychain (Electron `safeStorage`) and resolved only in the main process; no plaintext ever sits in `state.json`. · 本地优先与隐私：密钥由操作系统密钥库加密保管，仅主进程解析，明文绝不落盘。
+- **Unified multi-account / multi-model** — manage OpenAI / 豆包 / 通义千问 / Claude / Gemini and any OpenAI-compatible endpoint under one roof. · 多账户、多模型统一管理。
+- **Six modules in one** — chat, coding (糖码), image (糖绘), document (糖读), agent (糖创), plus the 糖码 local backend. · 六大模块一站式。
+- **No framework, fast** — vanilla HTML/CSS/JS with a glassmorphism UI; highlight.js and PDF.js are vendored for offline use. · 无框架、启动如飞，核心依赖离线可用。
+
 ## 安装
 
-[**→ 下载最新安装包**](https://github.com/akiteet/tangbao/releases/latest)（`糖包-1.0.0-setup.exe`），双击安装即可。
-
-开发者从源码运行：
+[**→ 下载最新安装包**](https://github.com/akiteet/tangbao/releases/latest)（`tangbao-1.0.6-setup.exe`），双击安装即可。
 
 ## 五大模块
 
@@ -37,14 +46,14 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/GuJialu/tangbao.git
+git clone https://github.com/akiteet/tangbao.git
 cd tangbao
 npm install
 npm start            # 启动 Electron
 npm run server       # 启动糖码后端（编码助手需要）
 ```
 
-> **打包：** `npm run dist` → `dist/糖包-1.0.0-setup.exe`
+> **打包：** `npm run dist` → `dist/tangbao-1.0.6-setup.exe`
 
 ## 配置
 

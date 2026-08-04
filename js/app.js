@@ -2,8 +2,10 @@
 (function () {
   window.App = window.App || {};
 
-  function boot() {
+  async function boot() {
     try {
+      // 0) 先取本地服务端口与启动令牌：端口由系统随机分配，任何本地请求都依赖它
+      if (App.rt && App.rt.init) await App.rt.init();
       const params = new URLSearchParams(location.search);
       const floatMode = params.get('float') === 'chat';
 
@@ -59,8 +61,8 @@
             });
           }
         };
-        if (window.electron && window.electron.onFloatInit) {
-          window.electron.onFloatInit((raw) => {
+        if (App.rt && App.rt.onFloatInit) {
+          App.rt.onFloatInit((raw) => {
             try {
               // 复用 loadState 的迁移逻辑：先写回 localStorage 再 loadState
               localStorage.setItem('tangbao_web_state_v1', raw);
@@ -84,6 +86,27 @@
 
       // 1) 载入本地持久化的状态（含旧版迁移）
       App.loadState();
+
+      // 1.5) 密钥：先取回主进程已存的密钥引用，再把 1.0.5 及更早版本残留在
+      //      state.json / localStorage 里的明文 API Key 搬进系统密钥库。
+      //      浮窗共用主窗的数据且不落盘，迁移只在主窗做一次。
+      if (!floatMode && App.rt) {
+        if (App.rt.refreshSecrets) await App.rt.refreshSecrets();
+        if (App.rt.migrateSecrets) {
+          const moved = await App.rt.migrateSecrets();
+          // 迁移成功才会删明文；只要动过就立刻落盘，让 state.json 里不再留 Key
+          if (moved) {
+            console.log('[糖包] 已将 ' + moved + ' 个 API Key 迁入系统密钥库');
+            App.persist();
+          }
+        }
+        if (App.rt.secretsEncrypted === false) {
+          console.warn('[糖包] 当前系统不支持安全存储，API Key 以本地文件保存，请留意数据目录权限。');
+        }
+        // 把「密钥引用 → 接口地址」映射同步给主进程网关（persist 里也会调，这里保证首次启动就有）
+        if (App.rt.syncEndpoints) await App.rt.syncEndpoints();
+      }
+
       // 2) 应用外观（主题/强调色/圆角）
       App.ui.applyAppearance();
       // 3) 绑定全局 UI 事件（侧边栏 / 顶栏 / 设置弹窗）

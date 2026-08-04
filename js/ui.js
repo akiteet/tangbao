@@ -84,11 +84,8 @@
         openextBtn.textContent = '↗';
         openextBtn.title = '在浏览器打开';
         openextBtn.onclick = () => {
-          if (mod.url && window.electron) {
-            window.electron.openExternal(mod.url).then(r => {
-              if (!r || !r.ok) App.ui.toast((r && r.error) ? ('打开失败：' + r.error) : '打开失败');
-            });
-          }
+          const r = App.ui.openModuleExternal(mod.url);
+          if (r && r.then) r.then(res => { if (!res || !res.ok) App.ui.toast((res && res.error) ? ('打开失败：' + res.error) : '打开失败'); });
         };
         title.parentElement.appendChild(openextBtn); // 放在 title 后面
       }
@@ -240,6 +237,76 @@
       setTimeout(() => { t.classList.remove('show'); t.hidden = true; }, 2400);
     },
 
+    // 自定义输入弹窗（替代原生 prompt，兼容打包版沙箱）。返回 Promise<字符串|null>：确认返回 trim 后的值，取消/Esc/点遮罩返回 null。
+    promptModal(opts) {
+      const o = Object.assign(
+        { title: '输入', label: '', value: '', placeholder: '', confirmText: '确定', maxLength: 0, multiline: false },
+        opts || {}
+      );
+      return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.className = 'modal-mask';
+        const inputId = 'pmInput';
+        const inputHtml = o.multiline
+          ? `<textarea id="${inputId}" rows="4" placeholder="${App.escapeHtml(o.placeholder)}"></textarea>`
+          : `<input type="text" id="${inputId}" value="${App.escapeHtml(o.value)}" placeholder="${App.escapeHtml(o.placeholder)}" autocomplete="off" />`;
+        modal.innerHTML = `
+          <div class="modal" role="dialog" aria-modal="true" style="width:420px">
+            <div class="modal-header"><span>${App.escapeHtml(o.title)}</span>
+              <button class="icon-btn" id="pmClose" aria-label="关闭">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <label class="field"><span class="field-label">${App.escapeHtml(o.label)}</span>${inputHtml}</label>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-ghost" id="pmCancel">取消</button>
+              <button class="btn-primary" id="pmConfirm">${App.escapeHtml(o.confirmText)}</button>
+            </div>
+          </div>`;
+        document.body.appendChild(modal);
+        const input = modal.querySelector('#' + inputId);
+        if (o.maxLength > 0) input.maxLength = o.maxLength;
+        // 自动聚焦并全选
+        setTimeout(() => { input.focus(); if (!o.multiline) input.select(); }, 0);
+
+        let settled = false;
+        const finish = (val) => {
+          if (settled) return;
+          settled = true;
+          resolve(val);
+          modal.remove();
+        };
+        // 拦截外部移除（如全局 Esc 兜底 m.remove()），保证 Promise 必定落定
+        const origRemove = modal.remove.bind(modal);
+        modal.remove = () => { if (!settled) finish(null); else origRemove(); };
+        // 点遮罩空白处取消
+        modal.addEventListener('click', (e) => { if (e.target === modal) finish(null); });
+        modal.querySelector('#pmClose').onclick = () => finish(null);
+        modal.querySelector('#pmCancel').onclick = () => finish(null);
+        modal.querySelector('#pmConfirm').onclick = () => finish(input.value.trim());
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !o.multiline) { e.preventDefault(); finish(input.value.trim()); }
+          else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+        });
+      });
+    },
+
+    // 模块「在浏览器打开」：本地文件（file://）走 openPath 由系统关联程序打开；远程（http/https）走 openExternal。
+    // 返回 Promise（或 null），调用方可 .then 处理失败提示。
+    openModuleExternal(url) {
+      if (!url || !window.electron) return null;
+      let u;
+      try { u = new URL(url); } catch (_) { u = null; }
+      if (u && u.protocol === 'file:') {
+        let p = decodeURIComponent(u.pathname || '');
+        p = p.replace(/^\/([A-Za-z]:)/, '$1'); // /C:/x -> C:/x
+        return window.electron.openPath ? window.electron.openPath(p) : null;
+      }
+      return window.electron.openExternal ? window.electron.openExternal(url) : null;
+    },
+
     _convToMarkdown(conv) {
       let md = `# ${conv.title || '新对话'}\n\n`;
       for (const m of conv.messages) {
@@ -292,7 +359,8 @@
       if ($('pDocPoints')) { $('pDocPoints').value = (pr.doc && pr.doc.points) || ''; $('pDocPoints').placeholder = DP.doc.points; }
       if ($('pDocTranslate')) { $('pDocTranslate').value = (pr.doc && pr.doc.translate) || ''; $('pDocTranslate').placeholder = DP.doc.translate; }
       if ($('pDocOutline')) { $('pDocOutline').value = (pr.doc && pr.doc.outline) || ''; $('pDocOutline').placeholder = DP.doc.outline; }
-      if ($('searchKey')) $('searchKey').value = (App.state.settings.search && App.state.settings.search.apiKey) || '';
+      // 密钥不回填：明文只在主进程，这里只显示「有没有」
+      App.ui.markKeyField($('searchKey'), 'search', '留空则使用内置免费搜索');
       if ($('userMemory')) $('userMemory').value = (App.state.settings.userMemory || '');
       if ($('contextWindow')) $('contextWindow').value = (App.state.settings.contextWindow || 128000);
       {
@@ -317,6 +385,47 @@
       App.ui.renderAccentSwatches();
     },
 
+    /* ---------- API Key 输入框（1.0.6：明文只在主进程，前端不回填） ----------
+     * 密钥保存在系统密钥库里，渲染进程只知道某个 ref 有没有值。所以输入框：
+     *   已保存 → 空值 + 「已保存」占位符，留空提交表示「不修改」
+     *   未保存 → 原始占位符
+     */
+    markKeyField(el, ref, emptyPlaceholder) {
+      if (!el) return;
+      const saved = !!(App.rt && App.rt.hasSecret && App.rt.hasSecret(ref));
+      el.value = '';
+      el.placeholder = saved ? '已保存 · 留空不变，输入新 Key 可替换' : (emptyPlaceholder || '粘贴你的 API Key');
+      el.dataset.saved = saved ? '1' : '';
+    },
+
+    // 输入框有值才写入密钥库；写完清空输入框并刷新占位符。返回是否发生了写入。
+    async commitKeyField(el, ref, emptyPlaceholder) {
+      if (!el || !App.rt || !App.rt.setSecret) return false;
+      const v = (el.value || '').trim();
+      if (!v) return false;
+      const r = await App.rt.setSecret(ref, v);
+      if (!r || !r.ok) {
+        App.ui.toast('保存密钥失败：' + ((r && r.error) || '未知原因'));
+        return false;
+      }
+      App.ui.markKeyField(el, ref, emptyPlaceholder);
+      return true;
+    },
+
+    // 切换密码框可见性（眼睛按钮）：仅改 input.type，不影响密钥读取逻辑
+    toggleKeyEye(btn) {
+      if (!btn) return;
+      const id = btn.getAttribute('data-eye');
+      const inp = id && document.getElementById(id);
+      if (!inp) return;
+      const showing = inp.type === 'text';
+      inp.type = showing ? 'password' : 'text';
+      btn.classList.toggle('is-off', !showing);
+      const label = showing ? '显示' : '隐藏';
+      btn.title = label;
+      btn.setAttribute('aria-label', label + ' API Key');
+    },
+
     renderApiPanel(module) {
       App.ui._apiModule = module;
       const s = App.state.settings;
@@ -332,12 +441,12 @@
       if (cf) cf.hidden = cur !== '__custom__';
       if (cur === '__custom__') {
         $('apiBaseCur').value = prov.apiBase || '';
-        $('apiKeyCur').value = prov.apiKey || '';
         $('apiModelCur').value = prov.model || '';
+        App.ui.markKeyField($('apiKeyCur'), 'custom:' + module, '粘贴你的 API Key');
       }
     },
 
-    saveCurrentApiModule(module) {
+    async saveCurrentApiModule(module) {
       const m = module || (($('apiModuleSel') && $('apiModuleSel').value) || 'chat');
       const sel = $('apiAccountSel');
       const accountId = sel ? sel.value : '';
@@ -345,8 +454,9 @@
       const prov = { accountId };
       if (accountId === '__custom__') {
         prov.apiBase = $('apiBaseCur').value.trim();
-        prov.apiKey = $('apiKeyCur').value.trim();
         prov.model = $('apiModelCur').value.trim();
+        // Key 单独进密钥库，不写进 state
+        await App.ui.commitKeyField($('apiKeyCur'), 'custom:' + m, '粘贴你的 API Key');
       } else {
         prov.model = existing.model || '';
       }
@@ -365,8 +475,8 @@
       }).join('');
     },
 
-    saveSettings() {
-      App.ui.saveCurrentApiModule();
+    async saveSettings() {
+      await App.ui.saveCurrentApiModule();
       {
         const chips = document.querySelectorAll('#visionChipList .chip-tag');
         const models = Array.from(chips).map(c => c.dataset.vm || c.textContent.replace(/×$/, '').trim()).filter(Boolean);
@@ -391,7 +501,12 @@
         App.state.settings.accounts = [];
         App.state.settings.defaultAccountId = '';
         const modules = ['default', 'chat', 'agent', 'create', 'image', 'doc'];
-        modules.forEach(m => { App.state.settings.providers[m] = { accountId: '__default__', apiBase: '', apiKey: '', model: '' }; });
+        modules.forEach(m => { App.state.settings.providers[m] = { accountId: '__default__', apiBase: '', model: '' }; });
+        // 账户与模块配置清空了，密钥库里对应的 Key 也要一并删掉（联网搜索 Key 属于另一块设置，不动）
+        if (App.rt && App.rt.deleteSecretsByPrefix) {
+          App.rt.deleteSecretsByPrefix('acc:');
+          App.rt.deleteSecretsByPrefix('custom:');
+        }
         App.persist();
         App.ui.refreshSettingsUI();
         App.ui.syncModelSelect();
@@ -478,18 +593,20 @@
       if (id) {
         const a = App.state.settings.accounts.find(x => x.id === id);
         if (a) {
-          $('accName').value = a.name; $('accBase').value = a.apiBase; $('accKey').value = a.apiKey;
+          $('accName').value = a.name; $('accBase').value = a.apiBase;
+          App.ui.markKeyField($('accKey'), 'acc:' + id, '粘贴你的 API Key');
           App.ui.renderModelRows((a.models && a.models.length) ? a.models : (a.model ? [a.model] : []));
         }
       } else {
-        $('accName').value = ''; $('accBase').value = ''; $('accKey').value = '';
+        $('accName').value = ''; $('accBase').value = '';
+        App.ui.markKeyField($('accKey'), '__new__', '粘贴你的 API Key');
         App.ui.renderModelRows(['']);
       }
       form.hidden = false;
       $('accName').focus();
     },
 
-    saveAccount() {
+    async saveAccount() {
       const id = $('accountForm').dataset.edit || '';
       const name = $('accName').value.trim();
       const apiBase = $('accBase').value.trim();
@@ -505,16 +622,26 @@
         const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
         models.push({ name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt });
       });
-      if (!name || !apiBase || !apiKey) { App.ui.toast('请填写名称、API Base URL 和 Key'); return; }
+      // 编辑已有账户时 Key 允许留空，表示沿用密钥库里已保存的那把
+      const hasSaved = !!(id && App.rt && App.rt.hasSecret && App.rt.hasSecret('acc:' + id));
+      if (!name || !apiBase) { App.ui.toast('请填写名称和 API Base URL'); return; }
+      if (!apiKey && !hasSaved) { App.ui.toast('请填写 API Key'); return; }
       if (!models.length) { App.ui.toast('请至少填写一个模型名称'); return; }
       const s = App.state.settings;
+      let accId = id;
       if (id) {
         const a = s.accounts.find(x => x.id === id);
-        if (a) { Object.assign(a, { name, apiBase, apiKey, models }); delete a.model; }
+        if (a) { Object.assign(a, { name, apiBase, models }); delete a.model; delete a.apiKey; }
       } else {
-        const acc = { id: App.uid(), name, apiBase, apiKey, models };
+        const acc = { id: App.uid(), name, apiBase, models };
         s.accounts.push(acc);
+        accId = acc.id;
         if (!s.defaultAccountId) s.defaultAccountId = acc.id;
+      }
+      // Key 只进系统密钥库，账户对象里不再留明文
+      if (apiKey && App.rt && App.rt.setSecret) {
+        const r = await App.rt.setSecret('acc:' + accId, apiKey);
+        if (!r || !r.ok) App.ui.toast('密钥保存失败：' + ((r && r.error) || '未知原因'));
       }
       App.persist();
       App.ui.refreshSettingsUI();
@@ -525,7 +652,8 @@
         App.ui.toast('账户已保存');
       } else {
         // 新增：保持表单打开并清空，便于连续添加多个账户
-        $('accName').value = ''; $('accBase').value = ''; $('accKey').value = '';
+        $('accName').value = ''; $('accBase').value = '';
+        App.ui.markKeyField($('accKey'), '__new__', '粘贴你的 API Key');
         App.ui.renderModelRows(['']);
         $('accName').focus();
         App.ui.toast('已添加，可继续添加，或点“取消”收起');
@@ -535,6 +663,8 @@
     deleteAccount(id) {
       const s = App.state.settings;
       s.accounts = s.accounts.filter(a => a.id !== id);
+      // 账户没了，它的 Key 也不该继续留在系统密钥库里
+      if (App.rt && App.rt.deleteSecret) App.rt.deleteSecret('acc:' + id);
       if (s.defaultAccountId === id) s.defaultAccountId = s.accounts.length ? s.accounts[0].id : '';
       // 清理引用了被删账户的模块选择
       for (const m of ['default', 'chat', 'agent', 'create', 'image', 'doc']) {
@@ -560,10 +690,11 @@
       const av = $('userAvatar'); const nm = $('userName');
       if (nm) nm.textContent = name;
       if (av) {
-        if (avatar) {
+        const safeAvatar = (typeof App.safeUrl === 'function') ? App.safeUrl(avatar) : null;
+        if (safeAvatar) {
           av.classList.remove('user-initial');
           av.textContent = '';
-          av.innerHTML = `<img src="${avatar}" alt="头像" style="width:100%;height:100%;object-fit:cover;display:block;">`;
+          av.innerHTML = `<img src="${safeAvatar}" alt="头像" style="width:100%;height:100%;object-fit:cover;display:block;">`;
         } else {
           av.classList.add('user-initial');
           av.innerHTML = '';
@@ -787,12 +918,18 @@
         });
       });
 
-      // 联网搜索可选 Key（免 key 则用内置免费搜索）
+      // 联网搜索可选 Key（免 key 则用内置免费搜索）。
+      // 1.0.6 起 Key 存进系统密钥库，state 里不再留明文；输入框失焦（change）时提交，留空=不修改。
       const sk = $('searchKey');
-      if (sk) sk.addEventListener('input', () => {
-        App.state.settings.search = App.state.settings.search || {};
-        App.state.settings.search.apiKey = sk.value.trim();
-        App.persist();
+      if (sk) sk.addEventListener('change', async () => {
+        const ok = await App.ui.commitKeyField(sk, 'search', '留空则使用内置免费搜索');
+        if (ok) App.ui.toast('联网搜索 Key 已保存');
+      });
+      const skClear = $('searchKeyClear');
+      if (skClear) skClear.addEventListener('click', async () => {
+        if (App.rt && App.rt.deleteSecret) await App.rt.deleteSecret('search');
+        App.ui.markKeyField(sk, 'search', '留空则使用内置免费搜索');
+        App.ui.toast('已清除，联网搜索回落到内置免费搜索');
       });
 
       const seg = $('themeSeg');
@@ -897,11 +1034,10 @@
           const open = e.target.closest('[data-open]');
           if (open) {
             const m = (App.state.settings.customModules || []).find(x => x.id === open.dataset.open);
-            if (m && m.url && window.electron) {
-              window.electron.openExternal(m.url).then(r => {
-                if (!r || !r.ok) App.ui.toast((r && r.error) ? ('打开失败：' + r.error) : '打开失败');
-              });
-            } else if (m && m.url) {
+            if (m && m.url) {
+              const r = App.ui.openModuleExternal(m.url);
+              if (r && r.then) r.then(res => { if (!res || !res.ok) App.ui.toast((res && res.error) ? ('打开失败：' + res.error) : '打开失败'); });
+            } else {
               App.ui.toast('打开失败');
             }
             return;
@@ -1034,9 +1170,10 @@
         document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
       });
       const apiModuleSel = $('apiModuleSel');
-      if (apiModuleSel) apiModuleSel.addEventListener('change', () => {
+      if (apiModuleSel) apiModuleSel.addEventListener('change', async () => {
         const prev = App.ui._apiModule || 'chat';
-        App.ui.saveCurrentApiModule(prev);
+        // 必须等上一个模块的 Key 落库后再切面板，否则会把旧模块的保存状态写到新面板上
+        await App.ui.saveCurrentApiModule(prev);
         App.ui.renderApiPanel(apiModuleSel.value);
       });
       const apiAccountSel = $('apiAccountSel');
@@ -1101,4 +1238,12 @@
       App.ui.renderUser();
     },
   };
+
+  // 绑定所有密码框的眼睛切换按钮（静态元素，一次性绑定）
+  function bindKeyEyes() {
+    document.querySelectorAll('.key-eye').forEach(btn => {
+      btn.addEventListener('click', () => App.ui.toggleKeyEye(btn));
+    });
+  }
+  bindKeyEyes();
 })();

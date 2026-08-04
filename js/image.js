@@ -236,7 +236,7 @@
       if (!prompt) { App.ui.toast('请输入画面描述'); return; }
       const p = App.getProvider('image');
       const status = $('imgStatus');
-      if (!p.apiBase || !p.apiKey || !p.model) {
+      if (!p.ref || !p.hasKey || !p.model) {
         if (status) status.innerHTML = '<span class="warn">尚未配置图像 API。请点击左下角齿轮 → 在"图像"标签或"默认"标签填写信息。</span>';
         return;
       }
@@ -257,29 +257,24 @@
       App.image.renderSkeleton(n);
 
       try {
-        const proxyBase = 'http://localhost:' + (location.port || 4280) + '/api-proxy';
         let res, data;
         if (refImg) {
           // 图片编辑：用 chat completions vision 格式
-          const url = p.apiBase.replace(/\/+$/, '') + '/chat/completions';
           const content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: refImg } }];
-          res = await fetch(proxyBase, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-target-url': url, 'x-auth': 'Bearer ' + p.apiKey },
-            body: JSON.stringify({ model: p.model, messages: [{ role: 'user', content }], stream: false }),
+          res = await App.rt.gatewayFetch({
+            ref: p.ref, kind: 'chat',
+            payload: { model: p.model, messages: [{ role: 'user', content }], stream: false },
           });
         } else {
           // 文生图：标准 images/generations
-          const url = p.apiBase.replace(/\/+$/, '') + '/images/generations';
-          res = await fetch(proxyBase, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-target-url': url, 'x-auth': 'Bearer ' + p.apiKey },
-            body: JSON.stringify({ model: p.model, prompt: finalPrompt, n, size, response_format: 'b64_json' }),
+          res = await App.rt.gatewayFetch({
+            ref: p.ref, kind: 'images',
+            payload: { model: p.model, prompt: finalPrompt, n, size, response_format: 'b64_json' },
           });
         }
         if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          if (status) status.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(txt.slice(0, 200))}</span>`;
+          const txt = await App.rt.gatewayError(res);
+          if (status) status.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
           App.image.renderGrid(App.image.results, App.image.lastPrompt);
           return;
         }

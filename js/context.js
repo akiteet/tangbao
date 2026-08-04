@@ -8,7 +8,6 @@
   window.App = window.App || {};
   App.context = App.context || {};
 
-  const PROXY_PORT = location.port || 4280;
 
   // 混合中英文回退估算：CJK 约 1.6 token/字，其余约 0.3 token/字符（仅在真实分词器不可用时使用）
   function heuristicTokens(text) {
@@ -73,11 +72,6 @@
     return text.slice(0, chars).replace(/\s+$/, '');
   }
 
-  function targetUrl(provider) {
-    const base = String(provider.apiBase || '').replace(/\/+$/, '');
-    return /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
-  }
-
   function messagesToText(msgs) {
     return (msgs || []).map(m => {
       let body = m.content;
@@ -88,14 +82,11 @@
 
   async function callSummary(messages, provider) {
     try {
-      const r = await fetch('http://localhost:' + PROXY_PORT + '/api-proxy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-target-url': targetUrl(provider),
-          'x-auth': 'Bearer ' + (provider.apiKey || ''),
-        },
-        body: JSON.stringify({ model: provider.model, stream: false, messages }),
+      // 摘要同样走主进程模型网关，前端不接触密钥与目标地址
+      const r = await App.rt.gatewayFetch({
+        ref: provider.ref,
+        kind: 'chat',
+        payload: { model: provider.model, stream: false, messages },
       });
       if (!r.ok) return null;
       const j = await r.json().catch(() => null);
@@ -106,7 +97,7 @@
 
   // 增量合并：把已有摘要 + 新“中间段”压成一份新摘要（不重算全部历史）
   App.context.summarizeDelta = async function (existingSummary, middleMsgs, provider) {
-    if (!provider || !provider.apiKey || !provider.model) return existingSummary || null;
+    if (!provider || !provider.ref || !provider.hasKey || !provider.model) return existingSummary || null;
     const userText = (existingSummary
       ? '【已有摘要，请在其基础上更新/合并，不要重复已有内容】\n' + existingSummary + '\n\n【新增对话（请并入上述摘要）】\n'
       : '') + messagesToText(middleMsgs);
@@ -119,7 +110,7 @@
 
   // 整段压缩（供 /compact），focus 可选、做定向保留
   App.context.summarizeFull = async function (historyMsgs, focus, provider) {
-    if (!provider || !provider.apiKey || !provider.model) return null;
+    if (!provider || !provider.ref || !provider.hasKey || !provider.model) return null;
     const sys = COMPACT_SYS + (focus ? '\n\n用户额外要求：本次压缩请重点保留以下内容——' + focus : '');
     const summary = await callSummary([
       { role: 'system', content: sys },
@@ -326,7 +317,7 @@
   // versionCheck：回调时检测版本号是否匹配，避免快速连发时旧压缩覆盖新状态。
   App.context.compressAsync = async function (existingSummary, middleMsgs, provider, window, versionCheck) {
     if (!middleMsgs || !middleMsgs.length) return existingSummary || null;
-    if (!provider || !provider.apiKey || !provider.model) return existingSummary || null;
+    if (!provider || !provider.ref || !provider.hasKey || !provider.model) return existingSummary || null;
     try {
       const result = await summarizeChunked(existingSummary || '', middleMsgs, provider, window || 128000);
       // 若版本号变化（新消息已在压缩期间被处理），丢弃本次结果

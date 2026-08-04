@@ -832,7 +832,7 @@
 
     async runWorkflow(wf) {
       const s = App.getProvider('chat');
-      if (!s.apiBase || !s.apiKey || !s.model) { App.ui.toast('请先在设置里配置聊天 API'); return; }
+      if (!s.ref || !s.hasKey || !s.model) { App.ui.toast('请先在设置里配置聊天 API'); return; }
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.id = 'wfRunMask';
@@ -860,8 +860,6 @@
 
       const steps = (wf.steps || []).filter(st => (st.prompt || '').trim());
       if (!steps.length) { runBox.innerHTML = '<div class="wf-step-out">工作流没有有效步骤。</div>'; return; }
-      const base = s.apiBase.replace(/\/+$/, '');
-      const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
       const results = [];
       let prev = '';
       for (let i = 0; i < steps.length; i++) {
@@ -873,15 +871,14 @@
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 60000);
         try {
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.apiKey },
-            body: JSON.stringify({ model: s.model, messages: [{ role: 'user', content: promptText }], stream: false }),
+          const res = await App.rt.gatewayFetch({
+            ref: s.ref, kind: 'chat',
+            payload: { model: s.model, messages: [{ role: 'user', content: promptText }], stream: false },
             signal: ctrl.signal,
           });
           if (!res.ok) {
-            const txt = await res.text().catch(() => '');
-            statusEl.innerHTML = `<span class="error">失败（${res.status}）：${esc(txt.slice(0, 120))}</span>`;
+            const txt = await App.rt.gatewayError(res);
+            statusEl.innerHTML = `<span class="error">失败（${res.status}）：${esc(String(txt).slice(0, 120))}</span>`;
             prev = ''; continue;
           }
           const data = await res.json();

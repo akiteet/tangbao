@@ -25,9 +25,15 @@
       document.querySelectorAll('.nav-item').forEach(n => {
         n.classList.toggle('active', n.dataset.module === module);
       });
-      // 上下文条仅在聊天/糖码显示（其他模块无对话累积）
+      // 上下文条 / 浮窗控制按钮（⤢ ◐ 📌 ✕）仅在本体「糖包·聊天」模块显示；
+      // 糖码/糖绘/糖读/糖创/自定义等模块无聊天累积，也不应出现浮窗入口。
       const ctxBar = $('chatCtxBar');
-      if (ctxBar) ctxBar.style.display = (module === 'chat' || module === 'agent') ? '' : 'none';
+      if (ctxBar) ctxBar.style.display = (module === 'chat') ? '' : 'none';
+      const isTangbao = module === 'chat';
+      ['floatBtn', 'floatOpacity', 'floatPin', 'floatClose'].forEach(id => {
+        const el = $(id);
+        if (el) el.style.display = isTangbao ? '' : 'none';
+      });
       if (isCustom) {
         App.modules.renderCustom(module);
       } else if (App[module] && typeof App[module].onShow === 'function') {

@@ -4,7 +4,10 @@
 
   const $ = (id) => document.getElementById(id);
 
-  const AGENT_BASE = 'http://localhost:3000';
+  // 糖码后端地址：主进程用随机端口 + 仅 127.0.0.1 启动，端口在运行时才确定，不能写死
+  const agentBase = () => (App.rt ? App.rt.agentBase() : '');
+  // 本地服务请求统一带启动令牌
+  const authHeaders = (extra) => (App.rt ? App.rt.authHeaders(extra) : (extra || {}));
   const MAX_THREAD_HISTORY = 60; // 单线程历史硬上限（超出裁剪，摘要偏移同步前移）
 
   App.agent = {
@@ -30,7 +33,7 @@
     },
     createProject(persist) {
       const p = {
-        id: App.uid(), name: '新项目', cwd: '', auto: false,
+        id: App.uid(), name: '新项目', cwd: '', workspaceId: '', auto: false,
         approveTools: ['write_file', 'edit_file'], cmdWhitelist: [],
         planMode: false,
         createdAt: Date.now(), lastUsedAt: Date.now(),
@@ -156,10 +159,14 @@
       if (browse) browse.onclick = async () => {
         try {
           const dir = await window.electron.showDirDialog();
-          if (dir) modal.querySelector('#projCwd').value = dir;
+          // M7（#253）：对话框在主进程登记并返回对象 { ok, workspaceId, cwd, name }
+          if (dir && dir.ok && dir.cwd) {
+            modal.querySelector('#projCwd').value = dir.cwd;
+            p.workspaceId = dir.workspaceId || '';
+          }
         } catch (e) {}
       };
-      modal.querySelector('#projSave').onclick = () => {
+      modal.querySelector('#projSave').onclick = async () => {
         p.name = (modal.querySelector('#projName').value || '').trim() || '未命名项目';
         p.cwd = (modal.querySelector('#projCwd').value || '').trim();
         p.auto = !!modal.querySelector('#projAuto').checked;
@@ -167,6 +174,15 @@
         p.approveTools = Array.from(modal.querySelectorAll('input[data-tool]:checked')).map(c => c.dataset.tool);
         p.cmdWhitelist = (modal.querySelector('#projWhitelist').value || '')
           .split('\n').map(s => s.trim()).filter(Boolean);
+        // M7（#253）：把工作目录交主进程校验+登记，换回不透明 workspaceId（只回 id，不回路径）
+        if (p.cwd && window.electron && window.electron.registerWorkspace) {
+          try {
+            const r = await window.electron.registerWorkspace(p.cwd, p.name);
+            if (r && r.ok) p.workspaceId = r.workspaceId; else p.workspaceId = '';
+          } catch (e) { p.workspaceId = ''; }
+        } else {
+          p.workspaceId = '';
+        }
         App.persist();
         close();
         App.agent.render();
@@ -280,7 +296,7 @@
               <strong>后端未运行</strong>
               <p>糖码需要一个本地后端来执行命令与文件操作。请在终端运行：</p>
               <pre>node server/agent-server.js</pre>
-              <p class="hint">默认地址 <code>${AGENT_BASE}</code>。启动后再点「测试连接」。</p>
+              <p class="hint">桌面版会自动拉起后端（本机随机端口，仅本机可访问）。启动后再点「测试连接」。</p>
             </div>
             <div class="agent-thread" id="agentThread"></div>
             <div class="agent-composer">
@@ -515,7 +531,7 @@
       const status = document.getElementById('agentStatus');
       const offline = document.getElementById('agentOffline');
       try {
-        const res = await fetch(AGENT_BASE + '/api/health', { cache: 'no-store' });
+        const res = await fetch(agentBase() + '/api/health', { cache: 'no-store', headers: authHeaders() });
         const j = await res.json().catch(() => ({}));
         if (j.ok) {
           status.textContent = '已连接'; status.className = 'agent-status on';
@@ -612,8 +628,8 @@
           const st = block.querySelector('.agent-tool-status');
           if (st) st.textContent = approved ? '已批准，执行中…' : '已拒绝';
           try {
-            await fetch(AGENT_BASE + '/api/agent/approve', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
+            await fetch(agentBase() + '/api/agent/approve', {
+              method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ callId, approved }),
             });
           } catch (e) {}
@@ -774,7 +790,7 @@
         return;
       }
       const p = App.getProvider('chat');
-      if (!p.apiBase || !p.apiKey || !p.model) {
+      if (!p.ref || !p.hasKey || !p.model) {
         App.ui.toast('请先在设置配置聊天 API（糖码复用聊天账户）');
         return;
       }
@@ -782,6 +798,14 @@
       const model = modelSel ? modelSel.value : p.model;
       const proj = App.agent.activeProject();
       const cwd = proj.cwd || '';
+      // M7（#253）：优先用不透明 workspaceId；缺失但有 cwd 时惰性登记并持久化，使旧项目自动迁移
+      let workspaceId = proj.workspaceId || '';
+      if (!workspaceId && cwd && window.electron && window.electron.registerWorkspace) {
+        try {
+          const r = await window.electron.registerWorkspace(cwd, proj.name);
+          if (r && r.ok) { workspaceId = r.workspaceId; proj.workspaceId = workspaceId; App.persist(); }
+        } catch (_) {}
+      }
       const auto = !!proj.auto;
       const planMode = !!proj.planMode;
       const approveTools = proj.approveTools || [];
@@ -843,15 +867,15 @@
 
       const ctrl = new AbortController();
       App.agent._ctrl = ctrl;
-      const searchApiKey = (App.state.settings.search && App.state.settings.search.apiKey) || '';
 
       try {
-        const res = await fetch(AGENT_BASE + '/api/agent', {
+        // 只发密钥引用；接口地址与 Key（含联网搜索 Key）都由后端从主进程密钥库取
+        const res = await fetch(agentBase() + '/api/agent', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
           signal: ctrl.signal,
           body: JSON.stringify({
-            prompt, cwd, apiBase: p.apiBase, apiKey: p.apiKey, model, auto, planMode, history, searchApiKey,
+            prompt, cwd, workspaceId, ref: p.ref, model, auto, planMode, history,
             approveTools, cmdWhitelist,
             summary: thread.summary || '',
             userMemory: (App.state.settings.userMemory || ''),
@@ -972,7 +996,7 @@
       const thread = App.agent.activeThread();
       if (!thread || !thread.history.length) { App.ui.toast('当前没有可压缩的对话'); return; }
       const p = App.getProvider('chat');
-      if (!p.apiBase || !p.apiKey || !p.model) { App.ui.toast('请先配置聊天 API'); return; }
+      if (!p.ref || !p.hasKey || !p.model) { App.ui.toast('请先配置聊天 API'); return; }
       App.ui.toast('正在压缩上下文…');
       const allMsgs = thread.history.map(h => ({ role: h.role, content: h.content }));
       const summary = await App.context.summarizeFull(allMsgs, focus || '', p);
@@ -1064,10 +1088,18 @@
       const proj = App.agent.activeProject();
       const cwd = proj.cwd || '';
       if (!cwd) { App.ui.toast('请先在项目设置中指定工作目录'); return; }
+      // M7（#253）：优先用不透明 workspaceId；缺失时惰性登记，与 send() 行为一致
+      let workspaceId = proj.workspaceId || '';
+      if (!workspaceId && window.electron && window.electron.registerWorkspace) {
+        try {
+          const r = await window.electron.registerWorkspace(cwd, proj.name);
+          if (r && r.ok) { workspaceId = r.workspaceId; proj.workspaceId = workspaceId; App.persist(); }
+        } catch (_) {}
+      }
       const file = '糖码记忆.md';
       let content = '';
       try {
-        const r = await fetch(AGENT_BASE + '/api/memory?cwd=' + encodeURIComponent(cwd) + '&file=' + encodeURIComponent(file), { cache: 'no-store' });
+        const r = await fetch(agentBase() + '/api/memory?cwd=' + encodeURIComponent(cwd) + '&workspaceId=' + encodeURIComponent(workspaceId) + '&file=' + encodeURIComponent(file), { cache: 'no-store', headers: authHeaders() });
         const j = await r.json().catch(() => ({}));
         content = (j && j.ok) ? (j.content || '') : '';
       } catch (e) { content = ''; }
@@ -1095,10 +1127,10 @@
         const txt = modal.querySelector('#memContent').value;
         const btn = modal.querySelector('#memSave'); btn.disabled = true; btn.textContent = '保存中…';
         try {
-          const r = await fetch(AGENT_BASE + '/api/memory', {
+          const r = await fetch(agentBase() + '/api/memory', {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cwd, file, content: txt }),
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ cwd, workspaceId, file, content: txt }),
           });
           const j = await r.json().catch(() => ({}));
           if (j && j.ok) App.ui.toast('项目记忆已保存');

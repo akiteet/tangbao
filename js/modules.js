@@ -14,7 +14,7 @@
 
   // 把用户填写的「网址」归一化为可加载的 URL。
   // 关键点：本地文件最容易被填成 Windows 绝对路径（C:\...）或 Unix 路径（/...），
-  // 若不处理，iframe/webview 会把它当成相对地址 http://localhost:4280/C:\... 而加载失败（显示不全/拒绝连接）。
+  // 若不处理，iframe/webview 会把它当成相对地址 http://127.0.0.1:<随机端口>/C:\... 而加载失败（显示不全/拒绝连接）。
   function normalizeUrl(raw) {
     if (!raw) return raw;
     let s = String(raw).trim();
@@ -26,23 +26,21 @@
     return 'file:///' + s.replace(/\\/g, '/').replace(/^\.\//, '');
   }
 
-  // 把 file:// 绝对路径转成「经本地 HTTP 服务提供的同源 URL」，规避 file:// 的 CORS 限制。
-  // 例如 file:///C:/a/b.html -> http://localhost:4280/__local/C%3A%2Fa%2Fb.html
-  // 这样本地 HTML 内的 ES Module(type=module) / fetch / 相对资源都能在同源 http 下正常加载，整屏渲染。
-  // 注意：file:/// 有「三」个斜杠（file: + // + /C:），必须用 URL API 取 pathname 再去掉前导斜杠，
-  // 不能简单 replace(/^file:\/\//)（那只去两个斜杠，会残留前导 "/" 导致路径错乱 → 404）。
-  function fileUrlToLocalHttp(fileUrl) {
-    const u = new URL(String(fileUrl || ''));
-    let p = u.pathname || ''; // file:///C:/a/b.html -> /C:/a/b.html
-    if (p.startsWith('/')) p = p.slice(1); // 去掉前导斜杠 -> C:/a/b.html（避免 /C: 被当成根路径）
-    // 关键：按「路径段」逐段编码，保留 / 作为分隔符。
-    // 若整体 encodeURIComponent，/ 会变成 %2F 被浏览器当成单一段，
-    // 导致页面内相对资源 style.css 解析成 /__local/style.css（丢失 C:/a/ 部分）而 400 → CSS/JS 没加载 →
-    // 本地页无样式、全屏 .overlay 覆盖层盖住正文（"下面被挡"）。
-    // 逐段编码后：C:/a/b.html -> C%3A/a/b.html，相对 style.css -> C%3A/a/style.css，服务端可正确还原。
-    const seg = p.split('/').map(s => encodeURIComponent(s)).join('/');
-    const origin = (window.location && window.location.origin) || 'http://localhost:4280';
-    return origin + '/__local/' + seg;
+  // M5（#254）：把本地 file:// 绝对路径交给主进程登记，换回不透明 fileId，
+  // 再用 tangbao-file://<fileId> 加载——URL 不含真实路径，避免「任意路径可读」暴露面。
+  // 例如 file:///C:/a/b.html -> tangbao-file://<uuid>（主进程按 fileId 回磁盘文件）
+  async function fileUrlToTangbao(fileUrl) {
+    try {
+      const u = new URL(String(fileUrl || ''));
+      let p = u.pathname || '';          // file:///C:/a/b.html -> /C:/a/b.html
+      if (p.startsWith('/')) p = p.slice(1); // 去掉前导斜杠 -> C:/a/b.html（避免 /C: 被当成根路径）
+      const absPath = p;                 // URL pathname 已解码，可直接作绝对路径
+      if (window.electron && window.electron.registerLocalFile) {
+        const r = await window.electron.registerLocalFile(absPath);
+        if (r && r.ok && r.fileId) return 'tangbao-file://' + r.fileId;
+      }
+    } catch (e) { console.error('[糖包] 注册本地文件失败：', e); }
+    return 'about:blank';
   }
 
   // 自定义模块 iframe/webview 缓存：按模块 id 复用同一 DOM 节点，切换时只切换显示，避免每次重载整页
@@ -104,7 +102,7 @@
         </div>`).join('');
     },
 
-    renderCustom(id) {
+    async renderCustom(id) {
       const m = App.modules.getById(id);
       const wrap = document.getElementById('customView');
       if (!wrap || !m) return;
@@ -112,14 +110,14 @@
       let status = wrap.querySelector('.cv-status');
       if (!status) { status = document.createElement('div'); status.className = 'cv-status'; wrap.appendChild(status); }
       status.style.display = 'none';
-      // 本地文件（file://）经同源 /__local/ 用 iframe 渲染（自动正确定高）。
+      // 本地文件（file://）经 tangbao-file://<fileId> 用 iframe 渲染（自动正确定高，URL 不含真实路径）。
       // 远程「强制嵌入」：用糖包子窗口打开（webview 视口锁死 + iframe subpage 404，嵌入均不完整，
       //   子窗口是唯一同时保证视口正确 + 导航可用的方案；主视图显示提示）。
       // 注：webview 创建段保留为死代码备查。
       const isFile = /^file:/i.test(m.url || '');
       const useWebview = false;
       let src, isExternalChild = false;
-      if (isFile) src = fileUrlToLocalHttp(m.url);                           // 本地文件：同源 /__local/
+      if (isFile) src = await fileUrlToTangbao(m.url);                       // 本地文件：tangbao-file://<fileId>
       else if (m.forceEmbed) {
         // 在糖包子窗口打开（完整功能：全视口 + 原生导航 + 登录态）
         if (window.electron && window.electron.openChildWindow) {
@@ -135,8 +133,8 @@
         if (useWebview) {
           // 远程「强制嵌入」：用 <webview> 取代 <iframe>。
           // webview 是独立浏览器实例，不受对方 X-Frame-Options / CSP:frame-ancestors 限制，
-          // cookie 与 JS 原生运行、弹窗可控，比服务端 /proxy 更适合广告/JS 重度站（如影视站）。
-          // （本地文件已改走同源 /__local/ 的 iframe，无需 webview。）
+          // cookie 与 JS 原生运行、弹窗可控，比已删除的服务端反代更适合广告/JS 重度站（如影视站）。
+          // （本地文件已改走 tangbao-file:// 的 iframe，无需 webview。）
           const wv = document.createElement('webview');
           wv.className = 'cv-webview';
           wv.style.top = '0px'; // webview 始终贴顶、整屏（诊断条已改底部角标，不预留空间）

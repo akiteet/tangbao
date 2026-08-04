@@ -9,16 +9,18 @@
     theme: 'light',
     view: 'chat',
     settings: {
-      accounts: [],             // [{ id, name, apiBase, apiKey, models:[] }]
+      // 1.0.6 起 API Key 不再进 state：账户只存 { id, name, apiBase, models }，
+      // 密钥由主进程 safeStorage 保管，这里只用 ref（acc:<id> / custom:<module> / search）指代。
+      accounts: [],             // [{ id, name, apiBase, models:[] }]
       defaultAccountId: '',      // 默认账户 id
       profile: { name: '糖包用户', avatar: '' },
       providers: {
-        default: { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
-        chat:    { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
-        agent:   { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
-        create:  { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
-        image:   { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
-        doc:     { accountId: '__default__', apiBase: '', apiKey: '', model: '' },
+        default: { accountId: '__default__', apiBase: '', model: '' },
+        chat:    { accountId: '__default__', apiBase: '', model: '' },
+        agent:   { accountId: '__default__', apiBase: '', model: '' },
+        create:  { accountId: '__default__', apiBase: '', model: '' },
+        image:   { accountId: '__default__', apiBase: '', model: '' },
+        doc:     { accountId: '__default__', apiBase: '', model: '' },
       },
       agents: [],
       agentUsage: {},            // { [agentId]: number } 智能体使用次数（覆盖预设+自定义）
@@ -35,14 +37,14 @@
       appearance: { mode: 'system', accent: '', radius: '' }, // 外观主题：mode=light|dark|system
       enabledModules: ['chat', 'image', 'doc', 'create', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
-      search: { apiKey: '' },    // 联网搜索可选 Key（留空用内置免费搜索）
+      search: {},                // 联网搜索配置；Key 存在密钥库的 'search' 引用下，不落 state
       userMemory: '',         // 用户级长期记忆（对标 CLAUDE.md 用户级），注入糖码 system prompt
       contextWindow: 128000,  // 模型上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
       visionModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'], // 视觉模型白名单
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
     activeThreadId: null,        // 当前激活的糖码会话线程 id
-    projects: [],                // 糖码项目：[{ id, name, cwd, auto, approveTools:[], cmdWhitelist:[], planMode, createdAt, lastUsedAt }]
+    projects: [],                // 糖码项目：[{ id, name, cwd, workspaceId, auto, approveTools:[], cmdWhitelist:[], planMode, createdAt, lastUsedAt }]
     activeProjectId: null,       // 当前激活的糖码项目 id
     agentProjectsCollapsed: false, // 糖码项目侧栏是否折叠
     agentSessionsCollapsed: false, // 糖码会话侧栏是否折叠
@@ -65,13 +67,20 @@
     },
   };
 
-  // 解析某模块最终使用的 Base/Key/Model（model=当前激活模型，models=可选模型列表）
+  // 解析某模块最终使用的 Base/Model/密钥引用
+  //   model  = 当前激活模型，models = 可选模型列表
+  //   ref    = 密钥引用（acc:<id> / custom:<module>），实际密钥只在主进程里
+  //   hasKey = 该引用在系统密钥库里是否已保存密钥（用于「有没有配好」的判断）
+  // 1.0.6 起不再返回 apiKey —— 渲染进程拿不到明文，模型请求一律走 App.rt.gatewayFetch。
+  const hasKey = (ref) => !!(ref && App.rt && App.rt.hasSecret(ref));
+
   App.getProvider = function (module) {
     const s = App.state.settings;
     const sel = (s.providers && s.providers[module]) || s.providers.default;
     if (sel.accountId === '__custom__') {
       const cm = sel.model || '';
-      return { apiBase: sel.apiBase || '', apiKey: sel.apiKey || '', model: cm, models: cm ? [cm] : [] };
+      const ref = 'custom:' + module;
+      return { apiBase: sel.apiBase || '', ref, hasKey: hasKey(ref), model: cm, models: cm ? [cm] : [] };
     }
     let aid = (module === 'default') ? sel.accountId
       : (sel.accountId || (s.providers.default && s.providers.default.accountId) || s.defaultAccountId);
@@ -84,10 +93,11 @@
         const modelNames = models.map(x => (typeof x === 'string') ? x : (x && x.name ? x.name : '')).filter(Boolean);
         // 优先用 provider.model 中显式选中的；若不在本账户模型列表则回退首个
         const active = (sel.model && modelNames.includes(sel.model)) ? sel.model : (modelNames[0] || '');
-        return { apiBase: acc.apiBase || '', apiKey: acc.apiKey || '', model: active, models: modelNames };
+        const ref = 'acc:' + acc.id;
+        return { apiBase: acc.apiBase || '', ref, hasKey: hasKey(ref), model: active, models: modelNames };
       }
     }
-    return { apiBase: '', apiKey: '', model: '', models: [] };
+    return { apiBase: '', ref: '', hasKey: false, model: '', models: [] };
   };
 
   // 判断模型的深度思考参数类型：返回 'qwen' | 'doubao' | 'openai' | null
@@ -223,10 +233,12 @@
         ns.settings.customModules = Array.isArray(ps.customModules)
           ? ps.customModules.filter(m => m && m.id && m.label && m.url).map(m => ({ id: m.id, label: String(m.label), url: String(m.url), forceEmbed: !!m.forceEmbed, hidden: !!m.hidden }))
           : [];
-        // 联网搜索可选 Key
-        ns.settings.search = (ps.search && typeof ps.search === 'object')
-          ? { apiKey: typeof ps.search.apiKey === 'string' ? ps.search.apiKey : '' }
-          : { apiKey: '' };
+        // 联网搜索：1.0.6 起 Key 存密钥库。这里只在读到旧版明文时临时保留，
+        // 交给启动时的 App.rt.migrateSecrets() 搬进密钥库并删除。
+        ns.settings.search = {};
+        if (ps.search && typeof ps.search === 'object' && typeof ps.search.apiKey === 'string' && ps.search.apiKey) {
+          ns.settings.search.apiKey = ps.search.apiKey;
+        }
         // 用户级长期记忆（CLAUDE.md 用户级对标）
         ns.settings.userMemory = (typeof ps.userMemory === 'string') ? ps.userMemory : '';
         // 上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
@@ -271,6 +283,7 @@
               id: p.id,
               name: (typeof p.name === 'string' && p.name.trim()) ? p.name : '未命名项目',
               cwd: typeof p.cwd === 'string' ? p.cwd : '',
+              workspaceId: typeof p.workspaceId === 'string' ? p.workspaceId : '',
               auto: !!p.auto,
               approveTools: Array.isArray(p.approveTools) ? p.approveTools.filter(x => typeof x === 'string') : [],
               cmdWhitelist: Array.isArray(p.cmdWhitelist) ? p.cmdWhitelist.filter(x => typeof x === 'string') : [],
@@ -281,7 +294,7 @@
           : [];
         if (!projects.length) {
           // 迁移：用旧 agentCwd 创建默认项目，approveTools 留空保持原行为
-          projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''),
+          projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
             auto: false, approveTools: [], cmdWhitelist: [], planMode: false, createdAt: Date.now(), lastUsedAt: Date.now() }];
         }
         const firstPid = projects[0].id;
@@ -306,8 +319,10 @@
             : (op.useDefault === false ? '__custom__' : '__default__');
           newProviders[m] = {
             accountId: accountId || '__default__',
-            apiBase: op.apiBase || '', apiKey: op.apiKey || '', model: op.model || '',
+            apiBase: op.apiBase || '', model: op.model || '',
           };
+          // 旧版明文 Key 暂留一手，等启动时的 migrateSecrets() 搬进密钥库后会被删掉
+          if (op.apiKey) newProviders[m].apiKey = op.apiKey;
         }
         ns.settings.providers = newProviders;
         // 旧版单配置：把默认 provider 升级为一个账户
@@ -315,9 +330,10 @@
           const acc = {
             id: App.uid(), name: '默认账户',
             apiBase: oldProviders.default.apiBase,
-            apiKey: oldProviders.default.apiKey,
             models: oldProviders.default.model ? [oldProviders.default.model] : [],
           };
+          // 同上：明文 Key 只是过渡，migrateSecrets() 迁移成功后即从 state 移除
+          if (oldProviders.default.apiKey) acc.apiKey = oldProviders.default.apiKey;
           ns.settings.accounts = [acc];
           ns.settings.defaultAccountId = acc.id;
           for (const m of ['default', 'chat', 'image', 'doc']) ns.settings.providers[m].accountId = '__default__';
@@ -333,11 +349,14 @@
   App.persist = function () {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(App.state)); } catch (e) { /* ignore */ }
     // 文件双写：同步写入 state.json 到 userData/tangbao-data/（可读文件，便于查看/备份）
+    // 注意：1.0.6 起 apiKey 不再进 state，这个文件里已经没有任何密钥明文。
     try {
       if (window.electron && window.electron.saveStateJSON) {
         window.electron.saveStateJSON(JSON.stringify(App.state, null, 2));
       }
     } catch (e) { /* 写文件失败不影响主流程 */ }
+    // 账户/自定义地址可能刚被改过，同步给主进程的模型网关
+    try { if (App.rt && App.rt.syncEndpoints) App.rt.syncEndpoints(); } catch (e) { /* ignore */ }
   };
 
   App.uid = function () {

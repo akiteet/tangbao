@@ -5,15 +5,16 @@
  * - 仅在指定的工作目录(cwd)内执行命令 / 文件操作（根目录 confinement）
  * - 命令默认「每步确认」：发 require_approval 事件并暂停，等前端 POST /api/agent/approve
  *
- * 运行：node server/agent-server.js   （可用 PORT 环境变量改端口，默认 3000）
+ * 监听：仅绑定 127.0.0.1，端口由系统随机分配（桌面版由主进程拉起并把端口下发给前端）；
+ *       独立运行时可用 PORT 环境变量指定端口（默认 3000）。
  */
 const http = require('http');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 const { exec, spawn } = require('child_process');
 
-const PORT = Number(process.env.PORT) || 3000;
 const MAX_STEPS = 24;
 const MAX_OUTPUT = 12000;     // 单条工具结果截断长度
 const APPROVE_TIMEOUT = 5 * 60 * 1000;
@@ -95,10 +96,60 @@ const SYSTEM_PROMPT = `你是一个运行在用户本地工作目录中的糖码
 7. 若任务完成，直接给出最终回答（中文），不要再调用工具。
 8. 所有输出不要使用 emoji 表情符号，用纯文本替代。`;
 
+// ===== 本地访问控制 =====
+// 由主进程在 startAgentServer 时注入：启动令牌 + 唯一允许的来源（静态服务的源）。
+// 独立运行（node server/agent-server.js）时两者为空 —— 退回到「仅回环可达」的宽松模式，方便开发调试。
+let AUTH_TOKEN = '';
+let ALLOW_ORIGIN = '';
+
+// ===== 密钥与接口地址解析（由主进程注入） =====
+// 1.0.6 起前端不再持有明文 API Key，糖码后端要用密钥时从主进程的 safeStorage 密钥库取；
+// 接口地址同样从主进程的 endpoints 表查，不接受请求体里传来的任意地址。
+// 独立运行（node server/agent-server.js）时两者为空实现，此模式仅供无密钥的本地调试。
+let getSecret = () => '';
+let getEndpoint = () => '';
+let resolveWorkspace = null; // M7（#253）：workspaceId -> { cwd, name }；由主进程注入，未知 id 返回 null
+
+function configureAgentServer(opts) {
+  if (opts && typeof opts.getSecret === 'function') getSecret = opts.getSecret;
+  if (opts && typeof opts.getEndpoint === 'function') getEndpoint = opts.getEndpoint;
+  if (opts && typeof opts.resolveWorkspace === 'function') resolveWorkspace = opts.resolveWorkspace;
+}
+
+function tokenEqual(a, b) {
+  const ba = Buffer.from(String(a || ''), 'utf8');
+  const bb = Buffer.from(String(b || ''), 'utf8');
+  if (ba.length !== bb.length) return false;
+  try { return crypto.timingSafeEqual(ba, bb); } catch (_) { return false; }
+}
+
+function checkToken(req) {
+  if (!AUTH_TOKEN) return true; // 独立调试模式
+  const m = /^Bearer\s+(.+)$/i.exec(String(req.headers['authorization'] || '').trim());
+  return !!m && tokenEqual(m[1], AUTH_TOKEN);
+}
+
+// DNS 重绑定防护：Host 必须指向回环地址
+function isLoopbackHost(req) {
+  const name = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+}
+
+// 只允许主进程指定的那一个源；未配置时按同机放行
+function originAllowed(req) {
+  const o = req.headers.origin;
+  if (!o) return true;                 // 非浏览器发起（无 Origin）
+  if (!ALLOW_ORIGIN) return true;      // 独立调试模式
+  return o === ALLOW_ORIGIN;
+}
+
+// 精确回显允许的源，不再使用 '*'；带 Authorization 会触发预检，故要放行该请求头
 function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (ALLOW_ORIGIN) res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '600');
 }
 
 function sendJSON(res, code, obj) {
@@ -623,15 +674,31 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
 }
 
 function handleAgent(req, res, body) {
-  const cwd = String(body.cwd || process.cwd());
+  // M7（#253）：优先用不透明 workspaceId 解析受控目录；未知/无效 id 直接拒绝。
+  // 仅当未提供 workspaceId（standalone 调试模式，无 resolveWorkspace）才退回裸 cwd。
+  let cwd;
+  if (body.workspaceId && typeof resolveWorkspace === 'function') {
+    const ws = resolveWorkspace(String(body.workspaceId));
+    if (!ws) {
+      sendJSON(res, 400, { error: '无效的工作区标识（workspaceId 未知或已被清除），请在项目设置中重新选择工作目录' });
+      return;
+    }
+    cwd = ws.cwd;
+  } else {
+    cwd = String(body.cwd || process.cwd());
+  }
   const auto = !!body.auto;
   const runId = 'run_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const apiBase = String(body.apiBase || '');
-  const apiKey = String(body.apiKey || '');
+  // 1.0.6：请求体不再携带 apiBase/apiKey。渲染进程只给一个密钥引用（ref），
+  // 真正的接口地址与密钥由主进程的 endpoints 表和 safeStorage 密钥库解析。
+  const ref = String(body.ref || '');
+  const apiBase = getEndpoint(ref);
+  const apiKey = getSecret(ref);
   const model = String(body.model || '');
   const customSystem = (typeof body.systemPrompt === 'string' && body.systemPrompt.trim())
     ? body.systemPrompt.trim() : '';
-  const searchApiKey = String(body.searchApiKey || '');
+  // 联网搜索 Key 同样从主进程密钥库取，不再由前端递过来
+  const searchApiKey = getSecret('search');
   const approveTools = Array.isArray(body.approveTools) ? body.approveTools.filter(x => typeof x === 'string') : [];
   const cmdWhitelist = Array.isArray(body.cmdWhitelist) ? body.cmdWhitelist.filter(x => typeof x === 'string') : [];
   const planMode = !!body.planMode;
@@ -642,18 +709,21 @@ function handleAgent(req, res, body) {
     ? body.thinkType : '';
 
   if (!apiBase || !apiKey || !model) {
-    sendJSON(res, 400, { error: '缺少 API 配置（apiBase/apiKey/model）' });
+    const why = !model ? '未选择模型'
+      : !apiBase ? '未找到该来源的接口地址，请到设置里重新保存账户'
+        : '该来源尚未配置 API Key，请到设置里填写';
+    sendJSON(res, 400, { error: why });
     return;
   }
 
   let aborted = false;
   req.on('close', () => { aborted = true; });
 
+  cors(res); // 精确来源，不再是 '*'
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   });
 
   const emit = (type, data) => {
@@ -753,7 +823,19 @@ function handleAgent(req, res, body) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // 入口守卫：回环 Host + 允许的 Origin + 启动令牌，三道都过才进业务路由
+  if (!isLoopbackHost(req) || !originAllowed(req)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('403 Forbidden');
+    return;
+  }
   if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return; }
+  if (!checkToken(req)) {
+    cors(res);
+    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: '未授权：缺少或错误的本地启动令牌' }));
+    return;
+  }
   const url = new URL(req.url, 'http://localhost');
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
@@ -781,13 +863,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/search') {
       const body = await readBody(req);
-      const data = await doSearch(body && body.query ? String(body.query) : '', body && body.apiKey ? String(body.apiKey) : '');
+      // 搜索 Key 从主进程密钥库取（前端已无法持有明文）
+      const data = await doSearch(body && body.query ? String(body.query) : '', getSecret('search'));
       sendJSON(res, data.ok ? 200 : 502, data);
       return;
     }
     // 项目记忆读写（糖码记忆.md，对标项目级 CLAUDE.md；safePath 限制在工作目录内）
     if (req.method === 'GET' && url.pathname === '/api/memory') {
-      const cwd = url.searchParams.get('cwd') || '';
+      let cwd = url.searchParams.get('cwd') || '';
+      const wsId = url.searchParams.get('workspaceId');
+      if (wsId && typeof resolveWorkspace === 'function') {
+        const ws = resolveWorkspace(String(wsId));
+        if (!ws) { sendJSON(res, 400, { ok: false, error: '无效的工作区标识' }); return; }
+        cwd = ws.cwd;
+      }
       const file = url.searchParams.get('file') || '糖码记忆.md';
       const fp = safePath(file, cwd);
       if (!fp) { sendJSON(res, 400, { ok: false, error: '非法路径' }); return; }
@@ -801,7 +890,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'PUT' && url.pathname === '/api/memory') {
       const body = await readBody(req);
-      const cwd = String(body.cwd || '');
+      let cwd = String(body.cwd || '');
+      if (body.workspaceId && typeof resolveWorkspace === 'function') {
+        const ws = resolveWorkspace(String(body.workspaceId));
+        if (!ws) { sendJSON(res, 400, { ok: false, error: '无效的工作区标识' }); return; }
+        cwd = ws.cwd;
+      }
       const file = String(body.file || '糖码记忆.md');
       const content = typeof body.content === 'string' ? body.content : '';
       const fp = safePath(file, cwd);
@@ -820,15 +914,24 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-function startAgentServer(port) {
-  const p = Number(port) || PORT;
-  server.listen(p, () => {
-    console.log(`[糖包·糖码] 后端已启动：http://localhost:${p}  （工作目录默认 ${process.cwd()}）`);
-    console.log('前端需配置聊天 API（糖码复用聊天账户密钥）。桌面版已自动拉起。');
+// 启动糖码后端：端口传 0（默认）时由系统分配空闲端口，且只绑定 127.0.0.1（回环，外部不可达）。
+// 返回 Promise<实际端口>，主进程拿到后通过 preload 下发给渲染进程。
+function startAgentServer(port, opts) {
+  const want = Number(port) || 0;
+  if (opts && opts.token) AUTH_TOKEN = String(opts.token);
+  if (opts && opts.allowOrigin) ALLOW_ORIGIN = String(opts.allowOrigin);
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(want, '127.0.0.1', () => {
+      const p = server.address().port;
+      console.log(`[糖包·糖码] 后端已启动：http://127.0.0.1:${p}  （工作目录默认 ${process.cwd()}）`);
+      console.log('前端需配置聊天 API（糖码复用聊天账户密钥）。桌面版已自动拉起。');
+      resolve(p);
+    });
   });
 }
 
-module.exports = { startAgentServer };
+module.exports = { startAgentServer, configureAgentServer };
 
 if (require.main === module) {
   startAgentServer(Number(process.env.PORT) || 3000);

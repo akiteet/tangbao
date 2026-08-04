@@ -1007,6 +1007,27 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
 }
 .field input:focus, .field select:focus { border-color: var(--primary); }
 .field input:disabled { opacity: .5; background: var(--hover-bg); }
+/* 密钥输入行：输入框 + 清除按钮同行（1.0.6 起密钥不回填，只能覆盖或清除） */
+.key-field-row { display: flex; align-items: center; gap: 8px; }
+.key-field-row input { flex: 1; min-width: 0; }
+.key-field-row .mini { flex: none; white-space: nowrap; }
+/* 密码框可见性切换（眼睛按钮）：输入框右侧叠加一个按钮 */
+.key-field { position: relative; display: flex; align-items: center; }
+.key-field input { width: 100%; padding-right: 40px; }
+.key-eye {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; padding: 0; color: var(--text-secondary);
+  border-radius: 7px; transition: background .15s, color .15s;
+}
+.key-eye:hover { background: var(--hover-bg); color: var(--text); }
+.key-eye svg { width: 18px; height: 18px; display: block; }
+.key-eye.is-off svg { opacity: .5; }
+.key-eye.is-off::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 22px; height: 2px; background: currentColor; border-radius: 2px;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
 .use-default { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
 /* ===== 设置弹窗：左导航 + 内容两栏 ===== */
 #settingsModal .modal { width: 860px; max-width: 95vw; }

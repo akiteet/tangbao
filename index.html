@@ -10,12 +10,11 @@
   <link rel="stylesheet" id="hljsLight" href="vendor/highlight/styles/github.min.css" />
   <link rel="stylesheet" id="hljsDark" href="vendor/highlight/styles/github-dark.min.css" disabled />
   <script src="vendor/highlight/highlight.min.js"></script>
-  <!-- PDF.js（本地 vendored，ESM 离线可用；缺失时糖读降级为粘贴文本） -->
-  <script type="module">
-    import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
-    window.pdfjsLib = pdfjsLib;
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/pdf.worker.min.mjs';
-  </script>
+  <!-- Markdown 渲染加固：marked 解析 + DOMPurify 消毒（本地 vendored，离线可用） -->
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <!-- PDF.js（本地 vendored，ESM 离线可用；缺失时糖读降级为粘贴文本）。脚本外提为 js/pdf-boot.mjs，否则 CSP 的 script-src 'self' 会拦截内联模块脚本 -->
+  <script type="module" src="js/pdf-boot.mjs"></script>
 </head>
 <body>
   <div class="app" id="app">
@@ -236,7 +235,7 @@
                   <select class="account-select" id="apiAccountSel"></select></div>
                 <div class="custom-fields" id="apiCustomFields" hidden>
                   <div class="field"><span class="field-label">API Base URL</span><input type="text" id="apiBaseCur" placeholder="https://ark.cn-beijing.volces.com/api/v3" autocomplete="off" /></div>
-                  <div class="field"><span class="field-label">API Key</span><input type="password" id="apiKeyCur" placeholder="粘贴你的 API Key" autocomplete="off" /></div>
+                  <div class="field"><span class="field-label">API Key</span><div class="key-field"><input type="password" id="apiKeyCur" placeholder="粘贴你的 API Key" autocomplete="off" /><button type="button" class="key-eye" data-eye="apiKeyCur" title="显示/隐藏" aria-label="显示/隐藏 API Key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
                   <div class="field"><span class="field-label">模型名称</span><input type="text" id="apiModelCur" placeholder="如 doubao-seed-1-6 / gpt-4o" autocomplete="off" /></div>
                 </div>
                 <p class="hint">选择“自定义填写”可手写该模块的 Base/Key/模型；选择具体账户则沿用账户配置。</p>
@@ -244,7 +243,13 @@
               <div class="set-card">
                 <div class="set-card-title">联网搜索（可选）</div>
                 <div class="field"><span class="field-label">联网搜索 API Key（可选）</span>
-                  <input type="password" id="searchKey" placeholder="留空则使用内置免费搜索" autocomplete="off" />
+                  <div class="key-field-row">
+                    <div class="key-field">
+                      <input type="password" id="searchKey" placeholder="留空则使用内置免费搜索" autocomplete="off" />
+                      <button type="button" class="key-eye" data-eye="searchKey" title="显示/隐藏" aria-label="显示/隐藏 API Key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    </div>
+                    <button type="button" class="mini danger" id="searchKeyClear" title="删除已保存的搜索 Key">清除</button>
+                  </div>
                 </div>
                 <p class="hint"><strong>用途</strong>：填入搜索服务 API Key（如 Tavily）后，糖包聊天和糖码的联网搜索将走付费 API，结果更稳定、更高质量。<br><strong>留空</strong>：使用内置免费搜索（优先 Bing，回落 DuckDuckGo），但受反爬/地区影响可能不稳定。</p>
               </div>
@@ -270,7 +275,7 @@
                 <div class="account-form" id="accountForm" hidden>
                   <div class="field"><span class="field-label">名称</span><input type="text" id="accName" placeholder="如 我的火山引擎" autocomplete="off" /></div>
                   <div class="field"><span class="field-label">API Base URL</span><input type="text" id="accBase" placeholder="https://ark.cn-beijing.volces.com/api/v3" autocomplete="off" /></div>
-                  <div class="field"><span class="field-label">API Key</span><input type="password" id="accKey" placeholder="粘贴你的 API Key" autocomplete="off" /></div>
+                  <div class="field"><span class="field-label">API Key</span><div class="key-field"><input type="password" id="accKey" placeholder="粘贴你的 API Key" autocomplete="off" /><button type="button" class="key-eye" data-eye="accKey" title="显示/隐藏" aria-label="显示/隐藏 API Key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
                   <div class="field"><span class="field-label">模型列表（可多个）</span>
                     <div class="model-row-head"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-think">思考类型</span><span class="h-del"></span></div>
                     <div id="accModels"></div>
@@ -474,22 +479,31 @@
                 <ul class="help-list help-faq">
                   <li><b>请求被 CORS 拦截？</b>浏览器直连第三方 API 可能受跨域限制。请将 Base URL 指向支持跨域的端点，或自建本地代理。</li>
                   <li><b>怎么换模型？</b> 聊天模块顶部点模型按钮切换；也可在「API 与密钥」里为模块指定默认模型。</li>
-                  <li><b>导出配置为什么提示含 Key？</b> 导出文件包含 API Key 明文，请勿分享给他人。</li>
+                  <li><b>导出配置包含什么？</b> 导出文件含对话、模块设置与密钥引用，但 <b>不含 API Key 明文</b>（v1.0.6 起密钥由系统密钥库加密保管）。请勿将导出文件分享给他人。</li>
                   <li><b>自定义模块打不开？</b> 请确认 URL 为 http/https 且目标站点允许被 iframe 嵌入（部分站点设置了 X-Frame-Options 会拒绝）。</li>
                 </ul>
               </div>
               <div class="set-card">
                 <div class="set-card-title">隐私提示</div>
-                <p class="hint warn">⚠️ 你的对话、文档、密钥均保存在本机 localStorage，糖包不会主动上传。请自行负责本地数据安全与备份。</p>
+                <p class="hint warn">⚠️ 你的对话与文档保存在本机；API Key 自 v1.0.6 起由<b>系统密钥库</b>（Windows DPAPI / macOS Keychain / Linux libsecret）加密保管，明文不再写入任何本地文件。糖包不会主动上传你的数据，请自行负责本地备份。</p>
               </div>
 
               <!-- 关于糖包 -->
               <div class="help-section-title">关于糖包</div>
               <div class="set-card about-card">
                 <div class="about-logo">糖</div>
-                <div class="about-name">糖包 <span class="about-ver">v1.0.5</span></div>
+                <div class="about-name">糖包 <span class="about-ver">v1.0.6</span></div>
                 <div class="about-meta">创作者：<b>世界上最帅的人</b></div>
                 <div class="about-slogan">糖包 · 把想要的 AI，装进你自己的桌面</div>
+                <div class="about-meta" style="margin-top:6px;font-size:11.5px;color:var(--text-tertiary)">Local-first AI workstation · 密钥不出本机</div>
+              </div>
+
+              <!-- 深入文档 -->
+              <div class="help-section-title">深入文档 · Docs</div>
+              <div class="set-card">
+                <p class="hint" style="margin:0 0 10px">想了解糖包的数据结构与安全机制？查看项目仓库文档：</p>
+                <p class="hint" style="margin:0"><a href="https://github.com/akiteet/tangbao/blob/master/docs/DATA_MODEL.md" target="_blank" rel="noopener">📊 数据模型（Data Model）</a></p>
+                <p class="hint" style="margin:4px 0 0"><a href="https://github.com/akiteet/tangbao/blob/master/docs/CROSS_MODULE.md" target="_blank" rel="noopener">🛡️ 跨模块安全改造（v1.0.6）</a></p>
               </div>
             </div>
           </div>
@@ -506,6 +520,7 @@
 
   <div class="toast" id="toast" hidden></div>
 
+  <script src="js/runtime.js"></script>
   <script src="js/state.js"></script>
   <script src="vendor/tokenizer.js"></script>
   <script src="js/context.js"></script>

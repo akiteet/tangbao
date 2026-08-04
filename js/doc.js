@@ -340,7 +340,7 @@
       area.scrollTop = area.scrollHeight;
 
       const p = App.getProvider('doc');
-      if (!p.apiBase || !p.apiKey || !p.model) {
+      if (!p.ref || !p.hasKey || !p.model) {
         App.doc.appendError('尚未配置文档 API。请先在设置里填写“文档”或“默认”的 API 信息。');
         return;
       }
@@ -360,15 +360,11 @@
       area.appendChild(ai);
       let acc = '', started = false;
       try {
-        const url = p.apiBase.replace(/\/+$/, '') + '/chat/completions';
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + p.apiKey },
-          body: JSON.stringify(payload),
-        });
+        // 走主进程模型网关（原来是渲染进程直连，既暴露密钥又受 CORS 限制）
+        const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', payload });
         if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          ai.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(txt.slice(0, 200))}</span>`;
+          const txt = await App.rt.gatewayError(res);
+          ai.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
           App.doc.streaming = false; return;
         }
         const reader = res.body.getReader();

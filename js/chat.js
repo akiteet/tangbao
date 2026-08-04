@@ -112,7 +112,7 @@
       box.innerHTML = pendingAttachments.map(a => {
         if (a.type === 'image') {
           return `<span class="img-chip" data-id="${a.id}">
-            <img src="${a.data}" alt="">
+            <img src="${App.escapeHtml(a.data)}" alt="">
             <span class="attach-name">${App.escapeHtml(a.name)}</span>
             <button class="attach-chip-remove" data-remove="${a.id}" title="移除">×</button>
           </span>`;
@@ -217,11 +217,18 @@
       App.ui.renderTopbarTitle();
     },
 
-    rename() {
+    async rename() {
       const conv = App.chat.activeConv();
       if (!conv) { App.ui.toast('没有可重命名的对话'); return; }
-      const name = prompt('重命名对话', conv.title || '新对话');
-      if (name === null) return;
+      const name = await App.ui.promptModal({
+        title: '重命名对话',
+        label: '对话名称',
+        value: conv.title || '新对话',
+        placeholder: '输入新的对话名称',
+        confirmText: '重命名',
+        maxLength: 60,
+      });
+      if (name === null) return; // 取消
       conv.title = name.trim() || conv.title;
       App.persist();
       App.ui.renderTopbarTitle();
@@ -335,11 +342,19 @@
               </div>
             </div>
           </div>`;
-        wrap.querySelector('.bubble').innerHTML = App.renderMarkdown(m.content || '');
+        let bubbleHtml;
+        try {
+          bubbleHtml = App.renderMarkdown(m.content || '');
+        } catch (e) {
+          // 渲染异常时降级为纯文本 + 提示，保证消息不丢、不白屏
+          bubbleHtml = '<div class="msg-error">内容渲染失败：' + App.escapeHtml(String((e && e.message) || e)) +
+            '</div><pre class="bubble-fallback">' + App.escapeHtml(m.content || '') + '</pre>';
+        }
+        wrap.querySelector('.bubble').innerHTML = bubbleHtml;
       } else {
         const imgHtml = (m.attachments && m.attachments.length)
           ? m.attachments.filter(a => a.type === 'image').map(a =>
-              `<img class="chat-img" src="${a.data}" alt="${App.escapeHtml(a.name)}" title="${App.escapeHtml(a.name)}">`).join('')
+              `<img class="chat-img" src="${App.escapeHtml(a.data)}" alt="${App.escapeHtml(a.name)}" title="${App.escapeHtml(a.name)}">`).join('')
           : '';
         const attHtml = (m.attachments && m.attachments.length)
           ? `<div class="attach-cards">` + m.attachments.filter(a => a.type !== 'image').map(a =>
@@ -364,7 +379,19 @@
       if (!conv || !conv.messages.length) { App.chat.showWelcome(); App.chat.updateCtxBar(); return; }
       App.chat.showChat();
       $('messages').innerHTML = '';
-      conv.messages.forEach((m, i) => $('messages').appendChild(App.chat.messageNode(m, i)));
+      conv.messages.forEach((m, i) => {
+        try {
+          $('messages').appendChild(App.chat.messageNode(m, i));
+        } catch (e) {
+          // 单条消息渲染失败不应清空整段对话：降级为纯文本气泡，保证不丢消息
+          const fb = document.createElement('div');
+          fb.className = 'msg ' + (m.role || 'assistant');
+          const b = document.createElement('div'); b.className = 'bubble';
+          b.textContent = (m.content != null ? m.content : '') + '';
+          fb.appendChild(b);
+          $('messages').appendChild(fb);
+        }
+      });
       App.chat.scrollBottom(true);
       App.ui.renderTopbarTitle();
       App.chat.updateCtxBar();
@@ -430,14 +457,11 @@
 
     async streamChat(conv, ui) {
       const s = App.getProvider('chat');
-      if (!s.apiBase || !s.apiKey || !s.model) {
+      if (!s.ref || !s.hasKey || !s.model) {
         ui.bubble.innerHTML = '<div class="msg-error">尚未配置聊天 API。请点击左下角齿轮图标，在“默认”或“聊天”标签填入 API Base URL、Key 和 Model。</div>';
         ui.actions.style.display = 'flex';
         return;
       }
-      const base = s.apiBase.replace(/\/+$/, '');
-      // 兼容：用户可能已写全路径，避免拼出 /chat/completions/chat/completions
-      const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
       const baseSys = conv.systemPrompt || (App.state.settings.prompts && App.state.settings.prompts.chat) || SYSTEM_PROMPT;
       const userMemory = (App.state.settings.userMemory || '').trim();
       // 聊天端享受用户长期记忆（差距 #4）：并入系统提示，与糖码后端注入方式一致
@@ -445,7 +469,7 @@
       // 对话级模型优先（智能体指定），否则用聊天默认模型；联网同理
       const model = (conv.model && s.models.includes(conv.model)) ? conv.model : s.model;
       const web = (conv.web != null) ? conv.web : App.state.web;
-      const AGENT_BASE = 'http://localhost:3000';
+      const AGENT_BASE = App.rt.agentBase(); // 本机随机端口，运行时取
       const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
       // 异步压缩（#7）：同步取 finalMessages 直接发送，压缩在后台跑，不阻塞本轮 send
       const ctxWindow = App.context.contextWindowOf(model);
@@ -500,13 +524,13 @@
           const lastUserText = lastUserMsg
             ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : ((lastUserMsg.content && lastUserMsg.content.text) || ''))
             : '';
-          const sk = (App.state.settings.search && App.state.settings.search.apiKey) || '';
           let searched = null;
           try {
+            // 搜索 Key 由后端从密钥库取（ref = 'search'），前端不再经手明文
             const r = await fetch(AGENT_BASE + '/api/search', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: lastUserText, apiKey: sk }),
+              headers: App.rt.authHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ query: lastUserText }),
             });
             const d = await r.json().catch(() => ({ ok: false }));
             if (d && d.ok && Array.isArray(d.results) && d.results.length) searched = d.results;
@@ -563,20 +587,11 @@
         }
       };
       try {
-        // 走本地代理转发，规避浏览器 CORS
-        const proxyUrl = 'http://localhost:' + (location.port || 4280) + '/api-proxy';
-        const res = await fetch(proxyUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-target-url': url,
-            'x-auth': 'Bearer ' + s.apiKey,
-          },
-          body: JSON.stringify(payload),
-        });
+        // 走主进程模型网关：前端只给密钥引用 + 用途，目标地址和 Key 都由主进程解析
+        const res = await App.rt.gatewayFetch({ ref: s.ref, kind: 'chat', payload });
         if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(txt.slice(0, 240))}</div>`;
+          const txt = await App.rt.gatewayError(res);
+          ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 240))}</div>`;
           ui.actions.style.display = 'flex';
           return;
         }
@@ -654,7 +669,7 @@
       const conv = App.chat.activeConv();
       if (!conv || !conv.messages.length) return;
       const s = App.getProvider('chat');
-      if (!s.apiBase || !s.apiKey || !s.model) { App.ui.toast('请先配置聊天 API'); return; }
+      if (!s.ref || !s.hasKey || !s.model) { App.ui.toast('请先配置聊天 API'); return; }
       App.ui.toast('正在压缩上下文…');
       const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
       const summary = await App.context.summarizeFull(allMsgs, '', s);
