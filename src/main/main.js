@@ -10,14 +10,14 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { startAgentServer, configureAgentServer } = require('./server/agent-server');
+const { startAgentServer, configureAgentServer } = require('../infrastructure/agent-runtime/agent-server');
 // 注意：kvstore.js（原 secrets.js）无法被 electron-builder 的 asar 步骤打入 app.asar
 // （app-builder 会确定性地排除该文件），故改为通过 extraResources 以松散资源形式
 // 放到 resources/ 下，打包后从 process.resourcesPath 加载，开发模式仍走本地路径。
 const secrets = app.isPackaged
   ? require(path.join(process.resourcesPath, 'kvstore'))
-  : require('./server/kvstore');
-const gateway = require('./server/gateway');
+  : require('../infrastructure/secrets/kvstore');
+const gateway = require('../infrastructure/model-gateway/gateway');
 
 // M5（#254）：自定义协议 tangbao-file:// —— 渲染进程不再直接持有本地文件绝对路径，
 // 改为「用户选文件 → 主进程发不透明 fileId → tangbao-file://<fileId> 读取」，收敛本地文件暴露面。
@@ -274,7 +274,7 @@ try {
 } catch (_) {}
 
 function startStaticServer() {
-  const root = __dirname;
+  const root = path.join(__dirname, '..', '..');
   return new Promise((resolve, reject) => {
     staticServer = http.createServer((req, res) => {
       try {
@@ -345,7 +345,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#eef2fb',
-    icon: path.join(__dirname, 'assets', 'app-icon.ico'),
+    icon: path.join(__dirname, '..', '..', 'assets', 'app-icon.ico'),
     // 去掉原生标题栏的“框”感：隐藏标题栏，仅保留系统的最小/最大/关闭按钮（叠加在右上角）
     titleBarStyle: 'hidden',
     titleBarOverlay: {
@@ -358,7 +358,7 @@ function createWindow() {
       nodeIntegration: false,
       webSecurity: true,
       webviewTag: false, // 第三方/自定义模块改用 iframe 或隔离子窗口承载，不再启用 <webview>（保险起见默认关闭）
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
     },
   });
   mainWindow.loadURL(`http://127.0.0.1:${appPort}/`);
@@ -706,7 +706,7 @@ function createFloatingWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       },
     });
     // 浮窗同样属于可信窗口：登记以便 IPC 校验；并加导航/新窗口守卫
@@ -872,7 +872,7 @@ if (!gotLock) {
     } catch (_) {}
     // 托盘图标（复用 app-icon.ico）：右键菜单切换浮窗 / 退出；点击托盘切换浮窗
     try {
-      const trayIcon = path.join(__dirname, 'assets', 'app-icon.ico');
+      const trayIcon = path.join(__dirname, '..', '..', 'assets', 'app-icon.ico');
       const tray = new Tray(trayIcon);
       tray.setToolTip('糖包');
       const trayMenu = Menu.buildFromTemplate([

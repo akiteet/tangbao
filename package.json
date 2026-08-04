@@ -1,13 +1,13 @@
 {
   "name": "tangbao-web",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "糖包 - 全能 AI 助手桌面版（含糖码本地后端）",
   "author": "糖包",
-  "main": "main.js",
+  "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "server": "node server/agent-server.js",
+    "server": "node src/infrastructure/agent-runtime/agent-server.js",
     "dist": "electron-builder"
   },
   "build": {
@@ -15,19 +15,16 @@
     "productName": "糖包",
     "icon": "assets/app-icon.ico",
     "files": [
-      "main.js",
-      "preload.js",
+      "src/**/*",
       "index.html",
       "styles.css",
-      "js/**/*",
       "assets/**/*",
       "vendor/**/*",
-      "server/**/*",
       "package.json"
     ],
     "extraResources": [
       {
-        "from": "server/kvstore.js",
+        "from": "src/infrastructure/secrets/kvstore.js",
         "to": "kvstore.js"
       }
     ],
