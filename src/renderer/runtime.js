@@ -21,8 +21,8 @@
     async init() {
       if (rt.ready) return rt;
       try {
-        if (window.electron && window.electron.serverPorts) {
-          const p = await window.electron.serverPorts();
+        if (App.services && App.services.system && App.services.system.serverPorts) {
+          const p = await App.services.system.serverPorts();
           if (p) {
             rt.appPort = Number(p.app) || 0;
             rt.agentPort = Number(p.agent) || 0;
@@ -51,9 +51,9 @@
     },
     // M5（#254）：本地文件绝对路径 → 主进程登记 → 不透明 tangbao-file://<fileId>
     async localFileUrl(absPath) {
-      if (window.electron && window.electron.registerLocalFile) {
+      if (App.services && App.services.shell && App.services.shell.registerLocalFile) {
         try {
-          const r = await window.electron.registerLocalFile(absPath);
+          const r = await App.services.shell.registerLocalFile(absPath);
           if (r && r.ok && r.fileId) return 'tangbao-file://' + r.fileId;
         } catch (e) { console.error('[糖包] 注册本地文件失败：', e); }
       }
@@ -78,27 +78,24 @@
     },
     async refreshSecrets() {
       try {
-        if (!window.electron || !window.electron.listSecrets) return;
-        const r = await window.electron.listSecrets();
+        if (!App.services.secrets || !App.services.secrets.listSecrets) return;
+        const r = await App.services.secrets.listSecrets();
         rt.secretRefs = new Set((r && r.refs) || []);
         rt.secretsEncrypted = !r || r.encrypted !== false;
       } catch (e) { console.error('读取密钥列表失败：', e); }
     },
     async setSecret(ref, value) {
-      if (!window.electron || !window.electron.setSecret) return { ok: false, error: '当前环境不支持密钥存储' };
-      const r = await window.electron.setSecret(ref, value);
+      const r = await App.services.secrets.setSecret(ref, value);
       if (r && r.ok) { if (value) rt.secretRefs.add(ref); else rt.secretRefs.delete(ref); }
       return r || { ok: false };
     },
     async deleteSecret(ref) {
-      if (!window.electron || !window.electron.deleteSecret) return { ok: false };
-      const r = await window.electron.deleteSecret(ref);
+      const r = await App.services.secrets.deleteSecret(ref);
       if (r && r.ok) rt.secretRefs.delete(ref);
       return r || { ok: false };
     },
     async deleteSecretsByPrefix(prefix) {
-      if (!window.electron || !window.electron.deleteSecretsByPrefix) return { ok: false };
-      const r = await window.electron.deleteSecretsByPrefix(prefix);
+      const r = await App.services.secrets.deleteSecretsByPrefix(prefix);
       if (r && r.ok) {
         for (const k of Array.from(rt.secretRefs)) if (k.startsWith(prefix)) rt.secretRefs.delete(k);
       }
@@ -111,7 +108,7 @@
     // 任何改动账户/自定义地址的地方保存后都要调一次（App.persist 里已统一调用）。
     async syncEndpoints() {
       try {
-        if (!window.electron || !window.electron.setGatewayEndpoints) return;
+        if (!App.services.gateway || !App.services.gateway.setEndpoints) return;
         const s = (window.App && App.state && App.state.settings) || {};
         const list = [];
         for (const a of (s.accounts || [])) {
@@ -121,8 +118,29 @@
           const p = s.providers[m];
           if (p && p.accountId === '__custom__' && p.apiBase) list.push({ ref: 'custom:' + m, apiBase: p.apiBase });
         }
-        await window.electron.setGatewayEndpoints(list);
+        await App.services.gateway.setEndpoints(list);
       } catch (e) { console.error('同步模型网关地址失败：', e); }
+    },
+
+    // M3 存储层：把归一化后的 App.state 灌入 SQLite（better-sqlite3 不可用则主进程返回 {ok:false}，此处静默忽略）
+    async migrateStorage(stateJson) {
+      try {
+        return await App.services.fs.migrateStorage(stateJson);
+      } catch (e) { console.warn('[存储层] 迁移失败（不影响启动）：', e); return { ok: false }; }
+    },
+
+    // M4 写穿：整库替换进 SQLite（主数据源）。失败静默（state.json 仍双写兜底）
+    async syncStorage(stateJson) {
+      try {
+        return await App.services.fs.syncStorage(stateJson);
+      } catch (e) { console.warn('[存储层] 同步失败（state.json 仍兜底）：', e); return { ok: false }; }
+    },
+
+    // M4 读源：从 SQLite 重建 App.state；空/不可用/落后 → {ok:false}（调用方回退 state.json）
+    async loadStorage() {
+      try {
+        return await App.services.fs.loadStorage();
+      } catch (e) { console.warn('[存储层] 读取失败（回退 state.json）：', e); return { ok: false }; }
     },
 
     // 统一的模型调用入口。渲染进程只给 ref（密钥引用）+ kind（路径白名单）+ payload，
@@ -160,7 +178,7 @@
         jobs.push({ ref: 'search', key: s.search.apiKey.trim(), owner: s.search });
       }
       let moved = 0;
-      if (jobs.length && window.electron && window.electron.setSecret) {
+      if (jobs.length && App.services.secrets.setSecret) {
         for (const j of jobs) {
           try {
             const r = await rt.setSecret(j.ref, j.key);
@@ -196,8 +214,8 @@
   // 若等 boot 里再注册监听就可能错过这条消息（浮窗显示空白）。这里在脚本解析阶段就注册。
   rt._floatInitRaw = null;
   rt._floatInitCb = null;
-  if (window.electron && window.electron.onFloatInit) {
-    window.electron.onFloatInit((raw) => {
+  if (App.services && App.services.float && App.services.float.onInit) {
+    App.services.float.onInit((raw) => {
       if (rt._floatInitCb) rt._floatInitCb(raw);
       else rt._floatInitRaw = raw; // 先缓冲，等 boot 注册回调后补发
     });

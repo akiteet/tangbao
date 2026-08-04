@@ -110,7 +110,7 @@
     openProjectSettings(id) {
       const p = App.agent.projects().find(x => x.id === id);
       if (!p) return;
-      const hasDialog = !!(window.electron && window.electron.showDirDialog);
+      const hasDialog = !!(App.services.shell && App.services.shell.showDirDialog);
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.id = 'projectModalMask';
@@ -158,7 +158,7 @@
       const browse = modal.querySelector('#projBrowse');
       if (browse) browse.onclick = async () => {
         try {
-          const dir = await window.electron.showDirDialog();
+          const dir = await App.services.shell.showDirDialog();
           // M7（#253）：对话框在主进程登记并返回对象 { ok, workspaceId, cwd, name }
           if (dir && dir.ok && dir.cwd) {
             modal.querySelector('#projCwd').value = dir.cwd;
@@ -175,9 +175,9 @@
         p.cmdWhitelist = (modal.querySelector('#projWhitelist').value || '')
           .split('\n').map(s => s.trim()).filter(Boolean);
         // M7（#253）：把工作目录交主进程校验+登记，换回不透明 workspaceId（只回 id，不回路径）
-        if (p.cwd && window.electron && window.electron.registerWorkspace) {
+        if (p.cwd) {
           try {
-            const r = await window.electron.registerWorkspace(p.cwd, p.name);
+            const r = await App.services.shell.registerWorkspace(p.cwd, p.name);
             if (r && r.ok) p.workspaceId = r.workspaceId; else p.workspaceId = '';
           } catch (e) { p.workspaceId = ''; }
         } else {
@@ -796,13 +796,21 @@
       }
       const modelSel = document.getElementById('agentModel');
       const model = modelSel ? modelSel.value : p.model;
+      // M6：不给不支持工具调用的模型发工具定义（糖码依赖工具运行，直接拦截并给可行动提示）
+      if (App.ModelCapabilities && App.ModelCapabilities.capsOfModelApp) {
+        const caps = App.ModelCapabilities.capsOfModelApp(model);
+        if (!caps.toolCalling) {
+          App.ui.toast('当前模型 ' + model + ' 不支持工具调用，糖码无法运行。请在账户设置中为该模型选择「工具+视觉」或「仅工具」能力，或切换支持工具的模型');
+          return;
+        }
+      }
       const proj = App.agent.activeProject();
       const cwd = proj.cwd || '';
       // M7（#253）：优先用不透明 workspaceId；缺失但有 cwd 时惰性登记并持久化，使旧项目自动迁移
       let workspaceId = proj.workspaceId || '';
-      if (!workspaceId && cwd && window.electron && window.electron.registerWorkspace) {
+      if (!workspaceId && cwd) {
         try {
-          const r = await window.electron.registerWorkspace(cwd, proj.name);
+          const r = await App.services.shell.registerWorkspace(cwd, proj.name);
           if (r && r.ok) { workspaceId = r.workspaceId; proj.workspaceId = workspaceId; App.persist(); }
         } catch (_) {}
       }
@@ -1090,9 +1098,9 @@
       if (!cwd) { App.ui.toast('请先在项目设置中指定工作目录'); return; }
       // M7（#253）：优先用不透明 workspaceId；缺失时惰性登记，与 send() 行为一致
       let workspaceId = proj.workspaceId || '';
-      if (!workspaceId && window.electron && window.electron.registerWorkspace) {
+      if (!workspaceId) {
         try {
-          const r = await window.electron.registerWorkspace(cwd, proj.name);
+          const r = await App.services.shell.registerWorkspace(cwd, proj.name);
           if (r && r.ok) { workspaceId = r.workspaceId; proj.workspaceId = workspaceId; App.persist(); }
         } catch (_) {}
       }

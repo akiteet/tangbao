@@ -243,6 +243,14 @@
       const styleKey = App.image.sel.style;
       const sizeObj = SIZES.find(s => s.value === App.image.sel.size) || SIZES[0];
       const refImg = App.image.refImage;
+      // M6：图片编辑走 vision chat 兜底，需当前图像模型支持视觉输入；否则给出可行动提示
+      if (refImg && App.ModelCapabilities && App.ModelCapabilities.capsOfModelApp) {
+        const caps = App.ModelCapabilities.capsOfModelApp(p.model);
+        if (!caps.visionInput) {
+          App.ui.toast('当前模型不支持图片输入，无法编辑图片。请在账户设置中为 ' + p.model + ' 选择「工具+视觉」或「仅视觉」能力，或改用支持视觉的模型');
+          return;
+        }
+      }
       let finalPrompt = prompt
         + (STYLES[styleKey] ? STYLES[styleKey].suffix : '')
         + '，比例 ' + sizeObj.label;

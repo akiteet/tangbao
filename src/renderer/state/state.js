@@ -3,6 +3,10 @@
   const STORAGE_KEY = 'tangbao_web_state_v1';
   const OLD_KEY = 'doubao_web_state_v1';
 
+  // M4 写穿节流：App.persist 高频触发时防抖 800ms 再同步 SQLite；_lastSyncedJson 用于跳过未变化
+  let _syncTimer = null;
+  let _lastSyncedJson = null;
+
   const defaultState = () => ({
     conversations: [],          // { id, title, messages, updatedAt, agentId?, systemPrompt? }
     activeId: null,
@@ -104,69 +108,20 @@
   //  优先读「添加模型时」为该模型配置的 thinkType（每模型配置，避免枚举过时的模型名）；
   //  未配置或选“自动”时才回退到按模型名的正则自动判断（仅作兜底）。
   //  null = 不注入任何思考参数（原生推理，如 grok/deepseek，开关仅影响是否展示思考过程）。
-  App.thinkSupport = function (model) {
-    const name = (model || '').trim();
-    // 1) 先查该模型在账号里配置的 thinkType
-    const tt = App.thinkTypeOf(name);
-    if (tt && tt !== 'auto') return (tt === 'none') ? null : tt;
-    // 2) 回退：按模型名正则自动判断
-    const m = name.toLowerCase();
-    if (/deepseek/.test(m)) return null;                       // 原生推理，API 无法开关
-    if (/qwen|qwq/.test(m)) return 'qwen';
-    if (/doubao|seed/.test(m)) return 'doubao';
-    if (/(^|[^a-z])o[0-9]|gpt-5/.test(m)) return 'openai';
-    return null;
-  };
-
-  // 查某模型名在所有账号里配置的 thinkType（'auto'|'openai'|'qwen'|'doubao'|'none'）；查不到返回 ''。
-  App.thinkTypeOf = function (name) {
-    if (!name) return '';
-    const accs = (App.state && App.state.settings && App.state.settings.accounts) || [];
-    for (const a of accs) {
-      const models = (a && a.models) || [];
-      for (const mm of models) {
-        if (mm && typeof mm === 'object' && mm.name === name && mm.thinkType) return mm.thinkType;
-      }
-    }
-    return '';
-  };
-
-  // 深度思考参数：支持可控思考的模型注入真实 API 参数（三档强度）。
-  // 不支持的返回 {}（思考由模型原生决定，开关仅影响展示）。
-  // level: 'off' | 'low' | 'medium' | 'high'
+  // 模型能力统一转发到 src/core/models/capabilities.js（双环境单一事实源，取代下列散落正则）
+  App.thinkTypeOf = function (name) { return App.ModelCapabilities.thinkTypeOfApp(name); };
+  App.thinkSupport = function (model) { return App.ModelCapabilities.thinkSupportApp(model); };
   App.buildThinkParam = function (model, level) {
-    const sup = App.thinkSupport(model);
-    const lv = level || 'medium';
-    if (lv === 'off') {
-      const m = (model || '').toLowerCase();
-      if (sup === 'qwen') return { enable_thinking: false };
-      if (/doubao|seed/.test(m)) return { thinking: { type: 'disabled' } }; // 豆包可按模型名识别，显式关闭思考
-      return {}; // OpenAI/其他不传参
-    }
-    if (sup === 'qwen') return { enable_thinking: true };
-    if (sup === 'doubao') return {}; // 豆包不支持强度调节，开启即默认推理
-    if (sup === 'openai') return { reasoning_effort: lv === 'high' ? 'high' : lv === 'low' ? 'low' : 'medium' };
-    return {};
+    const accounts = (App.state && App.state.settings) ? App.state.settings.accounts : [];
+    return App.ModelCapabilities.buildThinkParam(model, level, accounts);
   };
-
-  // 判断模型是否原生支持联网搜索，返回 'qwen' | 'openai' | null
-  //  'qwen'  → 阿里系，用 enable_search
-  //  'openai'→ OpenAI 官方，用 tools.web_search
-  //  null    → 不支持原生联网（deepseek/kimi/claude/gemini 等），改由本地后端兜底检索
-  App.nativeWebModel = function (model) {
-    const m = (model || '').toLowerCase();
-    if (/qwen|qwq|dashscope|doubao|seed|ark/.test(m)) return 'qwen';
-    if (/openai|gpt|o[0-9]/.test(m)) return 'openai';
-    return null;
-  };
-
-  // 联网搜索参数：只对原生支持联网的模型返回原生参数；其余一律 {}（改由聊天层做本地兜底检索）
-  // 避免把 OpenAI 的 web_search 工具塞给 DeepSeek 等不支持的端点导致 400
-  // 判断模型是否为视觉模型（支持图片输入）
+  App.nativeWebModel = function (model) { return App.ModelCapabilities.nativeWebModel(model); };
+  // 联网搜索参数：原生支持的模型返回对应厂商参数（qwen: enable_search / openai: tools.web_search），其余 {}。
+  // 此前该函数缺失，导致联网开启且命中原生联网模型时崩溃；现已补全。
+  App.buildWebParam = function (model, enabled) { return App.ModelCapabilities.buildWebParam(model, enabled); };
   App.isVisionModel = function (model) {
-    const m = (model || '').toLowerCase();
-    const list = (App.state.settings.visionModels || []);
-    return list.some(vm => m.includes(vm.toLowerCase()));
+    const list = (App.state && App.state.settings) ? App.state.settings.visionModels : undefined;
+    return App.ModelCapabilities.isVisionModel(model, list);
   };
 
   // 从一段 JSON 文本还原并归一化应用状态（含旧版迁移）。oldFormat 表示来源为旧版 OLD_KEY。
@@ -177,11 +132,15 @@
     const ps = (parsed.settings && typeof parsed.settings === 'object') ? parsed.settings : {};
     ns.settings = ns.settings || {};
     ns.settings.accounts = (Array.isArray(ps.accounts) ? ps.accounts : []).map(a => Object.assign({}, a, {
-      // 模型迁移：旧 string[] → 新 { name, contextWindow }[]
+      // 模型迁移：旧 string[] → 新 { name, contextWindow, caps? }[]
       models: Array.isArray(a.models) ? a.models.map(m => {
         if (typeof m === 'string') return { name: m, contextWindow: 128000 };
         if (m && typeof m === 'object' && typeof m.name === 'string')
-          return { name: m.name, contextWindow: (typeof m.contextWindow === 'number' && m.contextWindow > 0) ? m.contextWindow : 128000 };
+          return {
+            name: m.name,
+            contextWindow: (typeof m.contextWindow === 'number' && m.contextWindow > 0) ? m.contextWindow : 128000,
+            caps: (m.caps && ['auto', 'tool_vision', 'tool', 'vision', 'text'].includes(m.caps)) ? m.caps : undefined,
+          };
         return null;
       }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
     }));
@@ -341,10 +300,22 @@
   // 端口一变 origin 即变，原 localStorage 全读不到 → 升级 / 每次重启都会丢数据。
   // 故优先从与端口无关的磁盘 state.json 读取（App.persist 一直双写它），localStorage 仅作回退。
   App.loadState = async function () {
+    // 0) M4 读源优先：SQLite（主数据源）。空库/不可用/落后 → ok:false，走下方回退链。
+    //    新鲜度由主进程 storage:loadState 依据 synced_at vs state.json mtime 判断，防 SQLite 落后。
+    try {
+      if (App.services.fs && App.services.fs.loadStorage) {
+        const r = await App.services.fs.loadStorage();
+        if (r && r.ok && r.state && typeof r.state === 'object') {
+          applyLoaded(JSON.stringify(r.state), false);
+          return;
+        }
+      }
+    } catch (e) { /* SQLite 读取失败则回退 */ }
+
     // 1) 优先：磁盘 state.json（与端口无关，可在随机端口下稳定持久化）
     try {
-      if (window.electron && window.electron.loadStateJSON) {
-        const res = await window.electron.loadStateJSON();
+      if (App.services.fs && App.services.fs.loadStateJSON) {
+        const res = await App.services.fs.loadStateJSON();
         if (res && res.ok && typeof res.data === 'string' && res.data.trim()) {
           const parsed = JSON.parse(res.data);
           if (parsed && typeof parsed === 'object' && (parsed.conversations || parsed.settings || parsed.agentThreads || parsed.projects || parsed.activeId)) {
@@ -375,16 +346,57 @@
     // 文件双写：同步写入 state.json 到 userData/tangbao-data/（可读文件，便于查看/备份）
     // 注意：1.0.6 起 apiKey 不再进 state，这个文件里已经没有任何密钥明文。
     try {
-      if (window.electron && window.electron.saveStateJSON) {
-        window.electron.saveStateJSON(JSON.stringify(App.state, null, 2));
+      if (App.services.fs && App.services.fs.saveStateJSON) {
+        App.services.fs.saveStateJSON(JSON.stringify(App.state, null, 2));
       }
     } catch (e) { /* 写文件失败不影响主流程 */ }
     // 账户/自定义地址可能刚被改过，同步给主进程的模型网关
     try { if (App.rt && App.rt.syncEndpoints) App.rt.syncEndpoints(); } catch (e) { /* ignore */ }
+    // M4 写穿（主数据源）：防抖 800ms 后把整库同步进 SQLite；失败静默（上面 state.json 已兜底）
+    try {
+      if (_syncTimer) clearTimeout(_syncTimer);
+      _syncTimer = setTimeout(() => {
+        _syncTimer = null;
+        try {
+          if (!App.rt || !App.rt.syncStorage) return;
+          const json = JSON.stringify(App.state);
+          if (json === _lastSyncedJson) return;
+          _lastSyncedJson = json;
+          App.rt.syncStorage(json);
+        } catch (e) { /* ignore */ }
+      }, 800);
+    } catch (e) { /* ignore */ }
   };
+
+  // M4 写穿兜底：关闭前若有未落盘的同步立即 flush
+  try {
+    window.addEventListener('beforeunload', () => {
+      try {
+        if (_syncTimer) { clearTimeout(_syncTimer); _syncTimer = null; }
+        if (App.rt && App.rt.syncStorage) {
+          const json = JSON.stringify(App.state);
+          if (json !== _lastSyncedJson) { _lastSyncedJson = json; App.rt.syncStorage(json); }
+        }
+      } catch (e) { /* ignore */ }
+    });
+  } catch (e) { /* ignore */ }
 
   App.uid = function () {
     return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  };
+
+  // M6：从完整备份 JSON 恢复应用状态（导入用）。复用 applyLoaded 归一化 + 落盘。
+  App.loadFromJson = function (raw) {
+    try {
+      if (typeof raw !== 'string' || !raw.trim()) return { ok: false, error: '备份内容为空' };
+      const obj = JSON.parse(raw);
+      if (!obj || typeof obj !== 'object' || (!obj.conversations && !obj.settings)) return { ok: false, error: '不是有效的糖包备份' };
+      applyLoaded(raw, false);
+      App.persist();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
   };
 
   App.defaultState = defaultState;

@@ -35,10 +35,8 @@
       let p = u.pathname || '';          // file:///C:/a/b.html -> /C:/a/b.html
       if (p.startsWith('/')) p = p.slice(1); // 去掉前导斜杠 -> C:/a/b.html（避免 /C: 被当成根路径）
       const absPath = p;                 // URL pathname 已解码，可直接作绝对路径
-      if (window.electron && window.electron.registerLocalFile) {
-        const r = await window.electron.registerLocalFile(absPath);
-        if (r && r.ok && r.fileId) return 'tangbao-file://' + r.fileId;
-      }
+      const r = await App.services.shell.registerLocalFile(absPath);
+      if (r && r.ok && r.fileId) return 'tangbao-file://' + r.fileId;
     } catch (e) { console.error('[糖包] 注册本地文件失败：', e); }
     return 'about:blank';
   }
@@ -120,10 +118,8 @@
       if (isFile) src = await fileUrlToTangbao(m.url);                       // 本地文件：tangbao-file://<fileId>
       else if (m.forceEmbed) {
         // 在糖包子窗口打开（完整功能：全视口 + 原生导航 + 登录态）
-        if (window.electron && window.electron.openChildWindow) {
-          window.electron.openChildWindow({ id, url: m.url, label: m.label });
-          isExternalChild = true;
-        }
+        const r = await App.services.shell.openChildWindow({ id, url: m.url, label: m.label });
+        if (r && r.ok) isExternalChild = true;
         src = 'about:blank'; // placeholder（不会被真正导航，实际内容在子窗口）
       } else src = m.url;                                                     // 远程普通：直接 iframe
 

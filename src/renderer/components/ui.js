@@ -187,9 +187,9 @@
       }
       // 同步系统标题栏叠加层颜色（隐藏标题栏时，右上角最小/最大/关闭按钮的底色）
       try {
-        if (window.electron && window.electron.setTitleBarOverlay) {
+        if (App.services.shell && App.services.shell.setTitleBarOverlay) {
           const dark = effective === 'dark';
-          window.electron.setTitleBarOverlay({
+          App.services.shell.setTitleBarOverlay({
             color: dark ? 'rgba(20,22,28,0.92)' : 'rgba(244,247,251,0.92)',
             symbolColor: dark ? '#e6e8ee' : '#5b6472',
           });
@@ -302,9 +302,9 @@
       if (u && u.protocol === 'file:') {
         let p = decodeURIComponent(u.pathname || '');
         p = p.replace(/^\/([A-Za-z]:)/, '$1'); // /C:/x -> C:/x
-        return window.electron.openPath ? window.electron.openPath(p) : null;
+        return App.services.shell.openPath(p);
       }
-      return window.electron.openExternal ? window.electron.openExternal(url) : null;
+      return App.services.shell.openExternal(url);
     },
 
     _convToMarkdown(conv) {
@@ -550,13 +550,14 @@
       }).join('');
     },
 
-    // 生成一行模型输入（模型名 + 上下文窗口 + 删除按钮）
+    // 生成一行模型输入（模型名 + 上下文窗口 + 思考类型 + 能力预设 + 删除按钮）
     makeModelRow(v) {
       const row = document.createElement('div');
       row.className = 'model-row';
       const name = (v && typeof v === 'object') ? v.name : (v || '');
       const cw = (v && typeof v === 'object' && v.contextWindow) ? v.contextWindow : '';
       const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
+      const caps = (v && typeof v === 'object' && v.caps) ? v.caps : '';
       const input = document.createElement('input');
       input.type = 'text'; input.className = 'accModelRow';
       input.placeholder = '如 doubao-seed-1-6'; input.autocomplete = 'off';
@@ -572,9 +573,16 @@
       [['auto', '自动（推荐）'], ['openai', '强度档·OpenAI'], ['qwen', '开关式·Qwen'], ['none', '原生推理']]
         .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; ttSel.appendChild(o); });
       ttSel.value = tt;
+      // M6：能力预设（工具调用/视觉输入）。不确定时选「自动推断」。
+      const capsSel = document.createElement('select');
+      capsSel.className = 'accModelCaps';
+      capsSel.title = '能力预设：决定是否给该模型发工具定义、能否收图片（不确定选「自动推断」）';
+      [['', '自动推断'], ['tool_vision', '工具+视觉'], ['tool', '工具+文本'], ['vision', '仅视觉'], ['text', '纯文本']]
+        .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; capsSel.appendChild(o); });
+      capsSel.value = caps;
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'model-row-del'; btn.dataset.rm = '1'; btn.textContent = '×'; btn.title = '删除该模型';
-      row.appendChild(input); row.appendChild(cwInput); row.appendChild(ttSel); row.appendChild(btn);
+      row.appendChild(input); row.appendChild(cwInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
       return row;
     },
 
@@ -616,11 +624,15 @@
         const nameInput = row.querySelector('.accModelRow');
         const ctxInput = row.querySelector('.accModelCtx');
         const ttSel = row.querySelector('.accModelThink');
+        const capsSel = row.querySelector('.accModelCaps');
         const n = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
         if (!n) return;
         const cw = (ctxInput && ctxInput.value) ? parseInt(ctxInput.value, 10) : 128000;
         const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
-        models.push({ name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt });
+        const caps = (capsSel && capsSel.value) ? capsSel.value : '';
+        const m = { name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt };
+        if (caps) m.caps = caps; // M6：能力预设
+        models.push(m);
       });
       // 编辑已有账户时 Key 允许留空，表示沿用密钥库里已保存的那把
       const hasSaved = !!(id && App.rt && App.rt.hasSecret && App.rt.hasSecret('acc:' + id));
@@ -971,6 +983,9 @@
       const exp = $('exportConfig'); if (exp) exp.addEventListener('click', () => App.config.export());
       const imp = $('importConfig'); if (imp) imp.addEventListener('click', () => { const f = $('importFile'); if (f) f.click(); });
       const impFile = $('importFile'); if (impFile) impFile.addEventListener('change', e => { const f = e.target.files[0]; if (f) App.config.import(f); e.target.value = ''; });
+      // M6：完整数据备份（经系统文件对话框）
+      const expFull = $('exportFull'); if (expFull) expFull.addEventListener('click', () => App.config.exportFull());
+      const impFull = $('importFull'); if (impFull) impFull.addEventListener('click', () => App.config.importFull());
 
       const addBtn = $('addCustomModule');
       if (addBtn) addBtn.addEventListener('click', () => App.ui.openModuleEditor());
@@ -1111,9 +1126,9 @@
       document.addEventListener('click', () => { $('chatDropdown').hidden = true; });
       // 浮窗入口 / 关闭
       const floatBtn = $('floatBtn');
-      if (floatBtn) floatBtn.addEventListener('click', () => { if (window.electron && window.electron.openFloat) window.electron.openFloat(); });
+      if (floatBtn) floatBtn.addEventListener('click', () => { App.services.float.open(); });
       const floatClose = $('floatClose');
-      if (floatClose) floatClose.addEventListener('click', () => { if (window.electron && window.electron.closeFloat) window.electron.closeFloat(); });
+      if (floatClose) floatClose.addEventListener('click', () => { App.services.float.close(); });
       $('chatDropdown').addEventListener('click', (e) => {
         e.stopPropagation();
         const act = e.target.closest('[data-act]');

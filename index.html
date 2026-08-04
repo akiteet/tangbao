@@ -277,10 +277,10 @@
                   <div class="field"><span class="field-label">API Base URL</span><input type="text" id="accBase" placeholder="https://ark.cn-beijing.volces.com/api/v3" autocomplete="off" /></div>
                   <div class="field"><span class="field-label">API Key</span><div class="key-field"><input type="password" id="accKey" placeholder="粘贴你的 API Key" autocomplete="off" /><button type="button" class="key-eye" data-eye="accKey" title="显示/隐藏" aria-label="显示/隐藏 API Key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
                   <div class="field"><span class="field-label">模型列表（可多个）</span>
-                    <div class="model-row-head"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-think">思考类型</span><span class="h-del"></span></div>
+                    <div class="model-row-head"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-think">思考类型</span><span class="h-caps">能力预设</span><span class="h-del"></span></div>
                     <div id="accModels"></div>
                     <button type="button" class="btn-ghost mini-add" id="accModelAdd">+ 添加模型</button>
-                    <p class="hint model-row-hint">「模型名」填供应商给的模型 ID；「上下文窗口」填该模型最大 token（如 128000，留空用默认）；「思考类型」决定糖包如何发送深度思考指令：<b>强度档·OpenAI</b> 可调低/中/高，<b>开关式·Qwen</b> 只有开/关，<b>原生推理</b>（grok、deepseek、豆包 等）模型自己会思考、无需参数，其中豆包在「思考·关」时可显式关闭。不确定就选 <b>自动</b>。</p>
+                    <p class="hint model-row-hint">「模型名」填供应商给的模型 ID；「上下文窗口」填该模型最大 token（如 128000，留空用默认）；「思考类型」决定糖包如何发送深度思考指令：<b>强度档·OpenAI</b> 可调低/中/高，<b>开关式·Qwen</b> 只有开/关，<b>原生推理</b>（grok、deepseek、豆包 等）模型自己会思考、无需参数，其中豆包在「思考·关」时可显式关闭，不确定就选 <b>自动</b>；「能力预设」决定是否给该模型发送工具定义、能否接收图片输入：<b>工具+视觉 / 工具+文本 / 仅视觉 / 纯文本</b>，不确定就选 <b>自动推断</b>。</p>
                   </div>
                   <div class="form-actions"><button class="btn-ghost" id="accCancel">取消</button><button class="btn-primary" id="accSave">保存</button></div>
                 </div>
@@ -374,13 +374,21 @@
               <div class="set-card">
                 <div class="set-card-title">备份与恢复</div>
                 <p class="hint">导出/导入配置用于备份或迁移到其他设备</p>
-                <p class="hint warn">⚠️ 导出的配置包含 API Key 明文，请勿分享给他人。</p>
+                <p class="hint">API Key 保存在本机系统安全存储中，不会包含在导出文件里；迁移到新设备后需在「账户」中重新填写密钥。</p>
                 <div class="row-inline">
                   <button class="btn-primary" id="exportConfig">导出配置 (JSON)</button>
                   <button class="btn-ghost" id="importConfig">导入配置</button>
                 </div>
                 <input type="file" id="importFile" accept="application/json,.json" hidden />
                 <p class="hint">导出：账户、智能体、模板、工作流、提示词、外观与模块开关。导入会覆盖上述设置。</p>
+              </div>
+              <div class="set-card">
+                <div class="set-card-title">完整数据备份</div>
+                <p class="hint">包含全部对话、图片、项目与会话线程，经系统文件对话框读写；导入前会二次确认并覆盖当前数据。</p>
+                <div class="row-inline">
+                  <button class="btn-primary" id="exportFull">导出完整数据</button>
+                  <button class="btn-ghost" id="importFull">导入完整数据</button>
+                </div>
               </div>
             </div>
             <div class="settings-panel" data-panel="help">
@@ -520,7 +528,15 @@
 
   <div class="toast" id="toast" hidden></div>
 
+  <script src="src/application/services/index.js"></script>
+  <script src="src/application/services/system.js"></script>
+  <script src="src/application/services/secrets.js"></script>
+  <script src="src/application/services/fs.js"></script>
+  <script src="src/application/services/gateway.js"></script>
+  <script src="src/application/services/shell.js"></script>
+  <script src="src/application/services/float.js"></script>
   <script src="src/renderer/runtime.js"></script>
+  <script src="src/core/models/capabilities.js"></script>
   <script src="src/renderer/state/state.js"></script>
   <script src="vendor/tokenizer.js"></script>
   <script src="src/renderer/views/chat/context.js"></script>

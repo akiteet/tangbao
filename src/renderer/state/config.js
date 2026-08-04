@@ -62,5 +62,41 @@
         App.ui.toast('导入失败：' + (e && e.message ? e.message : String(e)));
       }
     },
+
+    // M6：完整数据备份导出（含对话/图片/项目/线程，经系统保存对话框）
+    async exportFull() {
+      try {
+        const r = await App.services.fs.exportState();
+        if (!r) return;
+        if (r.canceled) return;
+        if (r.ok) App.ui.toast('完整数据已导出到：' + r.path);
+        else App.ui.toast('导出失败：' + (r.error || '未知错误'));
+      } catch (e) {
+        App.ui.toast('导出失败：' + (e && e.message ? e.message : String(e)));
+      }
+    },
+
+    // M6：完整数据备份导入（经系统打开对话框，覆盖当前数据前需确认）
+    async importFull() {
+      try {
+        const r = await App.services.fs.importState();
+        if (!r) return;
+        if (r.canceled) return;
+        if (!r.ok) { App.ui.toast('导入失败：' + (r.error || '未知错误')); return; }
+        if (!window.confirm('导入将覆盖当前全部对话/设置/项目数据，且不可撤销。确定继续吗？')) return;
+        const res = App.loadFromJson(r.data);
+        if (res && res.ok) {
+          App.ui.toast('完整数据已导入');
+          if (App.ui.applyAppearance) App.ui.applyAppearance();
+          App.modules.renderNav();
+          if (App.ui.refreshSettingsUI) App.ui.refreshSettingsUI();
+          if (App.router && App.router.go) App.router.go(App.state.view || 'chat');
+        } else {
+          App.ui.toast('导入失败：' + ((res && res.error) || '未知错误'));
+        }
+      } catch (e) {
+        App.ui.toast('导入失败：' + (e && e.message ? e.message : String(e)));
+      }
+    },
   };
 })();

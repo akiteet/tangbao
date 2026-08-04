@@ -569,6 +569,7 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
 .model-row .accModelRow { flex: 1; min-width: 0; }
 .model-row .accModelCtx { width: 88px; flex: none; text-align: center; }
 .model-row .accModelThink { width: 124px; flex: none; padding-left: 8px; padding-right: 4px; font-size: 12.5px; }
+.model-row .accModelCaps { width: 110px; flex: none; padding-left: 8px; padding-right: 4px; font-size: 12.5px; }
 .model-row-del {
   border: 1px solid var(--border); background: var(--panel-bg); color: var(--text-tertiary);
   width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 16px; line-height: 1;
@@ -579,6 +580,7 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
 .model-row-head .h-name { flex: 1; min-width: 0; }
 .model-row-head .h-ctx { width: 88px; flex: none; text-align: center; }
 .model-row-head .h-think { width: 124px; flex: none; }
+.model-row-head .h-caps { width: 110px; flex: none; }
 .model-row-head .h-del { width: 30px; flex: none; }
 .model-row-hint { margin-top: 6px; line-height: 1.7; }
 .mini-add {

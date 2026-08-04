@@ -16,6 +16,8 @@
  * 渲染进程既指定不了转发目标，也拿不到密钥。
  */
 
+const { classify } = require('../../core/errors');
+
 const KIND = {
   chat:       { path: '/chat/completions',  method: 'POST' },
   images:     { path: '/images/generations', method: 'POST' },
@@ -101,10 +103,12 @@ function readBody(req) {
   });
 }
 
-function fail(res, code, msg) {
+function fail(res, code, msg, type) {
   if (res.headersSent) { try { res.end(); } catch (_) {} return; }
+  // 未显式指定 type 时按状态码归类（保持与上游统一错误一致）
+  const t = type || classify(code, msg).type;
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ error: { message: msg } }));
+  res.end(JSON.stringify({ error: { type: t, message: msg, status: code } }));
 }
 
 async function handleGateway(req, res) {
@@ -153,6 +157,21 @@ async function handleGateway(req, res) {
 
     const up = await fetch(target.href, init);
     if (clientGone) return;
+
+    // 上游返回非 2xx：归类后统一成 { error: { type, message, status } } 信封回传前端。
+    // 前端 gatewayError 已读取 error.message，新增的 type 用于后续精细化提示，向后兼容。
+    if (!up.ok) {
+      const raw = await up.text().catch(() => '');
+      let upstreamMsg = '';
+      try {
+        const j = JSON.parse(raw);
+        upstreamMsg = (j && j.error && (j.error.message || j.error)) || raw;
+      } catch (_) { upstreamMsg = raw; }
+      const err = classify(up.status, upstreamMsg);
+      res.writeHead(up.status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: { type: err.type, message: err.message, status: err.status } }));
+      return;
+    }
 
     res.writeHead(up.status, {
       'Content-Type': up.headers.get('content-type') || 'application/json',

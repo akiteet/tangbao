@@ -25,6 +25,15 @@ contextBridge.exposeInMainWorld('electron', {
   saveStateJSON: (jsonStr) => ipcRenderer.invoke('fs:writeState', jsonStr),
   // 读取磁盘 state.json（与端口无关，用于随机端口下稳定恢复数据）
   loadStateJSON: () => ipcRenderer.invoke('fs:readState'),
+  // M3 存储层：把归一化后的 App.state 灌入 SQLite（better-sqlite3 不可用则主进程返回 {ok:false}）
+  migrateStorage: (json) => ipcRenderer.invoke('storage:migrate', json),
+  // M4 写穿：整库替换进 SQLite（主数据源）
+  syncStorage: (json) => ipcRenderer.invoke('storage:syncState', json),
+  // M4 读源：从 SQLite 重建 App.state（空/不可用 → {ok:false}）
+  loadStorage: () => ipcRenderer.invoke('storage:loadState'),
+  // M6 导入导出：完整数据备份（经系统文件对话框）
+  exportState: () => ipcRenderer.invoke('storage:exportState'),
+  importState: () => ipcRenderer.invoke('storage:importState'),
   // 浮窗（系统级独立置顶小窗）
   openFloat: () => ipcRenderer.invoke('float:open'),
   closeFloat: () => ipcRenderer.invoke('float:close'),

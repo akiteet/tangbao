@@ -551,8 +551,221 @@ safeHandle('fs:readState', async () => {
   }
 });
 
+// ===== M3 存储层（SQLite + 文件仓）：一次性迁移入口 =====
+// better-sqlite3 是原生模块，未编译（沙箱 / 未 electron-rebuild）时整体不可用，App 继续走 state.json。
+let storageService = null;
+let storageFileRepo = null;
+let storageReady = false;      // 完整性自检通过后才算真正可用
+let backupRotatedOnce = false; // 每次启动只轮转一次备份
+
+// M6：文件仓孤儿 GC —— 仅当 SQLite 已是权威源（有 synced_at/migrated_v1）时清理无引用文件
+function runFileGC(svc, fileRepo) {
+  try {
+    if (!svc.getKV || (!svc.getKV('synced_at') && !svc.getKV('migrated_v1'))) return;
+    const refImg = new Set((svc.getImageFileNames ? svc.getImageFileNames() : []).filter(Boolean));
+    for (const f of (fileRepo.list('images') || [])) if (!refImg.has(f)) fileRepo.remove('images', f);
+    const refDoc = new Set((svc.getDocIds ? svc.getDocIds() : []).filter(Boolean));
+    for (const f of (fileRepo.list('documents') || [])) if (!refDoc.has(f)) fileRepo.remove('documents', f);
+  } catch (e) { console.warn('[存储层] 文件仓 GC 失败（忽略）：', e && e.message ? e.message : e); }
+}
+
+function getStorageService() {
+  if (storageService && storageReady) return storageService;
+  try {
+    const { init: initStore, StorageService, checkIntegrity } = require('../infrastructure/storage/sqlite-store');
+    const fileRepo = require('../infrastructure/storage/file-repo');
+    const userData = app.getPath('userData');
+    const dataDir = path.join(userData, 'tangbao-data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fileRepo.init(userData);
+    storageFileRepo = fileRepo;
+    if (!initStore(path.join(dataDir, 'tangbao.db'), fileRepo)) return null;
+    // M6：完整性自检失败 → 禁用 SQLite，App 走 state.json 回退链
+    if (!checkIntegrity()) {
+      console.error('[存储层] SQLite 完整性检查未通过，本次禁用 SQLite，回退 state.json。');
+      return null;
+    }
+    storageService = StorageService;
+    storageReady = true;
+    // M6：文件仓孤儿 GC（每个启动周期一次）
+    try { runFileGC(storageService, storageFileRepo); } catch (_) { /* ignore */ }
+    return storageService;
+  } catch (e) {
+    console.error('[存储层] better-sqlite3 不可用，回退 state.json：', e && e.message ? e.message : e);
+    return null;
+  }
+}
+
+// 渲染进程启动后查询存储层是否可用（用于 UI 提示，不影响主流程）
+safeHandle('storage:available', () => ({ ok: !!getStorageService() }));
+
+// 渲染进程把归一化后的 App.state 传过来，一次性灌入 SQLite（迁移器内部幂等 + 失败回滚）
+safeHandle('storage:migrate', async (e, stateJson) => {
+  try {
+    const svc = getStorageService();
+    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    const userData = app.getPath('userData');
+    const dataDir = path.join(userData, 'tangbao-data');
+    let raw = '';
+    try { raw = fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'); } catch (_) { /* 无 state.json 也能迁移（用传入的归一化对象） */ }
+    const normalized = JSON.parse(stateJson);
+    const migrator = require('../infrastructure/storage/migrator');
+    return migrator.run(svc, storageFileRepo, { state: normalized, rawJson: raw, stateDir: dataDir });
+  } catch (err) {
+    return { ok: false, reason: 'migrate-error', error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// M4 写穿：把 App.state 整库替换进 SQLite（主数据源）。无 migrated_v1 门槛、幂等；
+// 备份策略（M6）：canonical 缺失时直接写；已存在则每个启动周期轮转一次（保留最近 3 份带时间戳副本）。
+safeHandle('storage:syncState', async (e, stateJson) => {
+  try {
+    const svc = getStorageService();
+    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    const userData = app.getPath('userData');
+    const dataDir = path.join(userData, 'tangbao-data');
+    const bak = path.join(dataDir, 'state.v1.backup.json');
+    const migrator = require('../infrastructure/storage/migrator');
+    if (!fs.existsSync(bak)) {
+      try { fs.writeFileSync(bak, stateJson || '{}', 'utf8'); } catch (_) { /* 备份失败不阻断同步 */ }
+    } else if (!backupRotatedOnce) {
+      backupRotatedOnce = true;
+      migrator.rotateBackup(dataDir, stateJson || '{}', 3);
+    }
+    const normalized = JSON.parse(stateJson);
+    return migrator.syncState(svc, storageFileRepo, normalized);
+  } catch (err) {
+    return { ok: false, reason: 'sync-error', error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// M4 读源：从 SQLite 重建 App.state。空库/不可用 → ok:false（渲染层回退 state.json）。
+// 新鲜度检查：只有 SQLite 的 synced_at 不早于 state.json mtime 才采用，防 debounce 窗口内 SQLite 落后。
+safeHandle('storage:loadState', async () => {
+  try {
+    const svc = getStorageService();
+    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    const userData = app.getPath('userData');
+    const stateFile = path.join(userData, 'tangbao-data', 'state.json');
+    const migrator = require('../infrastructure/storage/migrator');
+    const r = migrator.readState(svc, storageFileRepo);
+    if (!r.ok) return r;
+    try {
+      if (fs.existsSync(stateFile)) {
+        const mtime = fs.statSync(stateFile).mtimeMs;
+        const syncedAt = Number(svc.getKV('synced_at')) || 0;
+        if (syncedAt < mtime) return { ok: false, reason: 'stale-sqlite' };
+      }
+    } catch (_) { /* stat 失败则不检查新鲜度 */ }
+    return { ok: true, state: r.state };
+  } catch (err) {
+    return { ok: false, reason: 'load-error', error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// M6 导入导出：完整数据（含对话/图片/项目）备份为 JSON 文件，经系统文件对话框读写
+safeHandle('storage:exportState', async () => {
+  try {
+    const userData = app.getPath('userData');
+    const file = path.join(userData, 'tangbao-data', 'state.json');
+    if (!fs.existsSync(file)) return { ok: false, error: '暂无数据可导出' };
+    const data = fs.readFileSync(file, 'utf8');
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: '导出糖包完整数据备份',
+      defaultPath: 'tangbao-backup-' + new Date().toISOString().slice(0, 10) + '.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(r.filePath, data, 'utf8');
+    return { ok: true, path: r.filePath };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+safeHandle('storage:importState', async () => {
+  try {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: '导入糖包完整数据备份',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+    const data = fs.readFileSync(r.filePaths[0], 'utf8');
+    const obj = JSON.parse(data);
+    if (!obj || typeof obj !== 'object' || (!obj.conversations && !obj.settings)) {
+      return { ok: false, error: '不是有效的糖包备份文件（缺少 conversations/settings）' };
+    }
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // 外部「强制嵌入」模块：用糖包子窗口打开（webview 视口锁死 + iframe/proxy subpage 404，嵌入均不可靠，子窗口是唯一全功能方案）
 const moduleWindows = new Map();
+
+// ===== 子窗口浏览器伪装与失败诊断（修复 libhd.com 等站点返回 403） =====
+// Electron 31.7.7 内置 Chromium 126，UA 对齐 Chrome 126 正式版，避免被站点风控识别为 Electron/自动化客户端
+const CHILD_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const CHILD_LANGS = 'zh-CN,zh;q=0.9,en;q=0.8';
+// client hints 品牌串需与上面的 Chrome UA 一致：UA 说 Chrome 但 sec-ch-ua 说 Electron 会被反爬立刻识破
+const CHILD_CH_UA = '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"';
+
+// webRequest 每个 session 只保留一个监听器（重复注册是覆盖而非堆叠），用 Set 避免重复初始化
+const initedPartitions = new Set();
+
+// partition 名进入 session 键空间，需收敛字符集（id 来自用户自定义模块设置）
+function modulePartition(id) {
+  return 'persist:module_' + String(id || 'default').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+}
+
+function setupModuleSession(partition) {
+  const ses = session.fromPartition(partition);
+  if (initedPartitions.has(partition)) return ses;
+  initedPartitions.add(partition);
+
+  // session 级 UA + Accept-Language（必须在 BrowserWindow 创建前调用：不影响已存在的 WebContents）
+  ses.setUserAgent(CHILD_UA, CHILD_LANGS);
+
+  // 补齐 Chrome 客户端提示：setUserAgent 不会同步更新 sec-ch-ua（它源自独立的 UA metadata）
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    const h = details.requestHeaders;
+    h['User-Agent'] = CHILD_UA;
+    h['Accept-Language'] = CHILD_LANGS;
+    h['sec-ch-ua'] = CHILD_CH_UA;
+    h['sec-ch-ua-mobile'] = '?0';
+    h['sec-ch-ua-platform'] = '"Windows"';
+    callback({ requestHeaders: h });
+  });
+  return ses;
+}
+
+// 失败回退页：data:text/html，整体 encodeURIComponent 转义（# % & 等都安全）
+function buildChildErrorPage(status, statusText, originalUrl) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const safeUrl = esc(originalUrl);
+  const html = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+    + '<title>加载失败 ' + esc(status) + '</title><style>'
+    + 'body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
+    + 'background:#1e1e2e;color:#cdd6f4;font-family:system-ui,"Microsoft YaHei",sans-serif}'
+    + '.b{max-width:560px;padding:32px;text-align:center}'
+    + '.c{font-size:44px;font-weight:700;color:#f38ba8;margin:0 0 12px}'
+    + '.m{font-size:15px;line-height:1.7;margin:0 0 18px}'
+    + '.u{font-size:12px;word-break:break-all;color:#9399b2;background:#181825;padding:10px;border-radius:8px;margin:0 0 20px}'
+    + 'a{display:inline-block;padding:10px 22px;background:#89b4fa;color:#1e1e2e;'
+    + 'text-decoration:none;border-radius:8px;font-weight:600;font-size:14px}'
+    + '</style></head><body><div class="b">'
+    + '<p class="c">' + esc(status) + '</p>'
+    + '<p class="m">该站点拒绝了糖包子窗口的访问' + (statusText ? '（' + esc(statusText) + '）' : '') + '。<br>可尝试改用系统浏览器打开。</p>'
+    + '<p class="u">' + safeUrl + '</p>'
+    // target="_blank" 必须：走 setWindowOpenHandler → shell.openExternal；
+    // 普通 <a href> 会被 will-navigate 白名单放行并在原窗导航，又回到 403
+    + '<a href="' + safeUrl + '" target="_blank" rel="noreferrer">在系统浏览器打开</a>'
+    + '</div></body></html>';
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+}
+
 safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
   try {
     const rawUrl = String(url || '');
@@ -561,6 +774,7 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
     try { u = new URL(rawUrl); } catch (_) { return { ok: false, error: 'URL 无效' }; }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, error: '子窗口仅支持 http/https 链接' };
     if (rawUrl.length > 2048 || /[\u0000-\u001F\u007F]/.test(rawUrl)) return { ok: false, error: 'URL 过长或含非法字符' };
+
     let win = moduleWindows.get(id);
     if (win && !win.isDestroyed()) {
       // 窗口已存在且未关闭：聚焦该窗口
@@ -568,6 +782,11 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
       win.focus();
       return { ok: true };
     }
+
+    // 关键顺序：session 必须在 BrowserWindow 创建前配好（setUserAgent 不影响已存在的 WebContents）
+    const partition = modulePartition(id);
+    setupModuleSession(partition);
+
     win = new BrowserWindow({
       width: 1100,
       height: 750,
@@ -581,9 +800,17 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
         contextIsolation: true,
         sandbox: true,
         webviewTag: false,
-        nativeWindowOpen: false,           // 禁止子窗口内的 window.open 自带弹窗（由下方 setWindowOpenHandler 接管）
+        partition,                         // 独立持久分区：登录 cookie 跨次启动留存
+        // nativeWindowOpen 已删除：Electron 31 的 WebPreferences 无此键（15+ 起恒为 true），弹窗由下方 setWindowOpenHandler 接管
       },
     });
+    // 先登记再加载：loadURL 失败会 reject，避免窗口成为无法复用的孤儿
+    moduleWindows.set(id, win);
+    win.on('closed', () => moduleWindows.delete(id));
+
+    // webContents 级兜底（防止 session UA 因时序未生效）
+    try { win.webContents.setUserAgent(CHILD_UA); } catch (_) {}
+
     // 子窗口内部导航守卫：只允许 http/https，杜绝 file:/javascript: 跳转逃逸
     win.webContents.on('will-navigate', (event, navUrl) => {
       try { const nu = new URL(navUrl); if (nu.protocol !== 'http:' && nu.protocol !== 'https:') event.preventDefault(); } catch (_) { event.preventDefault(); }
@@ -593,9 +820,35 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
       if (isAllowedExternalUrl(childUrl)) { try { shell.openExternal(childUrl); } catch (_) {} }
       return { action: 'deny' };
     });
-    await win.loadURL(rawUrl);
-    moduleWindows.set(id, win);
-    win.on('closed', () => moduleWindows.delete(id));
+
+    // ---- 失败诊断：HTTP >= 400 或网络级失败，替换为可跳系统浏览器的错误页 ----
+    let fallbackShown = false;
+    const showFallback = (status, statusText) => {
+      if (fallbackShown || win.isDestroyed()) return;
+      fallbackShown = true;
+      try { win.setTitle((label || '外部站点') + ' · 加载失败 ' + status); } catch (_) {}
+      // setImmediate：避免在导航事件回调里同步发起新导航
+      setImmediate(() => {
+        if (!win.isDestroyed()) win.loadURL(buildChildErrorPage(status, statusText, rawUrl)).catch(() => {});
+      });
+    };
+
+    // did-navigate 直接带主框架 HTTP 状态码（非 HTTP 导航如 data: 为 -1，天然不会自触发）
+    win.webContents.on('did-navigate', (_ev, navUrl, httpResponseCode, httpStatusText) => {
+      if (httpResponseCode >= 400) {
+        console.error('[糖包子窗口] HTTP ' + httpResponseCode + ' ' + httpStatusText + ' → ' + navUrl);
+        showFallback(httpResponseCode, httpStatusText);
+      }
+    });
+    // 网络级失败（DNS/TLS/连接重置）；-3 = ERR_ABORTED，多为重定向或用户中断，忽略
+    win.webContents.on('did-fail-load', (_ev, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return;
+      console.error('[糖包子窗口] did-fail-load ' + errorCode + ' ' + errorDescription + ' → ' + validatedURL);
+      showFallback(errorCode, errorDescription);
+    });
+
+    // loadURL 在 did-fail-load 时 reject（错误页已由监听器接管），这里吞掉，仍返回 ok 让渲染层显示"已在子窗口打开"
+    try { await win.loadURL(rawUrl); } catch (_) {}
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };

@@ -15,6 +15,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { exec, spawn } = require('child_process');
 
+// 模型能力统一判定（与渲染进程共用 src/core/models/capabilities.js，避免双份漂移）
+const cap = require('../../core/models/capabilities');
+
 const MAX_STEPS = 24;
 const MAX_OUTPUT = 12000;     // 单条工具结果截断长度
 const APPROVE_TIMEOUT = 5 * 60 * 1000;
@@ -607,24 +610,10 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   const base = String(apiBase || '').replace(/\/+$/, '');
   const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
   const payload = { model, stream: true, messages, tools: TOOLS, tool_choice: 'auto' };
-  // 思考类型：优先用前端「每模型配置」解析后透传的 thinkType；未传时回退正则自动判断（兜底）。
+  // 思考类型：优先用前端「每模型配置」解析后透传的 thinkType；未传时由能力表回退正则判断（兜底）。
   //  'openai' → reasoning_effort；'qwen' → enable_thinking；'none'/null → 不注入（原生推理，如 grok/deepseek）；豆包关闭开关按模型名识别（thinking.type=disabled）
-  let sup = thinkType;
-  if (!sup) {
-    const m = model.toLowerCase();
-    if (/qwen|qwq/.test(m)) sup = 'qwen';
-    else if (/doubao|seed/.test(m)) sup = 'doubao';
-    else if (/(^|[^a-z])o[0-9]|gpt-5/.test(m)) sup = 'openai';
-    else sup = 'none';
-  }
-  if (thinkLevel && thinkLevel !== 'off') {
-    if (sup === 'qwen') payload.enable_thinking = true;
-    else if (sup === 'openai') payload.reasoning_effort = thinkLevel === 'high' ? 'high' : thinkLevel === 'low' ? 'low' : 'medium';
-    // doubao/none：开启即原生推理，不注入强度参数
-  } else if (thinkLevel === 'off') {
-    if (sup === 'qwen') payload.enable_thinking = false;
-    else if (/doubao|seed/.test(model.toLowerCase())) payload.thinking = { type: 'disabled' }; // 豆包可按模型名识别，显式关闭思考
-  }
+  const sup = thinkType || (cap.thinkSupport(model) || 'none');
+  Object.assign(payload, cap.buildThinkParamWithSup(sup, thinkLevel, model));
   const controller = new AbortController();
   const res = await fetch(url, {
     method: 'POST',

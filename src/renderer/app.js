@@ -16,12 +16,10 @@
         // 浮窗透明度开关：默认不透明（可读性优先），悬停时强制不透明，点击在 1.0/0.6 间切换
         function setupFloatOpacity() {
           const btn = document.getElementById('floatOpacity');
-          if (!btn || !window.electron) return;
+          if (!btn) return;
           App.__floatOpacity = 1.0;
-          const apply = (v) => { if (window.electron.setOpacity) window.electron.setOpacity(v); };
-          if (window.electron.getOpacity) {
-            window.electron.getOpacity().then((v) => { if (typeof v === 'number' && v > 0) App.__floatOpacity = v; }).catch(() => {});
-          }
+          const apply = (v) => { App.services.float.setOpacity(v); };
+          App.services.float.getOpacity().then((v) => { if (typeof v === 'number' && v > 0) App.__floatOpacity = v; }).catch(() => {});
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             App.__floatOpacity = (App.__floatOpacity < 1 ? 1.0 : 0.6);
@@ -33,25 +31,25 @@
         // 浮窗置顶切换 + 双击顶栏最大化
         function setupFloatPin() {
           const btn = document.getElementById('floatPin');
-          if (!btn || !window.electron) return;
+          if (!btn) return;
           let pinned = true; // 与 BrowserWindow alwaysOnTop 默认值一致（持久态已在创建时应用）
           btn.classList.add('active');
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             pinned = !pinned;
             btn.classList.toggle('active', pinned);
-            if (window.electron.setAlwaysOnTop) window.electron.setAlwaysOnTop(pinned);
+            App.services.float.setAlwaysOnTop(pinned);
           });
           const tb = document.querySelector('.topbar');
           if (tb) tb.addEventListener('dblclick', (e) => {
             if (e.target.closest('button')) return; // 不拦截按钮点击
-            if (window.electron.toggleMaximize) window.electron.toggleMaximize();
+            App.services.float.toggleMaximize();
           });
         }
         // 浮窗不写本机 state.json，只把变更单向同步给主窗；且初始化完成前不发送，避免用空状态覆盖主窗。
         App.persist = function () {
-          if (App.__floatReady && window.electron && window.electron.floatSync) {
-            window.electron.floatSync({
+          if (App.__floatReady) {
+            App.services.float.sync({
               conversations: App.state.conversations,
               activeId: App.state.activeId,
               view: App.state.view,
@@ -77,11 +75,9 @@
             if (inp) setTimeout(() => inp.focus(), 0);
           });
         }
-        if (window.electron && window.electron.onFloatRefresh) {
-          window.electron.onFloatRefresh(() => {
-            if (App.chat && App.chat.onShow) App.chat.onShow();
-          });
-        }
+        App.services.float.onRefresh(() => {
+          if (App.chat && App.chat.onShow) App.chat.onShow();
+        });
       }
 
       // 1) 载入本地持久化的状态（含旧版迁移）
@@ -105,6 +101,10 @@
         }
         // 把「密钥引用 → 接口地址」映射同步给主进程网关（persist 里也会调，这里保证首次启动就有）
         if (App.rt.syncEndpoints) await App.rt.syncEndpoints();
+        // 1.7) M3 存储层一次性迁移：把归一化后的 App.state 灌入 SQLite（better-sqlite3 不可用则静默跳过）
+        if (App.rt.migrateStorage) {
+          try { await App.rt.migrateStorage(JSON.stringify(App.state)); } catch (_) { /* SQLite 不可用时不阻断启动 */ }
+        }
       }
 
       // 2) 应用外观（主题/强调色/圆角）
@@ -117,8 +117,8 @@
       App.router.go(App.state.view || 'chat');
 
       // 主窗监听浮窗回传的状态变更，合并并真实落盘
-      if (!floatMode && window.electron && window.electron.onFloatApply) {
-        window.electron.onFloatApply((s) => {
+      if (!floatMode) {
+        App.services.float.onApply((s) => {
           if (!s) return;
           Object.assign(App.state, {
             conversations: s.conversations,

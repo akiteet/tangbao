@@ -732,7 +732,7 @@
       await App.chat.streamChat(conv, ui);
       streaming = false; App.chat.setSending(false);
       App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
-      if (window.electron && window.electron.floatRefresh) window.electron.floatRefresh();
+      App.services.float.refresh();
     },
 
     async regen(index) {
@@ -748,7 +748,7 @@
       await App.chat.streamChat(conv, ui);
       streaming = false; App.chat.setSending(false);
       App.persist(); App.ui.renderSidebar();
-      if (window.electron && window.electron.floatRefresh) window.electron.floatRefresh();
+      App.services.float.refresh();
     },
 
     setSending(on) {
