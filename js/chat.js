@@ -375,6 +375,11 @@
     },
 
     renderMessages() {
+      if (streaming) {
+        // 流式进行中绝不重建列表：否则会清空实时流式气泡、丢失正在输出的回复
+        console.warn('[chat] renderMessages 被跳过：流式进行中（避免清空实时回复）', new Error().stack);
+        return;
+      }
       const conv = App.chat.activeConv();
       if (!conv || !conv.messages.length) { App.chat.showWelcome(); App.chat.updateCtxBar(); return; }
       App.chat.showChat();
