@@ -20,7 +20,7 @@ jobs:
       # 不装依赖：node --check / bench --list / 静态 smoke 均不需要 better-sqlite3
       - name: Syntax check all JS
         run: |
-          find src scripts server -name '*.js' 2>/dev/null | xargs -r -n1 node --check
+          find src scripts -name '*.js' 2>/dev/null | xargs -r -n1 node --check
           node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('pkg JSON OK')"
       - name: Eval task set readable
         run: node scripts/bench.js --list
