@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('electron', {
   registerLocalFile: (absPath) => ipcRenderer.invoke('app:registerLocalFile', absPath),
   // M7（#253）：把工作目录绝对路径交给主进程校验+登记，换回不透明 workspaceId（只回 id，不回路径）
   registerWorkspace: (absPath, name) => ipcRenderer.invoke('app:registerWorkspace', absPath, name),
+  getWorkspace: (workspaceId) => ipcRenderer.invoke('workspace:get', workspaceId),
+  addWorkspaceRoot: (workspaceId) => ipcRenderer.invoke('workspace:addRoot', workspaceId),
+  removeWorkspaceRoot: (workspaceId, rootId) => ipcRenderer.invoke('workspace:removeRoot', workspaceId, rootId),
+  renameWorkspaceRoot: (workspaceId, rootId, name) => ipcRenderer.invoke('workspace:renameRoot', workspaceId, rootId, name),
+  setPrimaryWorkspaceRoot: (workspaceId, rootId) => ipcRenderer.invoke('workspace:setPrimary', workspaceId, rootId),
   setTitleBarOverlay: (opts) => ipcRenderer.send('set-titlebar-overlay', opts),
   showDirDialog: () => ipcRenderer.invoke('dialog:showDir'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
@@ -29,6 +34,8 @@ contextBridge.exposeInMainWorld('electron', {
   migrateStorage: (json) => ipcRenderer.invoke('storage:migrate', json),
   // M4 写穿：整库替换进 SQLite（主数据源）
   syncStorage: (json) => ipcRenderer.invoke('storage:syncState', json),
+  // 聊天修复：关闭前同步落盘（sendSync 阻塞等待主进程写完成，杜绝 fire-and-forget 竞态丢数据）
+  flushStorageSync: (json) => ipcRenderer.sendSync('storage:flushSync', json),
   // M4 读源：从 SQLite 重建 App.state（空/不可用 → {ok:false}）
   loadStorage: () => ipcRenderer.invoke('storage:loadState'),
   // M6 导入导出：完整数据备份（经系统文件对话框）
@@ -37,6 +44,32 @@ contextBridge.exposeInMainWorld('electron', {
   // M7（v1.0.8）：工作流运行历史
   saveWorkflowRun: (run) => ipcRenderer.invoke('storage:saveRun', run),
   listWorkflowRuns: (workflowId, limit) => ipcRenderer.invoke('storage:listRuns', workflowId, limit),
+  // v1.1.0（M1）：糖码 Agent Run 历史（运行列表 / 事件轨迹 / 上下文摘要）
+  listAgentRuns: (threadId, limit, offset) => ipcRenderer.invoke('agent:listRuns', threadId, limit, offset),
+  listAgentEvents: (runId) => ipcRenderer.invoke('agent:runEvents', runId),
+  exportAgentRun: (runId) => ipcRenderer.invoke('agent:exportRun', runId),
+  listAgentEvalTasks: () => ipcRenderer.invoke('agent:evalTasks'),
+  runAgentEval: (payload) => ipcRenderer.invoke('agent:runEval', payload),
+  getAgentSummary: (threadId) => ipcRenderer.invoke('agent:summary', threadId),
+  // v2（P1-C）：压缩后摘要落库
+  saveAgentSummary: (s) => ipcRenderer.invoke('agent:saveSummary', s),
+  // v4（技能面板）：列表走主进程，导入 / 启停也走主进程文件操作
+  skillsList: (workspaceId) => ipcRenderer.invoke('skills:list', workspaceId || ''),
+  skillsImport: (payload) => ipcRenderer.invoke('skills:import', payload),
+  skillsDetails: (payload) => ipcRenderer.invoke('skills:details', payload),
+  skillsEdit: (payload) => ipcRenderer.invoke('skills:edit', payload),
+  skillsReveal: (payload) => ipcRenderer.invoke('skills:reveal', payload),
+  skillsExport: (payload) => ipcRenderer.invoke('skills:export', payload),
+  skillsUninstall: (payload) => ipcRenderer.invoke('skills:uninstall', payload),
+  skillsTrust: (payload) => ipcRenderer.invoke('skills:trust', payload),
+  skillsAutoTrigger: (payload) => ipcRenderer.invoke('skills:autoTrigger', payload),
+  skillsMove: (payload) => ipcRenderer.invoke('skills:move', payload),
+  skillsImportExternal: (payload) => ipcRenderer.invoke('skills:importExternal', payload),
+  skillsQuarantine: () => ipcRenderer.invoke('skills:quarantine'),
+  skillsRestore: (payload) => ipcRenderer.invoke('skills:restore', payload),
+  skillsPurge: (payload) => ipcRenderer.invoke('skills:purge', payload),
+  skillsToggle: (payload) => ipcRenderer.invoke('skills:toggle', payload),
+  onSkillsChanged: (cb) => ipcRenderer.on('skills:changed', (e, raw) => cb(raw)),
   // 浮窗（系统级独立置顶小窗）
   openFloat: () => ipcRenderer.invoke('float:open'),
   closeFloat: () => ipcRenderer.invoke('float:close'),

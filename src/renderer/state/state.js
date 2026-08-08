@@ -42,16 +42,20 @@
       enabledModules: ['chat', 'image', 'doc', 'create', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
       search: {},                // 联网搜索配置；Key 存在密钥库的 'search' 引用下，不落 state
-      userMemory: '',         // 用户级长期记忆（对标 CLAUDE.md 用户级），注入糖码 system prompt
+      userMemory: '',         // 用户级长期记忆，注入糖码 system prompt
       contextWindow: 128000,  // 模型上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
       visionModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'], // 视觉模型白名单
+      permissionRules: [],       // v2（权限大改）：全局权限规则（所有项目生效，项目规则优先）[{ id, tool, pattern, path, allow, scope:'global', force? }]
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
     activeThreadId: null,        // 当前激活的糖码会话线程 id
-    projects: [],                // 糖码项目：[{ id, name, cwd, workspaceId, auto, approveTools:[], cmdWhitelist:[], planMode, createdAt, lastUsedAt }]
+    projects: [],                // 糖码项目：[{ id, name, cwd(主根兼容), workspaceId, roots:[{rootId,name,path}], primaryRootId, ... }]
     activeProjectId: null,       // 当前激活的糖码项目 id
-    agentProjectsCollapsed: false, // 糖码项目侧栏是否折叠
-    agentSessionsCollapsed: false, // 糖码会话侧栏是否折叠
+    agentProjectsCollapsed: false, // 糖码项目侧栏是否折叠（旧版，v1.1.0 迁移到 agentTreeCollapsed）
+    agentSessionsCollapsed: false, // 糖码会话侧栏是否折叠（旧版，v1.1.0 迁移到 agentTreeCollapsed）
+    agentTreeCollapsed: false,     // v1.1.0：项目/会话合一树是否折叠
+    agentTreeExpanded: {},         // v1.1.0：项目展开态 { [projectId]: bool }
+    agentModel: '',               // v2（UX）：糖码用户最后选中的模型（render 重建/切项目时保持，避免回退默认模型）
     thinkLevel: 'medium',         // 深度思考强度：'off' | 'low' | 'medium' | 'high'
     web: false,
   });
@@ -62,7 +66,7 @@
   // 内置默认提示词集中定义（供设置面板 placeholder 显示 + 各模块留空时回退引用）
   App.DEFAULT_PROMPTS = {
     chat: '你是一个名为"糖包"的全能 AI 助手，由用户本地前端调用大模型接口驱动。请用简洁、友好、准确的中文回答用户的问题。',
-    agent: '你是糖码，一个运行在用户本地工作目录中的编码助手，类似 Claude Code。\n\n## 工作准则\n1. 只通过提供的工具完成任务，不要编造文件内容或命令结果。\n2. 多步任务先用 todo_write 拆成可勾选清单并维护进度（开始做某项前标 in_progress，完成标 completed）；单一简单任务可不用。\n3. 先观察再修改：用 list_dir / glob / read_file 读懂上下文；搜文件内容用 grep（支持 glob/-n/-i/-C）；大文件用 read_file 的 offset/limit 只读片段。\n4. 命令仅在当前工作目录内执行；不要访问工作目录之外的路径。需要执行命令时优先用 run_command。\n5. 需要外部信息（报错方案、库用法、文档）时用 web_search 联网检索，不要凭空猜测。\n6. 版本管理优先用 git_command，参数只写 git 之后的部分。\n7. 长任务命令用 run_command 的 run_in_background 后台运行，稍后读取其输出。\n\n## 关于 Plan 模式\n- 若用户开启了 Plan 模式，你只能探索（list_dir/glob/read_file/grep/web_search），不得调用任何会修改文件或执行命令的工具；请基于探索结果给出清晰的实施计划，等用户关闭 Plan 模式后再动手。\n\n## 输出格式\n- 用 Markdown 结构化输出：标题（##）、列表、代码块。\n- 修改文件时，用代码块展示改动的关键片段，标注文件路径。\n- 每步操作后简述做了什么（一句话），不要大段复述工具输出。\n- 任务完成后用以下结构总结：\n  ### 完成\n  简述改动内容（2-3 句）。\n  ### 下一步建议\n  如有后续可做的事，列 1-3 条建议；无则写"无需后续操作"。\n- 回答用中文，简洁直接，不要客套。不要使用 emoji 表情符号。',
+    agent: (typeof App !== 'undefined' && App.AgentPrompt && App.AgentPrompt.SYSTEM_PROMPT) || '',
     doc: {
       summary: '请用中文对下面的资料做一段简洁的摘要（不超过 200 字）。',
       points: '请提取资料中的关键要点，用带编号的列表呈现，每条精简。',
@@ -124,6 +128,15 @@
     return App.ModelCapabilities.isVisionModel(model, list);
   };
 
+  // v2（权限大改）：permissionMode 迁移推导——旧 planMode/auto 映射到 5 档模式
+  function derivePermissionMode(p) {
+    if (p && typeof p.permissionMode === 'string' && ['plan', 'default', 'acceptEdits', 'auto', 'bypass', 'sandbox'].includes(p.permissionMode)) return p.permissionMode;
+    if (!p) return 'default';
+    if (p.planMode) return 'plan';
+    if (p.auto) return 'auto';
+    return 'default';
+  }
+
   // 从一段 JSON 文本还原并归一化应用状态（含旧版迁移）。oldFormat 表示来源为旧版 OLD_KEY。
   function applyLoaded(raw, oldFormat) {
     const parsed = JSON.parse(raw);
@@ -140,6 +153,9 @@
             name: m.name,
             contextWindow: (typeof m.contextWindow === 'number' && m.contextWindow > 0) ? m.contextWindow : 128000,
             caps: (m.caps && ['auto', 'tool_vision', 'tool', 'vision', 'text'].includes(m.caps)) ? m.caps : undefined,
+            // 聊天修复 D：maxOutput/thinkType 往返（归一化不再丢弃）
+            maxOutput: (typeof m.maxOutput === 'number' && m.maxOutput > 0) ? m.maxOutput : undefined,
+            thinkType: (typeof m.thinkType === 'string' && m.thinkType) ? m.thinkType : undefined,
           };
         return null;
       }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
@@ -191,7 +207,7 @@
     if (ps.search && typeof ps.search === 'object' && typeof ps.search.apiKey === 'string' && ps.search.apiKey) {
       ns.settings.search.apiKey = ps.search.apiKey;
     }
-    // 用户级长期记忆（CLAUDE.md 用户级对标）
+    // 用户级长期记忆
     ns.settings.userMemory = (typeof ps.userMemory === 'string') ? ps.userMemory : '';
     // 上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
     ns.settings.contextWindow = (typeof ps.contextWindow === 'number' && ps.contextWindow > 0) ? ps.contextWindow : 128000;
@@ -208,8 +224,19 @@
       ? ps.visionModels
       : ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'];
     // 糖码多会话线程：归一化 + 旧版 agentHistory 迁移为首个线程
+    const cleanSkills = (arr) => {
+      const out = [], seen = new Set();
+      for (const s of (Array.isArray(arr) ? arr : [])) {
+        const name = String((s && s.name) || '').trim();
+        if (!name || seen.has(name) || out.length >= 8) continue;
+        seen.add(name);
+        out.push({ name, description: String((s && s.description) || ''), level: String((s && s.level) || 'user') });
+      }
+      return out;
+    };
     const cleanHist = (arr) => (Array.isArray(arr) ? arr : [])
       .filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string')
+      .map(h => h.role === 'user' ? { role: 'user', content: h.content, skills: cleanSkills(h.skills) } : { role: 'assistant', content: h.content })
       .slice(-60);
     let threads = Array.isArray(parsed.agentThreads)
       ? parsed.agentThreads
@@ -220,12 +247,15 @@
           title: (typeof t.title === 'string' && t.title.trim()) ? t.title : '新会话',
           updatedAt: Number(t.updatedAt) || Date.now(),
           history: cleanHist(t.history),
+          draftText: typeof t.draftText === 'string' ? t.draftText : '',
+          draftSkills: cleanSkills(t.draftSkills),
+          draftRootScope: (t.draftRootScope && typeof t.draftRootScope === 'object') ? { mode: ['primary', 'single', 'all'].includes(t.draftRootScope.mode) ? t.draftRootScope.mode : 'primary', rootId: t.draftRootScope.mode === 'single' ? String(t.draftRootScope.rootId || '') : '' } : { mode: 'primary', rootId: '' },
         }))
       : [];
     // 旧版单条 agentHistory → 若无线程则包成首个会话
     const oldHist = cleanHist(parsed.agentHistory);
     if (!threads.length && oldHist.length) {
-      threads = [{ id: App.uid(), projectId: null, title: '会话 1', updatedAt: Date.now(), history: oldHist }];
+      threads = [{ id: App.uid(), projectId: null, title: '会话 1', updatedAt: Date.now(), history: oldHist, draftText: '', draftSkills: [], draftRootScope: { mode: 'primary', rootId: '' } }];
     }
     // 糖码项目：归一化 + 旧版迁移（无项目时用旧 agentCwd 创建默认项目）
     let projects = Array.isArray(parsed.projects)
@@ -236,18 +266,24 @@
           name: (typeof p.name === 'string' && p.name.trim()) ? p.name : '未命名项目',
           cwd: typeof p.cwd === 'string' ? p.cwd : '',
           workspaceId: typeof p.workspaceId === 'string' ? p.workspaceId : '',
+          roots: Array.isArray(p.roots) ? p.roots.filter(r => r && typeof r.rootId === 'string' && typeof r.path === 'string').map(r => ({ rootId: r.rootId, name: typeof r.name === 'string' ? r.name : '', path: r.path })) : [],
+          primaryRootId: typeof p.primaryRootId === 'string' ? p.primaryRootId : '',
           auto: !!p.auto,
           approveTools: Array.isArray(p.approveTools) ? p.approveTools.filter(x => typeof x === 'string') : [],
           cmdWhitelist: Array.isArray(p.cmdWhitelist) ? p.cmdWhitelist.filter(x => typeof x === 'string') : [],
           planMode: !!p.planMode,
+          maxSteps: Number(p.maxSteps) || 0, // v2（权限大改①）：补 maxSteps 往返
           createdAt: Number(p.createdAt) || Date.now(),
           lastUsedAt: Number(p.lastUsedAt) || Date.now(),
+          // v2（权限大改）：permissionMode 5 档（缺省按旧字段迁移）
+          permissionMode: derivePermissionMode(p),
+          permissionRules: Array.isArray(p.permissionRules) ? p.permissionRules : [],
         }))
       : [];
     if (!projects.length) {
       // 迁移：用旧 agentCwd 创建默认项目，approveTools 留空保持原行为
       projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
-        auto: false, approveTools: [], cmdWhitelist: [], planMode: false, createdAt: Date.now(), lastUsedAt: Date.now() }];
+        auto: false, approveTools: [], cmdWhitelist: [], planMode: false, permissionMode: 'default', permissionRules: [], createdAt: Date.now(), lastUsedAt: Date.now() }];
     }
     const firstPid = projects[0].id;
     // 把无 projectId 的线程归到首个项目
@@ -257,6 +293,8 @@
       ? parsed.activeProjectId : firstPid;
     ns.agentProjectsCollapsed = !!parsed.agentProjectsCollapsed;
     ns.agentSessionsCollapsed = !!parsed.agentSessionsCollapsed;
+    // v1.1.0（回退）：树折叠状态迁移到两栏折叠（若曾折叠过树则两栏也折叠）
+    if (parsed.agentTreeCollapsed) { ns.agentProjectsCollapsed = true; ns.agentSessionsCollapsed = true; }
     ns.agentThreads = threads;
     // 激活线程：优先用已存在的 activeThreadId，否则取首个线程
     const wantId = parsed.activeThreadId;
@@ -265,7 +303,8 @@
       : (threads[0] ? threads[0].id : null);
     const oldProviders = ps.providers || {};
     const newProviders = {};
-    for (const m of ['default', 'chat', 'image', 'doc']) {
+    // 聊天修复 C：保留全部 6 个模块（此前 agent/create 每载必丢 → 重启回退默认账户）
+    for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create']) {
       const op = oldProviders[m] || {};
       let accountId = (op.accountId !== undefined) ? op.accountId
         : (op.useDefault === false ? '__custom__' : '__default__');
@@ -288,7 +327,7 @@
       if (oldProviders.default.apiKey) acc.apiKey = oldProviders.default.apiKey;
       ns.settings.accounts = [acc];
       ns.settings.defaultAccountId = acc.id;
-      for (const m of ['default', 'chat', 'image', 'doc']) ns.settings.providers[m].accountId = '__default__';
+      for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create']) ns.settings.providers[m].accountId = '__default__';
     }
     App.state = ns;
     App.persist();
@@ -300,19 +339,10 @@
   // 端口一变 origin 即变，原 localStorage 全读不到 → 升级 / 每次重启都会丢数据。
   // 故优先从与端口无关的磁盘 state.json 读取（App.persist 一直双写它），localStorage 仅作回退。
   App.loadState = async function () {
-    // 0) M4 读源优先：SQLite（主数据源）。空库/不可用/落后 → ok:false，走下方回退链。
-    //    新鲜度由主进程 storage:loadState 依据 synced_at vs state.json mtime 判断，防 SQLite 落后。
-    try {
-      if (App.services.fs && App.services.fs.loadStorage) {
-        const r = await App.services.fs.loadStorage();
-        if (r && r.ok && r.state && typeof r.state === 'object') {
-          applyLoaded(JSON.stringify(r.state), false);
-          return;
-        }
-      }
-    } catch (e) { /* SQLite 读取失败则回退 */ }
-
-    // 1) 优先：磁盘 state.json（与端口无关，可在随机端口下稳定持久化）
+    // 聊天修复 B：权威源改为磁盘 state.json（实时双写、与端口无关、始终最新）；
+    // SQLite 降级为备份（仅 state.json 缺失/损坏时兜底）。此前 SQLite 优先 + synced_at
+    // 判定有漏洞（先前同步把 synced_at 推到 ≥mtime 后，旧 SQLite 被误判 fresh）→ 账户/对话重启回退。
+    // 1) 优先：磁盘 state.json
     try {
       if (App.services.fs && App.services.fs.loadStateJSON) {
         const res = await App.services.fs.loadStateJSON();
@@ -324,9 +354,20 @@
           }
         }
       }
-    } catch (e) { /* 磁盘读取失败则回退 localStorage */ }
+    } catch (e) { /* 磁盘读取失败则继续 */ }
 
-    // 2) 回退：localStorage（兼容开发模式与旧版）
+    // 2) 备份：SQLite（state.json 缺失/损坏时）
+    try {
+      if (App.services.fs && App.services.fs.loadStorage) {
+        const r = await App.services.fs.loadStorage();
+        if (r && r.ok && r.state && typeof r.state === 'object') {
+          applyLoaded(JSON.stringify(r.state), false);
+          return;
+        }
+      }
+    } catch (e) { /* SQLite 读取失败则回退 */ }
+
+    // 3) 回退：localStorage（兼容开发模式与旧版）
     try {
       let raw = localStorage.getItem(STORAGE_KEY);
       let oldFormat = false;
@@ -368,14 +409,19 @@
     } catch (e) { /* ignore */ }
   };
 
-  // M4 写穿兜底：关闭前若有未落盘的同步立即 flush
+  // M4 写穿兜底：关闭前若有未落盘的同步立即 flush（聊天修复：改同步 sendSync，杜绝 fire-and-forget 竞态）
   try {
     window.addEventListener('beforeunload', () => {
       try {
         if (_syncTimer) { clearTimeout(_syncTimer); _syncTimer = null; }
-        if (App.rt && App.rt.syncStorage) {
-          const json = JSON.stringify(App.state);
-          if (json !== _lastSyncedJson) { _lastSyncedJson = json; App.rt.syncStorage(json); }
+        const json = JSON.stringify(App.state);
+        if (json !== _lastSyncedJson) {
+          _lastSyncedJson = json;
+          if (App.services.fs && App.services.fs.flushStorageSync) {
+            App.services.fs.flushStorageSync(json);
+          } else if (App.rt && App.rt.syncStorage) {
+            App.rt.syncStorage(json);
+          }
         }
       } catch (e) { /* ignore */ }
     });

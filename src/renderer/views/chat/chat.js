@@ -24,6 +24,23 @@
   ];
 
   let streaming = false;
+  let streamConvId = null;  // 聊天修复 E：当前流式回复所属会话 id（区分“本会话忙碌”与“其它会话忙碌”）
+  let voiceBase = '';       // B5（P2）：语音听写最终文本基线——interim 更新时替换而非重复累加
+  // 聊天修复 E：半开连接看门狗——首字节 30s / 流数据空闲 90s 未推进视为连接失效，
+  // 抛 STREAM_IDLE_TIMEOUT 由 streamChat 外层 catch 走 saveAnswer 兜底并复位 streaming，杜绝“卡死吞消息”。
+  const STREAM_FIRST_BYTE_MS = 30000;
+  const STREAM_IDLE_MS = 90000;
+  const raceTimeout = (promise, ms) => {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const e = new Error('流式响应空闲超时（' + Math.round(ms / 1000) + 's 无数据），已断开连接');
+        e.code = 'STREAM_IDLE_TIMEOUT';
+        reject(e);
+      }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+  };
   let recognition = null;   // 语音听写实例
   let listening = false;    // 语音听写状态
   let pendingAttachments = []; // 待发送附件 [{id,name,type,text,size}]
@@ -281,27 +298,23 @@
 
     showWelcome() {
       const welcome = $('welcome');
-      const composer = $('composer');
       const messages = $('messages');
+      const composer = $('composer');
       welcome.style.display = 'flex';
       messages.style.display = 'none';
       composer.style.display = 'block';
-      composer.classList.add('centered');
-      welcome.appendChild(composer); // 把输入框移入欢迎区，居中显示
+      // 聊天修复 F：输入框不再移入欢迎区居中——composer 始终留在 .view 底部，欢迎页也统一贴底
       $('chatTitle').textContent = '糖包';
       messages.innerHTML = '';
     },
 
     showChat() {
       const welcome = $('welcome');
-      const composer = $('composer');
       const messages = $('messages');
-      const view = document.querySelector('.view[data-view="chat"]');
+      const composer = $('composer');
       welcome.style.display = 'none';
       messages.style.display = 'flex';
       composer.style.display = 'block';
-      composer.classList.remove('centered');
-      view.appendChild(composer); // 把输入框移回视图底部
     },
 
     renderSuggestions() {
@@ -382,7 +395,9 @@
           </div>`;
         const bubble = wrap.querySelector('.user-bubble');
         bubble.textContent = m.content || '';
-        if (!m.content && !imgHtml && attHtml) bubble.style.display = 'none';
+        // 聊天修复 G：无文字即隐藏卡片气泡——纯图片/纯附件/空内容不再显示白底气泡，
+        // 图片保留 .chat-img 圆角细边框直显；图文混合时行为不变
+        if (!m.content) bubble.style.display = 'none';
       }
       return wrap;
     },
@@ -415,7 +430,7 @@
       App.chat.updateCtxBar();
     },
 
-    // 渲染聊天上下文用量条（对齐 Claude Code：显示实际发送给模型的 token 数）
+    // 渲染聊天上下文用量条（显示实际发送给模型的 token 数）
     // M12：统一构建发送给模型的系统提示内容（基础系统提示 + 智能体语气）；streamChat 与 updateCtxBar 共用，保证用量条与实际发送一致
     buildSystemContent(conv) {
       const baseSys = (conv && conv.systemPrompt) || (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
@@ -515,28 +530,48 @@
         systemContent,
         window: ctxWindow,
       });
-      const finalMessages = compact.finalMessages;
-      // 后台压缩：fire-and-forget，结果下一轮发送时生效
+      let finalMessages = compact.finalMessages;
+      // 压缩（G3）：首次（无摘要）同步出摘要再发送，消除「先丢历史、下一轮才有摘要」断层；已有摘要时后台异步，下一轮生效
       if (compact.needsCompress && compact.middleMsgs.length && !conv._compressing) {
         conv._compressing = true;
         const vCheck = () => compact.newSummaryCount === (conv.summaryCount || 0) + compact.middleMsgs.length;
-        App.context.compressAsync(conv.summary || '', compact.middleMsgs, s, ctxWindow, vCheck).then(newSummary => {
+        if (!conv.summary) {
+          // G3：首次压缩改同步——先出摘要再组装发送；失败回退全量，不丢中间段
+          const newSummary = await App.context.compressAsync('', compact.middleMsgs, s, ctxWindow, vCheck).catch(() => null);
           if (newSummary) {
             conv.summary = newSummary;
             conv.summaryCount = compact.newSummaryCount;
             App.persist();
             App.chat.updateCtxBar();
-            App.ui.toast('已自动压缩较早对话上下文');
+            const compact2 = App.context.getCompactMessages({
+              messages: allMsgs, summary: conv.summary, summaryCount: conv.summaryCount || 0,
+              recentKeep: App.context.RECENT_KEEP_CHAT, systemContent, window: ctxWindow,
+            });
+            finalMessages = compact2.finalMessages;
+          } else {
+            finalMessages = allMsgs; // G3：压缩失败回退全量发送，不丢中间段
           }
           conv._compressing = false;
-        });
+        } else {
+          App.context.compressAsync(conv.summary || '', compact.middleMsgs, s, ctxWindow, vCheck).then(newSummary => {
+            if (newSummary) {
+              conv.summary = newSummary;
+              conv.summaryCount = compact.newSummaryCount;
+              App.persist();
+              App.chat.updateCtxBar();
+              App.ui.toast('已自动压缩较早对话上下文');
+            }
+            conv._compressing = false;
+          });
+        }
       }
       // /context 明细：system=系统提示，memory=用户长期记忆（内联进系统提示，单独列为 memory 段），history=对话+摘要
       const cmSys = App.context.estimateTokens(baseSys);
       const cmMem = App.context.estimateTokens(userMemory);
       const cmTotal = App.context.messagesTokens(finalMessages);
       const chatBd = { system: cmSys, memory: cmMem, history: Math.max(0, cmTotal - cmSys - cmMem) };
-      if (App.context.renderUsage) App.context.renderUsage($('chatCtxBar'), cmTotal, App.context.contextWindowOf(s.model), chatBd);
+      // G6：用量条阈值用实际发送模型（conv.model 优先），而非聊天默认 s.model
+      if (App.context.renderUsage) App.context.renderUsage($('chatCtxBar'), cmTotal, App.context.contextWindowOf(model), chatBd);
       const payload = {
         model,
         stream: true,
@@ -595,7 +630,19 @@
       };
       const flushNow = () => {
         if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-        flushRender();
+        // 聊天修复 A：flush 渲染异常不得阻断消息落库（否则 streaming 卡死吞消息）
+        try { flushRender(); } catch (e) { console.error('[chat] flush 渲染失败：', e); }
+      };
+      // 聊天修复 A：流末兜底保存——中断/报错也保留已生成内容（同糖码 finish 无条件保存）
+      const saveAnswer = (errText) => {
+        try { flushNow(); } catch (e) {}
+        if (!acc && thinkAcc) { acc = thinkAcc; thinkAcc = ''; }
+        if (acc || thinkAcc) {
+          conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
+        } else if (errText) {
+          conv.messages.push({ role: 'assistant', content: '⚠️ ' + String(errText).slice(0, 240), think: '', webSources: webSourcesCount });
+        }
+        conv.updatedAt = Date.now();
       };
       const appendDelta = (text, isThink) => {
         if (!started) { ui.bubble.innerHTML = ''; started = true; }
@@ -621,19 +668,28 @@
         }
       };
       try {
-        // 走主进程模型网关：前端只给密钥引用 + 用途，目标地址和 Key 都由主进程解析
-        const res = await App.rt.gatewayFetch({ ref: s.ref, kind: 'chat', payload });
+        // 聊天修复 E：首字节看门狗——fetch 阶段挂起（网络半开）30s 后终止，走外层兜底保存
+        const res = await raceTimeout(App.rt.gatewayFetch({ ref: s.ref, kind: 'chat', payload }), STREAM_FIRST_BYTE_MS);
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
           ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 240))}</div>`;
           ui.actions.style.display = 'flex';
+          saveAnswer(txt); // 聊天修复 A：失败也保留已生成部分/错误消息
           return;
         }
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
         while (true) {
-          const { done, value } = await reader.read();
+          // 聊天修复 E：流数据空闲看门狗——每次 read 重新计时，90s 无数据视为半开连接
+          let chunk;
+          try {
+            chunk = await raceTimeout(reader.read(), STREAM_IDLE_MS);
+          } catch (e) {
+            if (e && e.code === 'STREAM_IDLE_TIMEOUT') throw e; // 外层 catch 走 saveAnswer 兜底
+            throw e;
+          }
+          const { done, value } = chunk;
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           const parts = buf.split('\n');
@@ -682,6 +738,7 @@
       } catch (err) {
         ui.bubble.innerHTML = `<div class="msg-error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</div>`;
         ui.actions.style.display = 'flex';
+        saveAnswer(err.message || err); // 聊天修复 A：中断保留已生成部分/错误消息
         return;
       }
       // 安全网：原生推理模型（如 grok）可能把完整回答放在思考通道（reasoning_content
@@ -691,14 +748,13 @@
         thinkAcc = '';
         ui.bubble.innerHTML = App.renderMarkdown(acc);
       }
-      flushNow();
+      // 聊天修复 A：统一走 saveAnswer 兜底保存（flushNow 已内置 try/catch）
+      saveAnswer();
       if (!acc && !thinkAcc) ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
-      conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
-      conv.updatedAt = Date.now();
       ui.actions.style.display = 'flex';
     },
 
-    // 手动压缩当前对话上下文（对标 /compact）：整段生成摘要并持久化，不裁剪 UI 历史
+    // 手动压缩当前对话上下文：整段生成摘要并持久化，不裁剪 UI 历史
     async compactNow() {
       const conv = App.chat.activeConv();
       if (!conv || !conv.messages.length) return;
@@ -734,14 +790,20 @@
 
     async send() {
       const text = $('input').value.trim();
-      // /memory 命令：写入用户长期记忆（不进入对话），对标 Claude Code 的 /memory
+      // /memory 命令：写入用户长期记忆（不进入对话）
       if (text.startsWith('/memory')) {
         App.chat.writeMemory(text.slice(7).trim());
         $('input').value = ''; App.chat.autoSize();
         return;
       }
       const atts = pendingAttachments.slice();
-      if ((!text && !atts.length) || streaming) return;
+      if (!text && !atts.length) return;
+      // 聊天修复 E：流式期间不再静默吞消息——明确提示忙碌来源，输入内容原样保留
+      if (streaming) {
+        const busySame = streamConvId === (App.state.activeId || null);
+        App.ui.toast(busySame ? '当前对话仍在回复中，请稍候或等待完成后重试' : '另一个对话仍在回复中，请稍候');
+        return;
+      }
       let conv = App.chat.activeConv();
       if (!conv) conv = App.chat.newConversation();
       // M7：编辑上一条消息 → 截断到该条（含）、替换内容、重新生成（复用 regen 骨架）
@@ -761,11 +823,17 @@
         App.chat.renderMessages();
         const ui = App.chat.appendAssistant();
         App.chat.scrollBottom(true);
-        streaming = true; App.chat.setSending(true);
-        await App.chat.streamChat(conv, ui);
-        streaming = false; App.chat.setSending(false);
-        App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
-        App.services.float.refresh();
+        streaming = true; streamConvId = conv.id; App.chat.setSending(true);
+        try {
+          await App.chat.streamChat(conv, ui);
+        } finally {
+          // 聊天修复 A：编辑重生成同样必须复位（防 streaming 卡死吞消息）
+          // 聊天修复 E：只重渲染流归属会话——期间若已切到其它对话，不打扰当前视图（数据已 persist，切回时 activate() 会重绘）
+          streaming = false; streamConvId = null; App.chat.setSending(false);
+          App.persist(); App.ui.renderSidebar();
+          if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+          App.services.float.refresh();
+        }
         return;
       }
       const userMsg = { role: 'user', content: text };
@@ -781,11 +849,17 @@
       $('messages').appendChild(App.chat.messageNode(userMsg, 0));
       const ui = App.chat.appendAssistant();
       App.chat.scrollBottom(true);
-      streaming = true; App.chat.setSending(true);
-      await App.chat.streamChat(conv, ui);
-      streaming = false; App.chat.setSending(false);
-      App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
-      App.services.float.refresh();
+      streaming = true; streamConvId = conv.id; App.chat.setSending(true);
+      try {
+        await App.chat.streamChat(conv, ui);
+      } finally {
+        // 聊天修复 A：无论流式是否抛错都复位 streaming + 保存 + 重渲染（防卡死吞消息）
+        // 聊天修复 E：只重渲染流归属会话（切走后不打扰当前视图）
+        streaming = false; streamConvId = null; App.chat.setSending(false);
+        App.persist(); App.ui.renderSidebar();
+        if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        App.services.float.refresh();
+      }
     },
 
     // M7：编辑上一条用户消息并重新生成。editingIndex = 被编辑的用户消息下标
@@ -814,6 +888,8 @@
     async regen(index) {
       const conv = App.chat.activeConv();
       if (!conv || index < 1 || conv.messages[index].role !== 'assistant') return;
+      // B5（P2）：流式进行中禁止 regen 并发——避免两条流互相覆盖（与发送时的 busySame 守卫一致）
+      if (streaming) { App.ui.toast('当前回复仍在生成中，请稍候再重新生成'); return; }
       // M9：旧回答归档为版本（同一问题多答案可切换对比），新回答成为最新版
       const am = conv.messages[index];
       const oldVersions = (am.versions && am.versions.length)
@@ -825,9 +901,17 @@
       App.chat.renderMessages();
       // re-stream
       const ui = App.chat.appendAssistant();
-      streaming = true; App.chat.setSending(true);
-      await App.chat.streamChat(conv, ui);
-      streaming = false; App.chat.setSending(false);
+      streaming = true; streamConvId = conv.id; App.chat.setSending(true);
+      try {
+        await App.chat.streamChat(conv, ui);
+      } finally {
+        // 聊天修复 A：流式异常也必须复位（防 streaming 卡死）
+        // 聊天修复 E：只重渲染流归属会话（切走后不打扰当前视图）
+        streaming = false; streamConvId = null; App.chat.setSending(false);
+        App.persist(); App.ui.renderSidebar();
+        if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        App.services.float.refresh();
+      }
       // M9：新回复挂 versions（旧版本 + 新内容，上限 5 版）
       const last = conv.messages[conv.messages.length - 1];
       if (last && last.role === 'assistant') {
@@ -862,21 +946,30 @@
       recognition.continuous = false;
       recognition.onstart = () => {
         listening = true;
+        voiceBase = $('input').value; // B5（P2）：记录开始前已有文本作为最终基线
         const b = $('micBtn'); if (b) b.classList.add('listening');
         App.ui.toast('正在聆听…说完点一下麦克风停止');
       };
       recognition.onresult = (e) => {
-        let txt = '';
-        for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
-        const cur = $('input').value;
-        const prefix = cur && !cur.endsWith('\n') ? cur + ' ' : cur;
-        $('input').value = prefix + txt;
+        // B5（P2）：区分最终/临时结果——interim 每次触发只替换临时段，不再把全部结果反复累加
+        let finalText = '', interimText = '';
+        for (let i = 0; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += t; else interimText += t;
+        }
+        const base = voiceBase;
+        const parts = [];
+        if (base) parts.push(base);
+        if (finalText) parts.push(finalText);
+        if (interimText) parts.push(interimText);
+        $('input').value = parts.join(' ');
         App.chat.autoSize();
         App.chat.updateSendEnabled();
         $('input').focus();
       };
       recognition.onend = () => {
         listening = false;
+        voiceBase = $('input').value; // B5（P2）：结束固化基线，避免下次 interim 重复累加
         const b = $('micBtn'); if (b) b.classList.remove('listening');
       };
       recognition.onerror = (e) => {

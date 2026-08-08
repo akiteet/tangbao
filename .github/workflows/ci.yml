@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  smoke:
+    name: Syntax & static smoke (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # 不装依赖：node --check / bench --list / 静态 smoke 均不需要 better-sqlite3
+      - name: Syntax check all JS
+        run: |
+          find src scripts server -name '*.js' 2>/dev/null | xargs -r -n1 node --check
+          node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('pkg JSON OK')"
+      - name: Eval task set readable
+        run: node scripts/bench.js --list
+      - name: Static smoke (v2 anchors)
+        run: |
+          node -e "
+            const fs = require('fs');
+            const srv = fs.readFileSync('src/infrastructure/agent-runtime/agent-server.js','utf8');
+            const agent = fs.readFileSync('src/renderer/views/agent/agent.js','utf8');
+            const checks = [
+              ['needsApproval 决策链', srv.includes('permCtx && permCtx.mode')],
+              ['readProjectRules', srv.includes('function readProjectRules(cwd)')],
+              ['SAFE_CMD', srv.includes('const SAFE_CMD = [')],
+              ['runAuth 隔离', srv.includes('const runAuthRegistry = new Map()')],
+              ['预算实装', srv.includes('达到费用预算上限')],
+              ['unrelatedFileWrites', srv.includes('function markUnrelatedWrite(opts, relPath)')],
+              ['sandbox 档', srv.includes(\"'sandbox'\") && agent.includes('Sandbox 隔离自动')],
+              ['propose_memory', srv.includes(\"name === 'propose_memory'\")],
+            ];
+            let bad = 0;
+            for (const [n, c] of checks) { if (!c) { console.error('FAIL: ' + n); bad++; } }
+            if (bad) process.exit(1);
+            console.log('smoke OK (' + checks.length + ' anchors)');
+          "
+
+  eval:
+    name: Eval smoke (simple-001, skips without secrets)
+    runs-on: ubuntu-latest
+    needs: smoke
+    if: ${{ vars.RUN_EVAL == 'true' || vars.RUN_EVAL == 'full' }}
+    env:
+      AGENT_API_BASE: ${{ secrets.AGENT_API_BASE }}
+      AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
+      EVAL_MODEL: ${{ secrets.EVAL_MODEL }}
+      EVAL_CWD: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Start agent server & run one eval task
+        run: |
+          if [ -z "$AGENT_API_BASE" ] || [ -z "$AGENT_API_KEY" ] || [ -z "$EVAL_MODEL" ]; then
+            echo "eval skipped: missing AGENT_API_BASE / AGENT_API_KEY / EVAL_MODEL secrets"
+            exit 0
+          fi
+          node src/infrastructure/agent-runtime/agent-server.js &
+          SERVER_PID=$!
+          sleep 1
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          node scripts/bench.js --eval simple-001
+      - name: Full eval + metrics gate (RUN_EVAL=full)
+        if: ${{ vars.RUN_EVAL == 'full' }}
+        run: |
+          if [ -z "$AGENT_API_BASE" ] || [ -z "$AGENT_API_KEY" ] || [ -z "$EVAL_MODEL" ]; then
+            echo "full eval skipped: missing secrets"; exit 0
+          fi
+          node src/infrastructure/agent-runtime/agent-server.js &
+          SERVER_PID=$!
+          sleep 1
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          node scripts/bench.js --eval
+          node -e "
+            const fs=require('fs');
+            const r=JSON.parse(fs.readFileSync('benchmarks/last-eval.json','utf8'));
+            const res=r.results||[];
+            const passedOf=(x)=>typeof x.machinePassed==='boolean'?x.machinePassed:(x.status==='done'&&x.judgment&&x.judgment.ok);
+            const passed=res.filter(passedOf).length;
+            const selfDone=res.filter(x=>x.selfReportedDone).length;
+            const assertFail=res.filter(x=>x.selfReportedDone&&!passedOf(x)).length;
+            const rate=res.length?passed/res.length:0;
+            const reg=(r.metrics&&r.metrics.regressions)||0;
+            const avgFail=res.length?res.reduce((a,x)=>a+(x.failures||0),0)/res.length:0;
+            console.log('machineSuccessRate='+rate.toFixed(2)+' machinePassed='+passed+' selfReported='+selfDone+' assertionFailed='+assertFail+' regressions='+reg+' avgFailures='+avgFail.toFixed(2));
+            if(rate<0.6){console.error('METRICS GATE FAIL: machineSuccessRate < 0.6');process.exit(1);}
+            if(reg>0){console.error('METRICS GATE FAIL: regressions > 0');process.exit(1);}
+            if(avgFail>3){console.error('METRICS GATE FAIL: avgFailures > 3');process.exit(1);}
+            console.log('metrics gate OK (machine-judged)');
+          "

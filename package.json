@@ -1,6 +1,6 @@
 {
   "name": "tangbao-web",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "private": true,
   "description": "糖包 - 全能 AI 助手桌面版（含糖码本地后端）",
   "author": "糖包",
@@ -8,7 +8,12 @@
   "scripts": {
     "start": "electron .",
     "server": "node src/infrastructure/agent-runtime/agent-server.js",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:runtime": "node --test \"test/**/*.test.js\"",
+    "bench": "node scripts/bench.js",
+    "eval": "node scripts/bench.js --eval",
+    "eval:one": "node scripts/bench.js --eval"
   },
   "build": {
     "appId": "com.tangbao.desktop",
@@ -20,6 +25,11 @@
       "styles.css",
       "assets/**/*",
       "vendor/**/*",
+      "docs/**/*",
+      "README.md",
+      "README.en.md",
+      "benchmarks/tasks.json",
+      "benchmarks/fixtures/**/*",
       "package.json"
     ],
     "asarUnpack": [
@@ -48,7 +58,9 @@
     }
   },
   "dependencies": {
-    "better-sqlite3": "^11.3.0"
+    "better-sqlite3": "^11.3.0",
+    "js-yaml": "^4.1.0",
+    "yauzl": "^3.2.0"
   },
   "devDependencies": {
     "electron": "^31.7.7",

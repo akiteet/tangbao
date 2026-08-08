@@ -1,160 +1,130 @@
 # 糖包数据模型（Data Model）
 
-> 本文档描述糖包 **v1.0.6** 前端状态的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
-> 配套阅读：[跨模块成果 · v1.0.6 安全改造](./CROSS_MODULE.md)。
+> 本文档描述糖包 **v1.1.0** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
+> 配套阅读：[跨模块成果 · v1.0.6 安全改造 + v1.1.0 演进](./CROSS_MODULE.md)。
 
 ---
 
-## 1. 存储载体
+## 1. 概览
 
-| 载体 | 说明 |
-|---|---|
-| `localStorage` 键 `tangbao_web_state_v1` | 主存储。`doubao_web_state_v1` 为旧键，首次启动时兼容读取并迁移后删除。 |
-| `userData/tangbao-data/state.json` | 双写副本（经 `window.electron.saveStateJSON`），便于查看与备份。 |
-| 系统密钥库 | API Key 明文**不进上述两者**，改存操作系统密钥服务（见第 6 节）。 |
+糖包的数据以 **SQLite（better-sqlite3）为权威源**，另有两份辅助持久化：`state.json`（可读双写副本，便于查看与备份）与 `workspaces.json`（工作区注册表）；API 密钥一律存操作系统密钥库（`secrets/kvstore.js`），明文绝不落盘。
 
-- 没有 `schemaVersion` 字段，版本迁移靠「字段形态嗅探」完成（见第 7 节）。
-- **v1.0.6 起 `state.json` 与 localStorage 里均不再含任何 API Key 明文。**
-
----
-
-## 2. `App.state` 顶层字段
-
-`App.state` 由 `js/state.js` 的 `defaultState()` 初始化，核心字段如下：
-
-| 字段 | 类型 | 含义 |
+| 载体 | 路径 | 角色 |
 |---|---|---|
-| `conversations` | `Array` | 聊天对话列表（见第 4 节） |
-| `activeId` | `string \| null` | 当前对话 id |
-| `theme` | `'light' \| 'dark'` | 主题（外观实际由 `settings.appearance.mode` 控制，二者并存） |
-| `view` | `string` | 当前视图模块，默认 `'chat'` |
-| `settings` | `Object` | 全局配置（见第 3 节） |
-| `agentThreads` | `Array` | 糖码多会话线程（见第 5 节） |
-| `activeThreadId` | `string \| null` | 当前激活的糖码会话 id |
-| `projects` | `Array` | 糖码项目（见第 5 节） |
-| `activeProjectId` | `string \| null` | 当前激活的糖码项目 id |
-| `agentProjectsCollapsed` / `agentSessionsCollapsed` | `boolean` | 侧栏折叠状态 |
-| `thinkLevel` | `'off' \| 'low' \| 'medium' \| 'high'` | 深度思考强度，默认 `'medium'` |
-| `web` | `boolean` | 联网搜索总开关 |
+| SQLite 数据库 | `userData/tangbao.db` | **权威源**：对话、消息、账户、项目、糖码运行等全部结构化数据 |
+| 状态双写副本 | `userData/tangbao-data/state.json` | 便于人工查看/备份的只读副本，由主进程随状态变化刷新 |
+| 工作区注册表 | `userData/workspaces.json` | `workspaceId ↔ { cwd, name }` 映射 |
+| 密钥库 | `src/infrastructure/secrets/kvstore.js`（数据落 `userData` 内） | API Key 等敏感值，`safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret） |
+| localStorage | 渲染进程 | **已废弃**（v1.0.6 之前的主存储；v1.0.7 起不再作为数据源） |
+
+- 数据库 Schema 版本：**`SCHEMA_VERSION = 15`**（`src/core/schemas/db-schema.js`），通过 SQLite `PRAGMA user_version` 顺序执行迁移（见第 5 节）。
+- 任何位置都不存 API Key 明文。
 
 ---
 
-## 3. `settings` 子结构
+## 2. 表清单（21 张）
 
-| 子字段 | 结构 / 说明 |
-|---|---|
-| `accounts` | `[{ id, name, apiBase, models:[{ name, contextWindow, thinkType? }] }]`——**不含 `apiKey`** |
-| `defaultAccountId` | `string`，默认账户 id |
-| `providers` | `{ default, chat, agent, create, image, doc }`，每项 `{ accountId:'__default__'\|'__custom__'\|<id>, apiBase, model }` |
-| `profile` | `{ name:'糖包用户', avatar:'' }` |
-| `appearance` | `{ mode:'light'\|'dark'\|'system', accent:'', radius:'' }` |
-| `prompts` | `{ chat:'', agent:'', doc:{ summary, points, translate, outline } }`，用户可覆盖的内置提示词 |
-| `agents` | `Array`，自定义智能体模板 |
-| `agentUsage` | `{ [agentId]: number }`，智能体使用次数 |
-| `templates` | `Array`，提示词模板库 `[{ id, title, category, prompt, icon }]` |
-| `workflows` | `Array`，智能体工作流 `[{ id, name, steps:[{ title, prompt, usePrev }] }]` |
-| `imageHistory` | `Array`，糖绘历史 `[{ id, prompt, style, size, n, images:[b64...], createdAt }]` |
-| `docs` | `Array`，已上传文档 `[{ id, name, text, size, createdAt }]`（限长截断） |
-| `agentCwd` | `string`，**遗留字段**；旧版编码助手工作目录，迁移时用于创建默认项目 |
-| `search` | `{}`，联网搜索配置；Key 存在密钥库的 `'search'` 引用下，不落 state |
-| `userMemory` | `string`，用户级长期记忆（对标 CLAUDE.md 用户级），注入糖码系统提示 |
-| `contextWindow` | `number`，上下文窗口 token 数，默认 `128000`（自动压缩阈值与 `/context` 分母） |
-| `visionModels` | `Array<string>`，视觉模型白名单（`gpt-4o` / `claude-3-5` / `qwen-vl` …） |
-| `enabledModules` | `['chat','image','doc','create','agent']`，启用的内置模块 |
-| `customModules` | `[{ id, label, url, forceEmbed, hidden }]`，用户自定义模块 |
+### 2.1 核心业务表（14 张，migration0 建表）
 
----
+| 表 | 关键列 | 职责 |
+|---|---|---|
+| `conversations` | id, title, agent_id, system_prompt, created_at, updated_at | 糖包·聊天会话 |
+| `messages` | id, conv_id, idx, role, content, created_at, meta | 消息正文；思考链/联网引用/附件等并入 `meta` |
+| `accounts` | id, name, api_base, created_at, updated_at | 账户（**不含密钥**，密钥走密钥库） |
+| `account_models` | account_id, name, context_window, caps, max_output, think_type | 账户模型清单与能力元数据 |
+| `providers` | module, account_id, api_base, model | 各模块当前使用的账户/模型 |
+| `agents` | id, name, description, system_prompt, icon, category | 糖创自定义智能体 |
+| `templates` | id, title, category, prompt, icon | 提示词模板库 |
+| `workflows` | id, name, steps, created_at | 多步骤工作流定义 |
+| `image_history` | id, prompt, style, size, n, created_at | 糖绘出图记录 |
+| `image_files` | id, history_id, seq, data, created_at | 图片二进制（base64 dataURL） |
+| `docs` | id, name, text, size, created_at | 糖读上传文档（文本截断存储） |
+| `projects` | id, name, cwd, workspace_id, roots_json, primary_root_id, auto, approve_tools, cmd_whitelist, plan_mode, created_at, last_used_at | 糖码项目（多根工作区：`roots_json` + 主根 `primary_root_id`） |
+| `agent_threads` | id, project_id, title, updated_at, history, draft_text, draft_skills, draft_root_scope_json | 糖码会话（含草稿/任务范围草稿） |
+| `kv_meta` | key, value | 通用键值元数据 |
 
-## 4. 对话模型（糖包·聊天）
+### 2.2 工作流运行（1 张，migration1）
 
-**conversation**
-```
-{ id, title, messages:[...], updatedAt,
-  agentId?, systemPrompt?, model?, temperature?, topP?, web?, starters?[] }
-```
+| 表 | 关键列 | 职责 |
+|---|---|---|
+| `workflow_runs` | id, workflow_id, workflow_name, status, input_json, output_json, error, steps_json, started_at, finished_at | 工作流运行历史 |
 
-**message**
-```
-{ role:'user' | 'assistant', content:string,
-  think?:string,        // 思考链
-  webSources?:number,   // 联网引用条数
-  attachments?:[...] }
-```
+### 2.3 糖码运行数据（6 张，migration2+；**刻意不进 `TABLES`，清数据时保留运行历史/审计轨迹**）
 
-**attachment**
-- 图片：`{ id, name, type:'image', data:dataURL, size }`
-- 文本：`{ id, name, type:<mime>, text, size }`（文本截断至 20000 字）
+| 表 | 关键列 | 职责 |
+|---|---|---|
+| `agent_runs` | id, thread_id, workspace_id, cwd, workspace_snapshot_json, workspace_fingerprint, primary_root_id, user_goal, status, phase, model_id, provider_ref, plan_mode, limits_json, usage_json, error, started_at, finished_at, working_state_id, latest_checkpoint_id, parent_run_id, role, depth, read_only, budget_json, continued_from_run_id, root_run_id, continuation_index, root_scope_json | 糖码每次运行（主 Run / 子 Agent Run / 续段谱系均在此，`role`/`parent_run_id`/`continued_from_run_id` 表达关系） |
+| `agent_run_events` | id, run_id, seq, type, payload_json, created_at | 运行事件流（按 run + seq 有序回放） |
+| `agent_working_states` | run_id, goal, plan_json, completed_json, pending_json, blocked_json, files_read_json, files_changed_json, commands_json, checks_json, decisions_json, unresolved_errors_json, verification_skips_json, pending_decisions_json, subagents_json, skill_context_json, assumptions_json, user_confirmations_json, updated_at | 运行中工作状态快照（恢复/续段/审批依赖它） |
+| `agent_checkpoints` | id, run_id, seq, reason, state_json, events_to_seq, created_at | 断点检查点（精确恢复） |
+| `agent_context_summaries` | id, run_id, thread_id, covered_from_seq, covered_to_seq, summary, version, summary_json, source_hashes_json, validity, created_at | 上下文压缩摘要（结构化 + 来源哈希 + 有效性） |
+| `agent_changesets` | id, run_id, root_id, path, old_hash, content_ref, operation, new_hash, target_path, before_exists, status, created_at | 运行级文件变更快照（整 Run 回滚 / Diff 恢复） |
 
 ---
 
-## 5. 智能体模型（糖码·编码）
+## 3. 糖码运行数据的用途
 
-**project**
-```
-{ id, name, cwd, workspaceId,
-  auto, approveTools:[], cmdWhitelist:[], planMode,
-  createdAt, lastUsedAt }
-```
-- `cwd`：后端实际工作目录（绝对路径）。
-- **`workspaceId`**（v1.0.6 新增）：不透明 UUID。渲染进程只持有它，后端经 `resolveWorkspace(id)` 解析出 `cwd`；未知 id 直接拒绝。详见[跨模块成果](./CROSS_MODULE.md)。
-
-**thread**
-```
-{ id, projectId, title, updatedAt,
-  history:[{ role, content }],   // 持久化时裁剪至最近 60 条
-  summary?, summaryCount? }
-```
-
-**workspaceId 注册表（主进程）**
-- `Map<workspaceId, { cwd, name }>`，持久化到 `userData/workspaces.json`。
-- `registerWorkspace(absPath, name)` 校验绝对路径 + 目录存在后，发放 `crypto.randomUUID()` 作为不透明 id（幂等）。
-- 旧项目（有 `cwd` 无 `workspaceId`）在运行时惰性登记迁移。
+- **运行历史**：`agent_runs` + `agent_run_events` 支撑设置页「运行历史」弹窗（按页浏览、检索）。
+- **断点恢复与自动续段**：`agent_checkpoints` + `agent_working_states` 记录每一步完整工作状态，任务中断后可从检查点**精确恢复**并自动续段；`agent_runs` 的 `continued_from_run_id / root_run_id / continuation_index` 表达续段谱系。
+- **上下文压缩**：`agent_context_summaries` 保存压缩摘要（含覆盖消息区间与来源哈希），避免上下文溢出时丢失计划/错误/变更记录。
+- **回滚**：`agent_changesets` 保存每次文件写入的前后哈希与内容引用，支持整 Run 回滚与 Diff 恢复。
+- **审计**：六张运行表默认保留，不受「清空数据」影响。
 
 ---
 
-## 6. 密钥存储（**不在** state 内）
+## 4. 迁移机制
 
-真实 API Key 不进 `state` / `localStorage` / `state.json`，改由主进程密钥库保管：
-
-- 渲染进程只持有 **ref** 引用：
-  - `acc:<accountId>` —— 设置里保存的账户
-  - `custom:<module>` —— 模块「自定义填写」的独立密钥
-  - `search` —— 联网搜索（Tavily）可选 Key
-- 通过 `App.getProvider(module)` 解析得到 `{ apiBase, ref, hasKey, model, models }`，**返回结构里没有 `apiKey`**。
-- 密钥落地在 `server/secrets.js`：
-  - `safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret）。
-  - 临时文件 + `rename` 原子写，`chmod 600`，写后回读校验。
-  - `setSecret` 带**回滚**：写入失败或回读不一致则恢复原值。
-  - 系统密钥服务不可用时降级为 base64 明文并标记 `enc:false`（不静默丢 Key）。
-- `preload.js` 只暴露 `set / delete / deletePrefix / list / has`，**故意不暴露 `getSecret`**；密钥只在主进程内部使用，不经 IPC 回程消息。
-
----
-
-## 7. 迁移机制
-
-`App.loadState()` 在启动时对旧数据做字段形态嗅探（无 `schemaVersion`）：
-
-| 旧形态 | 新形态 |
-|---|---|
-| 模型 `string[]` | `{ name, contextWindow }[]` |
-| `think: boolean` | `thinkLevel: 'off' \| 'medium'` |
-| 旧单条 `agentHistory` | 包成首个 thread |
-| 无 `projects` | 用 `agentCwd` 创建「默认项目」 |
-| provider 旧明文 `apiKey` | 暂留一手，交给启动钩子 `migrateSecrets()` 搬进密钥库后再删除 |
+- 版本号：`SCHEMA_VERSION = 15`（`src/core/schemas/db-schema.js`）。
+- 启动时读取 `PRAGMA user_version`，按 `MIGRATIONS[当前..]` 顺序执行，每步在事务内提交并 `user_version + 1`（`src/infrastructure/storage/sqlite-store.js`）。
+- 迁移历史要点：
+  - `0 → 1`：建全部核心表（DDL 幂等）
+  - `1 → 2`：`workflow_runs`
+  - `2 → 3`：糖码运行五表（agent_runs / run_events / working_states / checkpoints / context_summaries）
+  - `3 → 4`：`agent_changesets`（ChangeSet v1）
+  - `4 → 6`：`account_models` 扩展（max_output、think_type）
+  - `6 → 7`：`agent_runs` 补 working_state_id / latest_checkpoint_id / created_at
+  - `7 → 8`：`agent_threads` 草稿（draft_text / draft_skills）
+  - `8 → 9`：Working State 补 verification_skips / pending_decisions；`done` 状态回填 `completed`
+  - `9 → 10`：ContextSummary v2（summary_json / source_hashes_json / validity）
+  - `10 → 11`：ChangeSet v2（operation / new_hash / target_path / before_exists / status）
+  - `11 → 12`：子 Agent Run 谱系（parent_run_id / role / depth / read_only / budget_json + subagents_json）
+  - `12 → 13`：Skill 工具权限归因上下文（skill_context_json）
+  - `13 → 14`：多根工作区（projects.roots_json / primary_root_id，agent_runs 快照与指纹，changesets.root_id）
+  - `14 → 15`：Continuation 谱系（continued_from_run_id / root_run_id / continuation_index / root_scope_json + thread 草稿任务范围）
 
 ---
 
-## 8. v1.0.6 数据模型变化点
+## 5. 密钥存储（**不在** SQLite / state 内）
 
-1. **密钥移出 state**：`accounts` / `providers` / `search` 的 `apiKey` 全部移除，改存第 6 节的密钥库。
-2. **`workspaceId` 取代 cwd 直传**：渲染层持有不透明 UUID，后端解析受控目录（见第 5 节）。
-3. **本地文件 `fileId` 化**（M5 #254）：引用改为 `tangbao-file://<fileId>`，不再依赖裸路径。
+- 实现：`src/infrastructure/secrets/kvstore.js`。
+- `safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret）；临时文件 + `rename` 原子写、`chmod 600`、写后回读校验；`setSecret` 带**回滚**（失败恢复原值）。
+- 系统密钥服务不可用时降级 base64 明文并标记 `enc:false`（不静默丢 Key）。
+- 渲染进程只持有**不透明引用**：`acc:<accountId>`（账户密钥）、`custom:<module>`（模块自定义密钥）、`search`（联网搜索 Key）；`getSecret` 仅主进程内部使用，不经 IPC 回程。
+- 模型请求统一走主进程网关：渲染层只传 `ref` + `kind`，地址与密钥由主进程解析。
 
 ---
 
-## 9. 已知瑕疵（caveat，仅记录，未修）
+## 6. 工作区（workspaces.json）
 
-> ⚠️ 以下问题为现有实现缺陷，**不在此次文案工作中修复**，建议另开 issue 跟进：
+- 主进程持有 `workspaceId ↔ { cwd, name }` 注册表，持久化到 `userData/workspaces.json`。
+- `registerWorkspace(absPath, name)`：校验绝对路径 + 目录存在后发放 `crypto.randomUUID()` 不透明 id（幂等）；旧项目（有 cwd 无 workspaceId）运行时惰性登记迁移。
+- 渲染进程只持有 `workspaceId`，后端经 `resolveWorkspace(id)` 解析受控目录；未知 id 直接拒绝。
+- v1.1.0 多根：一个项目可挂多个根目录（`projects.roots_json`），任务按范围限定写入（单根 / 多根 / 全部）。
 
-1. **`thinkLevel` 读写路径不一致**：顶层默认写在 `App.state.thinkLevel`，但迁移逻辑写入 `settings.thinkLevel`，两条路径并存。
-2. **thread `summary` / `summaryCount` 重启丢失**：`loadState` 线程归一化时未保留该字段，重启后摘要清空。
+---
+
+## 7. 备份与升级
+
+- **需要备份的内容**：`userData/tangbao.db`（权威数据）+ `userData/tangbao-data/state.json`（可读副本）+ `userData/workspaces.json`；密钥在系统密钥库中，随系统账户保留。
+- v1.1.0 起数据为版本化 SQLite，升级自动迁移、不再丢数据（历史提示：v1.0.5 → v1.0.6 曾因存储迁移清空聊天记录，此后已切换到稳定持久化）。
+
+---
+
+## 8. v1.1.0 相对 v1.0.6 的变化点
+
+1. **权威源迁移**：localStorage → SQLite（`tangbao.db`），`state.json` 降级为双写副本。
+2. **Schema 版本化**：引入 `PRAGMA user_version` + `MIGRATIONS`（当前 15 版），替代旧版「字段形态嗅探」迁移。
+3. **糖码运行持久化**：新增 agent_runs / events / working_states / checkpoints / context_summaries / changesets 六表（断点恢复、自动续段、上下文压缩、整 Run 回滚）。
+4. **多根工作区**：projects 增加 roots_json / primary_root_id，任务级写入范围。
+5. **架构路径**：`js/`、`server/` 平铺重构为 `src/` 分层（main / preload / renderer / application / core / infrastructure）；密钥库 `server/secrets.js` → `src/infrastructure/secrets/kvstore.js`。
+6. **历史状态修正**：`done` 状态统一回填 `completed`。

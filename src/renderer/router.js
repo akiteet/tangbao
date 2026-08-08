@@ -41,6 +41,8 @@
       }
       App.ui.renderTopbarTitle();
       App.ui.renderSidebar();
+      // v15（单状态卡）：路由切换后刷新糖码全局运行药丸可见性（糖码页内隐藏，离开后显示）
+      if (App.agent && typeof App.agent.renderRunPill === 'function') App.agent.renderRunPill();
       document.getElementById('chatScroll').scrollTop = 0;
     },
     current() {

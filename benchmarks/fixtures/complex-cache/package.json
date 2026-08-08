@@ -1,0 +1,7 @@
+{
+  "name": "complex-cache",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

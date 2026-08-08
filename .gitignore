@@ -6,3 +6,9 @@ dist-v107/
 .DS_Store
 Thumbs.db
 *.log
+
+# 临时调试脚本（_ 前缀）与 Python 缓存，避免误入库
+_*.cjs
+_*.py
+__pycache__/
+*.pyc

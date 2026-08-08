@@ -1,0 +1,7 @@
+{
+  "name": "complex-parse",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

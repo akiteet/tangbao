@@ -17,6 +17,7 @@
  */
 
 const { classify } = require('../../core/errors');
+const { detectAdapter, buildRequest, parseNonStream, normalizeUsage, parseSSE } = require('./adapters'); // v2（P2-7）
 
 const KIND = {
   chat:       { path: '/chat/completions',  method: 'POST' },
@@ -34,15 +35,21 @@ function configure(opts) {
   if (opts && typeof opts.getSecret === 'function') getSecret = opts.getSecret;
 }
 
-/** 渲染进程在启动/改设置时同步过来的「密钥引用 → API Base」映射表 */
+/** 渲染进程在启动/改设置时同步过来的「密钥引用 → API Base」映射表。
+ *  B2（P1）：复用 checkTarget 拦云元数据/链路本地地址（防 XSS 后借网关把密钥外带），并加数量上限防膨胀。 */
 function setEndpoints(list) {
   const next = new Map();
+  const MAX_ENDPOINTS = 64; // B2（P1）：目标表数量上限
   for (const it of Array.isArray(list) ? list : []) {
-    if (!it) continue;
+    if (!it || next.size >= MAX_ENDPOINTS) continue;
     const ref = String(it.ref || '').trim();
     const base = String(it.apiBase || '').trim();
     if (!ref || !base) continue;
     if (!/^https?:\/\//i.test(base)) continue; // 只接受 http/https，挡掉 file:/data: 之类
+    try {
+      const u = new URL(base);
+      if (checkTarget(u)) continue; // 云元数据/链路本地地址直接丢弃
+    } catch (_) { continue; }
     next.set(ref, base);
   }
   endpoints = next;
@@ -74,7 +81,16 @@ const METADATA_HOSTS = new Set([
 
 function checkTarget(u) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return '只允许 http/https';
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  let host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  // B7（P3）：IPv4-mapped IPv6 提取内嵌 IPv4 再判定，防绕过云元数据黑名单。
+  // Node 的 URL 会把 ::ffff:169.254.169.254 规范化为十六进制段 ::ffff:a9fe:a9fe，两种形态都要解。
+  const v4mappedDecimal = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(host);
+  const v4mappedHex = /^::ffff:([0-9a-f]{4}):([0-9a-f]{4})$/.exec(host);
+  if (v4mappedDecimal) host = v4mappedDecimal[1];
+  else if (v4mappedHex) {
+    const b = (h) => [parseInt(h, 16) >> 8, parseInt(h, 16) & 0xff];
+    host = b(v4mappedHex[1]).concat(b(v4mappedHex[2])).join('.');
+  }
   if (METADATA_HOSTS.has(host)) return '拒绝访问云元数据地址';
   if (/^169\.254\./.test(host)) return '拒绝访问链路本地地址';
   return '';
@@ -143,6 +159,48 @@ async function handleGateway(req, res) {
   res.on('close', onClose);
 
   try {
+    // v4：非 OpenAI Chat 适配器走供应商原生流式，并在主进程转换为既有 OpenAI SSE 形状。
+    const adapter = detectAdapter((body.payload && body.payload.model) || '', base);
+    if (kind === 'chat' && adapter !== 'openai') {
+      const payload = body.payload || {};
+      const req = buildRequest(adapter, { apiBase: base, apiKey: key, model: payload.model, messages: payload.messages || [], tools: payload.tools || [], stream: !!payload.stream });
+      const upA = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: ctrl.signal });
+      if (clientGone) return;
+      if (!upA.ok) {
+        const raw = await upA.text().catch(() => '');
+        let upstreamMsg = '';
+        try { const j = JSON.parse(raw); upstreamMsg = (j && j.error && (j.error.message || j.error)) || raw; } catch (_) { upstreamMsg = raw; }
+        const err = classify(upA.status, upstreamMsg);
+        res.writeHead(upA.status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { type: err.type, message: err.message, status: err.status } }));
+        return;
+      }
+      if (!payload.stream) {
+        const json = await upA.json().catch(() => ({}));
+        const parsed = parseNonStream(adapter, json);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: parsed.content, reasoning_content: parsed.reasoning, tool_calls: parsed.toolCalls.map((call) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } })) }, finish_reason: parsed.toolCalls.length ? 'tool_calls' : 'stop' }], usage: normalizeUsage(adapter, json) }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform' });
+      const enc = (data) => 'data: ' + JSON.stringify(data) + '\n\n';
+      const reader = upA.body.getReader(), decoder = new TextDecoder(), state = {};
+      let buffer = '', toolIndex = 0;
+      while (true) {
+        const chunk = await reader.read(); if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const lines = buffer.split(/\r?\n/); buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim().startsWith('data:')) continue;
+          const event = parseSSE(adapter, line, state); if (!event) continue;
+          if (event.reasoning) res.write(enc({ choices: [{ delta: { reasoning_content: event.reasoning } }] }));
+          if (event.content) res.write(enc({ choices: [{ delta: { content: event.content } }] }));
+          for (const call of event.toolCalls || (event.toolCall ? [event.toolCall] : [])) res.write(enc({ choices: [{ delta: { tool_calls: [{ index: toolIndex++, id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }] } }] }));
+        }
+      }
+      res.write(enc({ choices: [{ delta: {}, finish_reason: 'stop' }] }));
+      res.write('data: [DONE]\n\n'); res.end(); return;
+    }
     const spec = KIND[kind];
     const init = {
       method: spec.method,

@@ -15,6 +15,7 @@ let Database = null;
 try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
 
 const { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS } = require('../../core/schemas/db-schema');
+const { normalizeRunStatus } = require('../../core/agent-runtime/state-machine');
 
 let db = null;
 let fileRepo = null;
@@ -27,20 +28,30 @@ const u = (s) => { if (s == null) return null; try { return JSON.parse(s); } cat
 function init(dbPath, fileRepoInstance) {
   if (db) return true;
   if (!Database) return false;
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  // M6：版本化迁移 —— 按 PRAGMA user_version 顺序执行 MIGRATIONS[cur..]，每步在事务内提交
-  let cur = 0;
-  try { cur = Number(db.pragma('user_version', { simple: true })) || 0; } catch (_) {}
-  for (let i = cur; i < SCHEMA_VERSION; i++) {
-    const m = MIGRATIONS[i];
-    if (!m) break;
-    db.transaction(() => { m(db); db.pragma('user_version = ' + (i + 1)); })();
+  let opened = null;
+  try {
+    opened = new Database(dbPath);
+    opened.pragma('journal_mode = WAL');
+    opened.pragma('foreign_keys = ON');
+    // M6：版本化迁移 —— 按 PRAGMA user_version 顺序执行 MIGRATIONS[cur..]，每步在事务内提交
+    let cur = 0;
+    try { cur = Number(opened.pragma('user_version', { simple: true })) || 0; } catch (_) {}
+    for (let i = cur; i < SCHEMA_VERSION; i++) {
+      const m = MIGRATIONS[i];
+      if (!m) break;
+      opened.transaction(() => { m(opened); opened.pragma('user_version = ' + (i + 1)); })();
+    }
+    fileRepo = fileRepoInstance || null;
+    db = opened;
+    prepare();
+    return true;
+  } catch (e) {
+    // B5（P2）：初始化/迁移失败时回收连接并置空——避免半初始化 DB 被后续复用（调用方回退 state.json）
+    try { if (opened) opened.close(); } catch (_) {}
+    db = null;
+    console.error('[存储层] SQLite 初始化/迁移失败，已回退 state.json：', e && e.message ? e.message : e);
+    return false;
   }
-  fileRepo = fileRepoInstance || null;
-  prepare();
-  return true;
 }
 
 /** M6：SQLite 完整性自检。返回 true 表示 OK；调用方应在启动时检查，失败则禁用 SQLite 回退 state.json。 */
@@ -86,8 +97,8 @@ function prepare() {
   stmt.delAcc = db.prepare('DELETE FROM accounts WHERE id=?');
   stmt.delAccModels = db.prepare('DELETE FROM account_models WHERE account_id=?');
   stmt.insAccModel = db.prepare(
-    `INSERT INTO account_models (account_id,name,context_window,caps) VALUES (@account_id,@name,@context_window,@caps)
-     ON CONFLICT(account_id,name) DO UPDATE SET context_window=@context_window, caps=@caps`);
+    `INSERT INTO account_models (account_id,name,context_window,max_output,caps,think_type) VALUES (@account_id,@name,@context_window,@max_output,@caps,@think_type)
+     ON CONFLICT(account_id,name) DO UPDATE SET context_window=@context_window, max_output=@max_output, caps=@caps, think_type=@think_type`);
 
   stmt.insProv = db.prepare(
     `INSERT INTO providers (module,account_id,api_base,model)
@@ -131,16 +142,17 @@ function prepare() {
      ON CONFLICT(id) DO UPDATE SET name=@name, text=@text, size=@size`);
 
   stmt.insProj = db.prepare(
-    `INSERT INTO projects (id,name,cwd,workspace_id,auto,approve_tools,cmd_whitelist,plan_mode,created_at,last_used_at)
-     VALUES (@id,@name,@cwd,@workspace_id,@auto,@approve_tools,@cmd_whitelist,@plan_mode,@created_at,@last_used_at)
-     ON CONFLICT(id) DO UPDATE SET name=@name, cwd=@cwd, workspace_id=@workspace_id, auto=@auto,
+    `INSERT INTO projects (id,name,cwd,workspace_id,roots_json,primary_root_id,auto,approve_tools,cmd_whitelist,plan_mode,created_at,last_used_at)
+     VALUES (@id,@name,@cwd,@workspace_id,@roots_json,@primary_root_id,@auto,@approve_tools,@cmd_whitelist,@plan_mode,@created_at,@last_used_at)
+     ON CONFLICT(id) DO UPDATE SET name=@name, cwd=@cwd, workspace_id=@workspace_id, roots_json=@roots_json, primary_root_id=@primary_root_id, auto=@auto,
        approve_tools=@approve_tools, cmd_whitelist=@cmd_whitelist, plan_mode=@plan_mode, last_used_at=@last_used_at`);
   stmt.listProj = db.prepare('SELECT * FROM projects ORDER BY created_at ASC');
 
   stmt.insThread = db.prepare(
-    `INSERT INTO agent_threads (id,project_id,title,updated_at,history)
-     VALUES (@id,@project_id,@title,@updated_at,@history)
-     ON CONFLICT(id) DO UPDATE SET project_id=@project_id, title=@title, updated_at=@updated_at, history=@history`);
+    `INSERT INTO agent_threads (id,project_id,title,updated_at,history,draft_text,draft_skills,draft_root_scope_json)
+     VALUES (@id,@project_id,@title,@updated_at,@history,@draft_text,@draft_skills,@draft_root_scope_json)
+     ON CONFLICT(id) DO UPDATE SET project_id=@project_id, title=@title, updated_at=@updated_at,
+       history=@history, draft_text=@draft_text, draft_skills=@draft_skills, draft_root_scope_json=@draft_root_scope_json`);
 
   stmt.getKV = db.prepare('SELECT value FROM kv_meta WHERE key=?');
   stmt.insKV = db.prepare(
@@ -149,7 +161,7 @@ function prepare() {
   stmt.allKV = db.prepare('SELECT key,value FROM kv_meta');
 
   // ---- M4 读源：readState 用 ----
-  stmt.getAccModels = db.prepare('SELECT name, context_window FROM account_models WHERE account_id=? ORDER BY name ASC');
+  stmt.getAccModels = db.prepare('SELECT name, context_window, max_output, caps, think_type FROM account_models WHERE account_id=? ORDER BY name ASC');
   stmt.listImgHist = db.prepare('SELECT * FROM image_history ORDER BY created_at DESC');
   stmt.listImgFiles = db.prepare('SELECT * FROM image_files WHERE history_id=? ORDER BY seq ASC');
   stmt.allImgFiles = db.prepare('SELECT data FROM image_files');
@@ -164,6 +176,47 @@ function prepare() {
        input_json=@input_json, output_json=@output_json, error=@error, steps_json=@steps_json,
        started_at=@started_at, finished_at=@finished_at`);
   stmt.listWfRuns = db.prepare('SELECT * FROM workflow_runs WHERE workflow_id=? ORDER BY started_at DESC LIMIT ?');
+
+  // ---- v1.1.0（M1）：糖码 Agent Run 持久化（五表） ----
+  stmt.insRun = db.prepare(
+    `INSERT INTO agent_runs (id,thread_id,workspace_id,cwd,workspace_snapshot_json,workspace_fingerprint,primary_root_id,user_goal,status,phase,model_id,provider_ref,plan_mode,limits_json,usage_json,error,started_at,finished_at,working_state_id,latest_checkpoint_id,created_at,parent_run_id,role,depth,read_only,budget_json,continued_from_run_id,root_run_id,continuation_index,root_scope_json)
+     VALUES (@id,@thread_id,@workspace_id,@cwd,@workspace_snapshot_json,@workspace_fingerprint,@primary_root_id,@user_goal,@status,@phase,@model_id,@provider_ref,@plan_mode,@limits_json,@usage_json,@error,@started_at,@finished_at,@working_state_id,@latest_checkpoint_id,@created_at,@parent_run_id,@role,@depth,@read_only,@budget_json,@continued_from_run_id,@root_run_id,@continuation_index,@root_scope_json)`);
+  stmt.updRun = db.prepare(
+    'UPDATE agent_runs SET status=@status, phase=@phase, usage_json=@usage_json, error=@error, finished_at=@finished_at WHERE id=@id');
+  stmt.listRuns = db.prepare('SELECT * FROM agent_runs WHERE thread_id=? ORDER BY started_at DESC LIMIT ? OFFSET ?');
+  stmt.getRun = db.prepare('SELECT * FROM agent_runs WHERE id=?');
+  stmt.insEvent = db.prepare(
+    `INSERT INTO agent_run_events (id,run_id,seq,type,payload_json,created_at)
+     VALUES (@id,@run_id,@seq,@type,@payload_json,@created_at)`);
+  stmt.listEvents = db.prepare('SELECT * FROM agent_run_events WHERE run_id=? ORDER BY seq ASC');
+  stmt.maxEventSeq = db.prepare('SELECT COALESCE(MAX(seq),0) AS m FROM agent_run_events WHERE run_id=?');
+  stmt.upsertWS = db.prepare(
+    `INSERT INTO agent_working_states (run_id,goal,constraints_json,plan_json,completed_json,pending_json,blocked_json,files_read_json,files_changed_json,commands_json,checks_json,decisions_json,unresolved_errors_json,verification_skips_json,pending_decisions_json,subagents_json,skill_context_json,assumptions_json,user_confirmations_json,updated_at)
+     VALUES (@run_id,@goal,@constraints_json,@plan_json,@completed_json,@pending_json,@blocked_json,@files_read_json,@files_changed_json,@commands_json,@checks_json,@decisions_json,@unresolved_errors_json,@verification_skips_json,@pending_decisions_json,@subagents_json,@skill_context_json,@assumptions_json,@user_confirmations_json,@updated_at)
+     ON CONFLICT(run_id) DO UPDATE SET goal=@goal, constraints_json=@constraints_json, plan_json=@plan_json,
+       completed_json=@completed_json, pending_json=@pending_json, blocked_json=@blocked_json,
+       files_read_json=@files_read_json, files_changed_json=@files_changed_json, commands_json=@commands_json,
+       checks_json=@checks_json, decisions_json=@decisions_json, unresolved_errors_json=@unresolved_errors_json,
+       verification_skips_json=@verification_skips_json, pending_decisions_json=@pending_decisions_json, subagents_json=@subagents_json, skill_context_json=@skill_context_json,
+       assumptions_json=@assumptions_json, user_confirmations_json=@user_confirmations_json, updated_at=@updated_at`);
+  stmt.getWS = db.prepare('SELECT * FROM agent_working_states WHERE run_id=?');
+  stmt.insCheckpoint = db.prepare(
+    `INSERT INTO agent_checkpoints (id,run_id,seq,reason,state_json,events_to_seq,created_at)
+     VALUES (@id,@run_id,@seq,@reason,@state_json,@events_to_seq,@created_at)`);
+  // v2（P0-A）：Checkpoint 读取（恢复/续跑）
+  stmt.getCheckpoint = db.prepare('SELECT * FROM agent_checkpoints WHERE run_id=? ORDER BY seq DESC, created_at DESC LIMIT 1');
+  stmt.listCheckpoints = db.prepare('SELECT id, run_id, seq, reason, created_at FROM agent_checkpoints WHERE run_id=? ORDER BY seq DESC');
+  stmt.insSummary = db.prepare(
+    `INSERT INTO agent_context_summaries (id,run_id,thread_id,covered_from_seq,covered_to_seq,summary,version,summary_json,source_hashes_json,validity,created_at)
+     VALUES (@id,@run_id,@thread_id,@covered_from_seq,@covered_to_seq,@summary,@version,@summary_json,@source_hashes_json,@validity,@created_at)`);
+  stmt.latestSummary = db.prepare(
+    'SELECT * FROM agent_context_summaries WHERE thread_id=? ORDER BY created_at DESC, version DESC LIMIT 1');
+  // ---- v1.1.0（M3）：ChangeSet（运行级文件快照回滚） ----
+  stmt.insChangeset = db.prepare(
+    `INSERT INTO agent_changesets (id,run_id,root_id,path,old_hash,content_ref,operation,new_hash,target_path,before_exists,status,created_at)
+     VALUES (@id,@run_id,@root_id,@path,@old_hash,@content_ref,@operation,@new_hash,@target_path,@before_exists,@status,@created_at)
+     ON CONFLICT(id) DO UPDATE SET root_id=@root_id, operation=@operation, new_hash=@new_hash, target_path=@target_path, status=@status, created_at=@created_at`);
+  stmt.listChangesets = db.prepare('SELECT * FROM agent_changesets WHERE run_id=? ORDER BY created_at ASC');
 }
 
 /* ----------------------------- 实现层（StorageService 使用） ----------------------------- */
@@ -190,7 +243,12 @@ function replaceMessages(convId, msgs) {
   const run = db.transaction((cid, list) => {
     stmt.delMsgByConv.run(cid);
     list.forEach((m, idx) => {
-      const meta = m.meta ? j(m.meta) : (m.reasoning !== undefined ? j({ reasoning: m.reasoning }) : null);
+      // 聊天修复 D：chat 消息顶层 think/webSources/attachments/versions/reasoning 等并入 meta，SQLite 往返不丢
+      const top = {};
+      ['think', 'webSources', 'attachments', 'versions', 'versionIdx', 'reasoning', 'meta', 'done'].forEach((k) => {
+        if (m[k] !== undefined) top[k] = m[k];
+      });
+      const meta = Object.keys(top).length ? j(top) : null;
       stmt.insMsg.run({
         id: m.id || ('m_' + cid + '_' + idx),
         conv_id: cid, idx, role: m.role,
@@ -220,8 +278,12 @@ function setAccountModels(accountId, models) {
       const name = typeof m === 'string' ? m : (m && m.name);
       if (!name) return;
       const cw = (typeof m === 'object' && m.contextWindow) ? Number(m.contextWindow) : 128000;
+      // v1.1.0（M6）：max_output（最大输出 token，默认 0=未配置）
+      const mo = (typeof m === 'object' && m.maxOutput) ? Number(m.maxOutput) : 0;
       const caps = (typeof m === 'object' && m.caps) ? String(m.caps) : null;
-      stmt.insAccModel.run({ account_id: accId, name, context_window: cw || 128000, caps });
+      // 聊天修复 D：thinkType（思考类型）往返
+      const tt = (typeof m === 'object' && m.thinkType) ? String(m.thinkType) : null;
+      stmt.insAccModel.run({ account_id: accId, name, context_window: cw || 128000, max_output: mo || 0, caps, think_type: tt });
     });
   });
   run(accountId, models);
@@ -319,6 +381,7 @@ function getDocText(id) {
 function upsertProject(p) {
   stmt.insProj.run({
     id: p.id, name: p.name || '', cwd: p.cwd || '', workspace_id: p.workspaceId || '',
+    roots_json: j(Array.isArray(p.roots) ? p.roots : []), primary_root_id: String(p.primaryRootId || ''),
     auto: p.auto ? 1 : 0, approve_tools: j(p.approveTools), cmd_whitelist: j(p.cmdWhitelist),
     plan_mode: p.planMode ? 1 : 0, created_at: Number(p.createdAt) || Date.now(),
     last_used_at: Number(p.lastUsedAt) || Date.now(),
@@ -330,6 +393,9 @@ function upsertThread(t) {
   stmt.insThread.run({
     id: t.id, project_id: t.projectId || null, title: t.title || '',
     updated_at: Number(t.updatedAt) || Date.now(), history: j(t.history),
+    draft_text: typeof t.draftText === 'string' ? t.draftText : '',
+    draft_skills: j(Array.isArray(t.draftSkills) ? t.draftSkills : []),
+    draft_root_scope_json: j(t.draftRootScope && typeof t.draftRootScope === 'object' ? t.draftRootScope : { mode: 'primary', rootId: '' }),
   });
 }
 
@@ -403,6 +469,231 @@ function listWorkflowRuns(workflowId, limit) {
 
 function transaction(fn) { return db.transaction(fn); }
 
+// ---- v1.1.0（M1）：糖码 Agent Run 持久化 ----
+const jp = (s) => { try { return s ? JSON.parse(s) : null; } catch (_) { return null; } };
+
+function createAgentRun(run) {
+  const r = run || {};
+  const id = r.id || ('ar_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  stmt.insRun.run({
+    id,
+    thread_id: String(r.threadId || ''), workspace_id: String(r.workspaceId || ''), cwd: String(r.cwd || ''),
+    workspace_snapshot_json: r.workspaceSnapshot ? JSON.stringify(r.workspaceSnapshot) : null,
+    workspace_fingerprint: String(r.workspaceFingerprint || ''), primary_root_id: String(r.primaryRootId || ''),
+    user_goal: String(r.userGoal || ''), status: normalizeRunStatus(r.status), phase: String(r.phase || 'understanding'),
+    model_id: String(r.modelId || ''), provider_ref: String(r.providerRef || ''),
+    plan_mode: r.planMode ? 1 : 0,
+    limits_json: r.limits ? JSON.stringify(r.limits) : null,
+    usage_json: r.usage ? JSON.stringify(r.usage) : null,
+    error: r.error != null ? String(r.error) : null,
+    started_at: Number(r.startedAt) || Date.now(), finished_at: Number(r.finishedAt) || 0,
+    working_state_id: String(r.workingStateId || ''), latest_checkpoint_id: String(r.latestCheckpointId || ''),
+    created_at: Number(r.createdAt) || Number(r.startedAt) || Date.now(), // v2（补全 7）
+    parent_run_id: String(r.parentRunId || ''), role: String(r.role || 'main'), depth: Number(r.depth) || 0,
+    read_only: r.readOnly ? 1 : 0, budget_json: r.budget ? JSON.stringify(r.budget) : null,
+    continued_from_run_id: String(r.continuedFromRunId || ''), root_run_id: String(r.rootRunId || id),
+    continuation_index: Math.max(0, Number(r.continuationIndex) || 0), root_scope_json: r.rootScope ? JSON.stringify(r.rootScope) : null,
+  });
+  return id;
+}
+
+function updateAgentRun(id, patch) {
+  const p = patch || {};
+  // B5（P2）：部分更新保留旧值——读取当前行，未提供的字段沿用，避免 phase/usage/error 被误重置
+  let cur = null;
+  try { cur = stmt.getRun.get(String(id || '')) || null; } catch (_) {}
+  const keep = (provided, fallback, dflt) => (provided != null ? provided : (fallback != null ? fallback : dflt));
+  stmt.updRun.run({
+    id: String(id || ''),
+    status: normalizeRunStatus(keep(p.status, cur && cur.status)),
+    phase: String(keep(p.phase, cur && cur.phase, 'understanding')),
+    usage_json: keep(p.usage, cur && cur.usage_json) != null ? JSON.stringify(keep(p.usage, cur && cur.usage_json)) : null,
+    error: keep(p.error, cur && cur.error) != null ? String(keep(p.error, cur && cur.error)) : null,
+    finished_at: Number(keep(p.finishedAt, cur && cur.finished_at, 0)) || 0,
+  });
+}
+
+function listAgentRuns(threadId, limit, offset) {
+  try {
+    const pageSize = Math.min(Math.max(Number(limit) || 30, 1), 100);
+    const pageOffset = Math.max(Number(offset) || 0, 0);
+    return stmt.listRuns.all(String(threadId || ''), pageSize, pageOffset).map((row) => ({
+      id: row.id, threadId: row.thread_id, workspaceId: row.workspace_id, cwd: row.cwd,
+      workspaceSnapshot: jp(row.workspace_snapshot_json), workspaceFingerprint: row.workspace_fingerprint || '', primaryRootId: row.primary_root_id || '',
+      userGoal: row.user_goal, status: normalizeRunStatus(row.status), phase: row.phase,
+      modelId: row.model_id, providerRef: row.provider_ref, planMode: !!row.plan_mode,
+      limits: jp(row.limits_json), usage: jp(row.usage_json), error: row.error,
+      startedAt: row.started_at, finishedAt: row.finished_at,
+      workingStateId: row.working_state_id, latestCheckpointId: row.latest_checkpoint_id, createdAt: row.created_at, // v2（补全 7）
+      parentRunId: row.parent_run_id || '', role: row.role || 'main', depth: Number(row.depth) || 0, readOnly: !!row.read_only, budget: jp(row.budget_json),
+      continuedFromRunId: row.continued_from_run_id || '', rootRunId: row.root_run_id || row.id,
+      continuationIndex: Number(row.continuation_index) || 0, rootScope: jp(row.root_scope_json) || { mode: 'primary', rootId: '' },
+    }));
+  } catch (_) { return []; }
+}
+
+function getAgentRun(id) {
+  const row = stmt.getRun.get(String(id || ''));
+  if (!row) return null;
+  return {
+    id: row.id, threadId: row.thread_id, workspaceId: row.workspace_id, cwd: row.cwd,
+    workspaceSnapshot: jp(row.workspace_snapshot_json), workspaceFingerprint: row.workspace_fingerprint || '', primaryRootId: row.primary_root_id || '',
+    userGoal: row.user_goal, status: normalizeRunStatus(row.status), phase: row.phase,
+    modelId: row.model_id, providerRef: row.provider_ref, planMode: !!row.plan_mode,
+    limits: jp(row.limits_json), usage: jp(row.usage_json), error: row.error,
+    startedAt: row.started_at, finishedAt: row.finished_at,
+    workingStateId: row.working_state_id, latestCheckpointId: row.latest_checkpoint_id, createdAt: row.created_at, // v2（补全 7）
+    parentRunId: row.parent_run_id || '', role: row.role || 'main', depth: Number(row.depth) || 0, readOnly: !!row.read_only, budget: jp(row.budget_json),
+    continuedFromRunId: row.continued_from_run_id || '', rootRunId: row.root_run_id || row.id,
+    continuationIndex: Number(row.continuation_index) || 0, rootScope: jp(row.root_scope_json) || { mode: 'primary', rootId: '' },
+  };
+}
+
+function appendAgentEvent(runId, type, payload, seq) {
+  const next = (seq != null) ? Number(seq) : ((stmt.maxEventSeq.get(String(runId || '')) || { m: 0 }).m + 1);
+  stmt.insEvent.run({
+    id: 'ev_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    run_id: String(runId || ''), seq: next, type: String(type || ''),
+    payload_json: payload != null ? JSON.stringify(payload) : null,
+    created_at: Date.now(),
+  });
+  return next;
+}
+
+function listAgentEvents(runId) {
+  try {
+    return stmt.listEvents.all(String(runId || '')).map((row) => ({
+      id: row.id, runId: row.run_id, seq: row.seq, type: row.type,
+      payload: jp(row.payload_json), createdAt: row.created_at,
+    }));
+  } catch (_) { return []; }
+}
+
+function upsertWorkingState(runId, ws) {
+  const w = ws || {};
+  stmt.upsertWS.run({
+    run_id: String(runId || ''), goal: String(w.goal || ''),
+    constraints_json: w.constraints ? JSON.stringify(w.constraints) : null,
+    plan_json: w.plan ? JSON.stringify(w.plan) : null,
+    completed_json: w.completedWork ? JSON.stringify(w.completedWork) : null,
+    pending_json: w.pendingWork ? JSON.stringify(w.pendingWork) : null,
+    blocked_json: w.blockedWork ? JSON.stringify(w.blockedWork) : null,
+    files_read_json: w.filesRead ? JSON.stringify(w.filesRead) : null,
+    files_changed_json: w.filesChanged ? JSON.stringify(w.filesChanged) : null,
+    commands_json: w.commandsRun ? JSON.stringify(w.commandsRun) : null,
+    checks_json: w.checks ? JSON.stringify(w.checks) : null,
+    decisions_json: w.decisions ? JSON.stringify(w.decisions) : null,
+    unresolved_errors_json: w.unresolvedErrors ? JSON.stringify(w.unresolvedErrors) : null,
+    verification_skips_json: w.verificationSkips ? JSON.stringify(w.verificationSkips) : null,
+    pending_decisions_json: w.pendingDecisions ? JSON.stringify(w.pendingDecisions) : null,
+    subagents_json: w.subagents ? JSON.stringify(w.subagents) : null,
+    skill_context_json: Array.isArray(w.skillContext) && w.skillContext.length ? JSON.stringify(w.skillContext) : null,
+    assumptions_json: w.assumptions ? JSON.stringify(w.assumptions) : null,
+    user_confirmations_json: w.userConfirmations ? JSON.stringify(w.userConfirmations) : null,
+    updated_at: Date.now(),
+  });
+}
+
+function getWorkingState(runId) {
+  const row = stmt.getWS.get(String(runId || ''));
+  if (!row) return null;
+  return {
+    runId: row.run_id, goal: row.goal,
+    constraints: jp(row.constraints_json), plan: jp(row.plan_json),
+    completedWork: jp(row.completed_json), pendingWork: jp(row.pending_json), blockedWork: jp(row.blocked_json),
+    filesRead: jp(row.files_read_json), filesChanged: jp(row.files_changed_json),
+    commandsRun: jp(row.commands_json), checks: jp(row.checks_json),
+    decisions: jp(row.decisions_json), unresolvedErrors: jp(row.unresolved_errors_json),
+    verificationSkips: jp(row.verification_skips_json), pendingDecisions: jp(row.pending_decisions_json), subagents: jp(row.subagents_json),
+    skillContext: jp(row.skill_context_json),
+    assumptions: jp(row.assumptions_json), userConfirmations: jp(row.user_confirmations_json),
+    updatedAt: row.updated_at,
+  };
+}
+
+function saveAgentCheckpoint(runId, reason, state, eventsToSeq) {
+  const seq = ((stmt.maxEventSeq.get(String(runId || '')) || { m: 0 }).m);
+  stmt.insCheckpoint.run({
+    id: 'ck_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    run_id: String(runId || ''), seq: Number(eventsToSeq) || seq,
+    reason: String(reason || ''), state_json: state != null ? JSON.stringify(state) : null,
+    events_to_seq: Number(eventsToSeq) || seq, created_at: Date.now(),
+  });
+  return true;
+}
+
+// v2（P0-A）：读取最近 Checkpoint（state_json 已解析）；无则 null
+function getCheckpoint(runId) {
+  const row = stmt.getCheckpoint.get(String(runId || ''));
+  if (!row) return null;
+  let state = null;
+  try { state = row.state_json ? JSON.parse(row.state_json) : null; } catch (_) {}
+  return { id: row.id, runId: row.run_id, seq: row.seq, reason: row.reason, state, eventsToSeq: row.events_to_seq, createdAt: row.created_at };
+}
+
+// v2（P0-A）：列出某 run 的 Checkpoint 摘要（恢复面板用）
+function listCheckpoints(runId) {
+  return stmt.listCheckpoints.all(String(runId || '')).map((r) => ({
+    id: r.id, runId: r.run_id, seq: r.seq, reason: r.reason, createdAt: r.created_at,
+  }));
+}
+
+function exportAgentRun(runId) {
+  const run = getAgentRun(runId);
+  if (!run) return null;
+  const { exportRunJSONL } = require('../../core/agent-runtime/run-export');
+  return exportRunJSONL({ run, events: listAgentEvents(runId), workingState: getWorkingState(runId), checkpoints: listCheckpoints(runId), summary: getLatestContextSummary(run.threadId), artifacts: [] });
+}
+
+function saveContextSummary(s) {
+  const x = s || {};
+  stmt.insSummary.run({
+    id: 'sum_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    run_id: String(x.runId || ''), thread_id: String(x.threadId || ''),
+    covered_from_seq: Number(x.coveredFromSeq) || 0, covered_to_seq: Number(x.coveredToSeq) || 0,
+    summary: String(x.summary || ''), version: Number(x.version) || 1,
+    summary_json: x.summaryJson ? JSON.stringify(x.summaryJson) : null,
+    source_hashes_json: x.sourceHashes ? JSON.stringify(x.sourceHashes) : null,
+    validity: String(x.validity || 'valid'), created_at: Date.now(),
+  });
+  return true;
+}
+
+function getLatestContextSummary(threadId) {
+  const row = stmt.latestSummary.get(String(threadId || ''));
+  if (!row) return null;
+  return {
+    id: row.id, runId: row.run_id, threadId: row.thread_id,
+    coveredFromSeq: row.covered_from_seq, coveredToSeq: row.covered_to_seq,
+    summary: row.summary, version: row.version,
+    summaryJson: jp(row.summary_json), sourceHashes: jp(row.source_hashes_json), validity: row.validity || 'valid',
+    createdAt: row.created_at,
+  };
+}
+
+// ---- v1.1.0（M3）：ChangeSet ----
+function saveChangeset(cs) {
+  const x = cs || {};
+  const id = x.id || ('cs_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  stmt.insChangeset.run({
+    id, run_id: String(x.runId || ''), root_id: String(x.rootId || ''), path: String(x.path || ''),
+    old_hash: String(x.oldHash || ''), content_ref: String(x.contentRef || ''),
+    operation: String(x.operation || 'write'), new_hash: String(x.newHash || ''), target_path: String(x.targetPath || ''), before_exists: x.beforeExists === false ? 0 : 1, status: String(x.status || 'committed'),
+    created_at: Date.now(),
+  });
+  return id;
+}
+
+function listChangesets(runId) {
+  try {
+    return stmt.listChangesets.all(String(runId || '')).map((row) => ({
+      id: row.id, runId: row.run_id, rootId: row.root_id || '', path: row.path, oldHash: row.old_hash,
+      contentRef: row.content_ref, operation: row.operation || 'write', newHash: row.new_hash || '', targetPath: row.target_path || '', beforeExists: row.before_exists !== 0, status: row.status || 'committed',
+      createdAt: row.created_at,
+    }));
+  } catch (_) { return []; }
+}
+
 const StorageService = {
   ready, close, init, dbPathInfo,
   upsertConversation, getConversation, listConversations, deleteConversation, touchConversation,
@@ -421,6 +712,13 @@ const StorageService = {
   saveWorkflowRun, listWorkflowRuns,
   getKV, setKV, getAllKV, setKVMulti,
   clearAll, transaction,
+  // v1.1.0（M1）：Agent Run 持久化
+  createAgentRun, updateAgentRun, listAgentRuns, getAgentRun,
+  appendAgentEvent, listAgentEvents,
+  upsertWorkingState, getWorkingState,
+  saveAgentCheckpoint, getCheckpoint, listCheckpoints, exportAgentRun, saveContextSummary, getLatestContextSummary,
+  // v1.1.0（M3）：ChangeSet
+  saveChangeset, listChangesets,
 };
 
 module.exports = { init, StorageService, ready, close, checkIntegrity, _imageHelpers: { stripDataUrl, sniffImageExt } };

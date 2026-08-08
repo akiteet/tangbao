@@ -189,6 +189,9 @@ function readState(storage, fileRepo) {
       models: storage.getAccountModels(r.id).map((m) => {
         const mm = { name: m.name, contextWindow: num(m.context_window) || 128000 };
         if (m.caps) mm.caps = m.caps; // M6：声明式能力预设（'auto'|'tool_vision'|'tool'|'vision'|'text'）
+        // 聊天修复 D：maxOutput/thinkType 往返（v1.1.0 加列后回读）
+        if (m.max_output) mm.maxOutput = num(m.max_output);
+        if (m.think_type) mm.thinkType = m.think_type;
         return mm;
       }),
     }));
@@ -221,13 +224,17 @@ function readState(storage, fileRepo) {
     s.settings = settings;
 
     s.projects = storage.listProjects().map((r) => ({
-      id: r.id, name: r.name, cwd: r.cwd, workspaceId: r.workspace_id, auto: !!r.auto,
+      id: r.id, name: r.name, cwd: r.cwd, workspaceId: r.workspace_id,
+      roots: parse(r.roots_json) || [], primaryRootId: r.primary_root_id || '', auto: !!r.auto,
       approveTools: parse(r.approve_tools) || [], cmdWhitelist: parse(r.cmd_whitelist) || [],
       planMode: !!r.plan_mode, createdAt: r.created_at, lastUsedAt: r.last_used_at,
     }));
     s.agentThreads = storage.listThreads().map((r) => ({
       id: r.id, projectId: r.project_id, title: r.title, updatedAt: r.updated_at,
       history: parse(r.history) || [],
+      draftText: r.draft_text || '',
+      draftSkills: parse(r.draft_skills) || [],
+      draftRootScope: parse(r.draft_root_scope_json) || { mode: 'primary', rootId: '' },
     }));
 
     s.conversations = convs.map((r) => ({

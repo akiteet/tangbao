@@ -1,0 +1,7 @@
+{
+  "name": "med-bugfix",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

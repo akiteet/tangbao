@@ -3,7 +3,7 @@
  * 糖包 文件仓（主进程独占，纯 Node，无原生依赖）
  *
  * 用途：存放体积较大、不应塞进 SQLite 行内的二进制/文本载荷：
- *   images / documents / thumbnails / exports / logs
+ *   images / documents / thumbnails / exports / logs / changesets
  * 目录：userData/tangbao-data/files/<category>/<id>
  *
  * 所有写入都在 userData 子树内，id 仅允许 [\w.\-]，杜绝路径穿越。
@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const CATEGORIES = ['images', 'documents', 'thumbnails', 'exports', 'logs'];
+const CATEGORIES = ['images', 'documents', 'thumbnails', 'exports', 'logs', 'changesets'];
 
 let base = '';
 

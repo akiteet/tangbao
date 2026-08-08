@@ -1,6 +1,6 @@
 'use strict';
 /*
- * 共享上下文管理模块（对标 Claude Code 的 compaction）
+ * 共享上下文管理模块（自动压缩与用量统计）
  * - 提供 token 估算（混合中英文）、增量摘要合并、整段压缩
  * - 聊天(糖包)与糖码(agent)两端复用，避免重复实现、保证一致
  */
@@ -17,26 +17,16 @@
     const other = s.length - cjk;
     return Math.ceil(cjk * 1.6 + other * 0.3);
   }
-  App.context.heuristicTokens = heuristicTokens;
-
-  // 真实 BPE 分词器（vendor/tokenizer.js 暴露 window.Tokenizer.countTokens，基于 cl100k_base）。
-  // 对中文/代码显著比启发式更准；加载失败或异常时回退启发式。惰性引用 window.Tokenizer，
-  // 因此即便脚本加载顺序有波动也不影响运行时正确性。
+  // v3（P4）：token 估算统一委托 App.TokenEstimator（UMD 双环境，前后端同一口径）；
+  // 保留本文件对外 API 与启发式兜底（估算器未加载时可用）。
+  const estimator = (typeof App !== 'undefined' && App.TokenEstimator) ? App.TokenEstimator : null;
+  App.context.heuristicTokens = function (text) { return heuristicTokens(text); };
   App.context.estimateTokens = function (text) {
     if (!text) return 0;
-    const s = typeof text === 'string' ? text : JSON.stringify(text);
-    const T = (typeof window !== 'undefined' && window.Tokenizer && typeof window.Tokenizer.countTokens === 'function')
-      ? window.Tokenizer : null;
-    if (T) {
-      try {
-        const n = T.countTokens(s);
-        if (typeof n === 'number' && n >= 0) return n;
-      } catch (e) { /* 落到启发式 */ }
-    }
-    return heuristicTokens(s);
+    return estimator ? estimator.estimateTokens(text) : heuristicTokens(text);
   };
   App.context.hasRealTokenizer = function () {
-    return !!(typeof window !== 'undefined' && window.Tokenizer && typeof window.Tokenizer.countTokens === 'function');
+    return !!estimator && estimator.hasRealTokenizer();
   };
 
   function msgTokens(m) {
@@ -95,12 +85,14 @@
     } catch (e) { return null; } // 压缩失败不阻断对话
   }
 
-  // 增量合并：把已有摘要 + 新“中间段”压成一份新摘要（不重算全部历史）
-  App.context.summarizeDelta = async function (existingSummary, middleMsgs, provider) {
+  // 增量合并：把已有摘要 + 新“中间段”压成一份新摘要（不重算全部历史）。
+  // G4：extraContext 可选——注入用户长期记忆 / 活跃 Skill 名等系统状态参考，避免摘要脱离系统态。
+  App.context.summarizeDelta = async function (existingSummary, middleMsgs, provider, extraContext) {
     if (!provider || !provider.ref || !provider.hasKey || !provider.model) return existingSummary || null;
+    const ctxBlock = extraContext ? '\n\n【压缩时必须保留的系统状态参考】\n' + String(extraContext).slice(0, 1500) : '';
     const userText = (existingSummary
       ? '【已有摘要，请在其基础上更新/合并，不要重复已有内容】\n' + existingSummary + '\n\n【新增对话（请并入上述摘要）】\n'
-      : '') + messagesToText(middleMsgs);
+      : '') + messagesToText(middleMsgs) + ctxBlock;
     const summary = await callSummary([
       { role: 'system', content: COMPACT_SYS },
       { role: 'user', content: userText },
@@ -124,22 +116,79 @@
   App.context.RECENT_KEEP_AGENT = 20;
   // 压缩触发利用率：上下文用到窗口的该比例即自动压缩（agent 留更多余量给工具输出）
   App.context.COMPACT_UTIL_CHAT = 0.85;
-  App.context.COMPACT_UTIL_AGENT = 0.80;
+  // v2（P1-10 §8.3）：六区 Token 预算（比例合计 1.0，按模型能力动态调整而非硬编码一致）
+  //   最终回答预留 8% / 工具输出预留 20% / 安全余量 8% / 稳定指令与状态 15% / 检索代码证据 25% / 最近轨迹和历史 24%
+  App.context.AGENT_ZONE_BUDGET = {
+    finalAnswer: 0.08, // 最终回答预留
+    toolOutput: 0.20, // 工具输出预留
+    safety: 0.08, // 安全余量
+    stableInstr: 0.15, // 稳定指令与状态（系统提示 + 规则 + 工作状态，常驻）
+    retrieved: 0.25, // 检索代码证据（可压缩区）
+    history: 0.24, // 最近轨迹和历史（可压缩区）
+  };
+  // 由六区预算推导的压缩阈值（agentUtilLevel / getCompactMessages 直接读这些常量）：
+  //   硬压缩目标 util = 1 - (工具输出 + 最终回答 + 安全余量) = 压缩后保留内容占窗口上限
+  //   预压缩 = 稳定指令 + (检索 + 历史) × 0.75，达到即后台异步生成摘要
+  //   紧急 = 1 - 安全余量，越过即进入紧急裁剪（仅留摘要与最近问题）
+  App.context.AGENT_HARD_UTIL = 1 - (App.context.AGENT_ZONE_BUDGET.toolOutput + App.context.AGENT_ZONE_BUDGET.finalAnswer + App.context.AGENT_ZONE_BUDGET.safety);
+  App.context.AGENT_PRECOMPACT_UTIL = App.context.AGENT_ZONE_BUDGET.stableInstr + (App.context.AGENT_ZONE_BUDGET.retrieved + App.context.AGENT_ZONE_BUDGET.history) * 0.75;
+  App.context.AGENT_EMERGENCY_UTIL = 1 - App.context.AGENT_ZONE_BUDGET.safety;
+  App.context.COMPACT_UTIL_AGENT = App.context.AGENT_HARD_UTIL; // 0.64：压缩后保留比例
+  App.context.AGENT_TOOL_RESERVE = App.context.AGENT_ZONE_BUDGET.toolOutput; // 0.20：工具结果独立预算（已含于 COMPACT_UTIL_AGENT 预留，供 UI/observability）
 
-  // 上下文窗口：优先模型自身配置，其次全局设置（默认 128000）。
+  // v1.1.0（G6）：与后端 context-manager.budgetForModel 同源的前端预算推导（消除两套算法漂移）。
+  // 预留默认值与后端一致：output 10% / tool 12% / safety 5%；阈值 usable×0.72/0.88/0.97。
+  App.context.agentBudgetSpec = function (window) {
+    const w = Number(window) || 128000;
+    const outputReserve = Math.max(1024, Math.floor(w * 0.10));
+    const toolReserve = Math.max(1024, Math.floor(w * 0.12));
+    const safetyReserve = Math.max(512, Math.floor(w * 0.05));
+    const usable = Math.max(0, w - outputReserve - toolReserve - safetyReserve);
+    return {
+      contextWindow: w, outputReserve, toolReserve, safetyReserve, usable,
+      precompress: Math.floor(usable * 0.72),
+      hard: Math.floor(usable * 0.88),
+      emergency: Math.floor(usable * 0.97),
+    };
+  };
+
+  // v1.1.0（M2+G6）：根据当前用量返回压缩阶段（ok / pre / hard / emergency），阈值取自与后端同源的 agentBudgetSpec
+  App.context.agentUtilLevel = function (tokens, window) {
+    const b = App.context.agentBudgetSpec(window);
+    if (!b.usable) return 'ok';
+    const n = tokens || 0;
+    if (n >= b.emergency) return 'emergency';
+    if (n >= b.hard) return 'hard';
+    if (n >= b.precompress) return 'pre';
+    return 'ok';
+  };
+
+  // v2（P1-10 §8.3）：六区预算计算——给定窗口大小，返回各分区 token 上限（供预算监控 / 调试 / 可观察性）
+  App.context.agentZoneBudget = function (window) {
+    const w = window || 128000;
+    const z = App.context.AGENT_ZONE_BUDGET;
+    const cap = (p) => Math.round(w * p);
+    return {
+      finalAnswer: cap(z.finalAnswer),
+      toolOutput: cap(z.toolOutput),
+      safety: cap(z.safety),
+      stableInstr: cap(z.stableInstr),
+      retrieved: cap(z.retrieved),
+      history: cap(z.history),
+      consumable: cap(z.retrieved + z.history), // 可压缩区（检索 + 历史）
+      total: w,
+    };
+  };
+
+  // 上下文窗口：单一来源委托 capabilities.contextWindowOfModel（账户模型声明优先），其次全局设置（默认 128000）。
+  // v2（P1-11）：解析算法集中到 capabilities.js，避免与 state.js / sqlite-store.js 重复漂移。
   App.context.contextWindowOf = function (model) {
     const fb = (App.state && App.state.settings && App.state.settings.contextWindow) || 128000;
     if (!model) return fb;
-    // 先查模型自身配置（新数据模型为 { name, contextWindow }）
-    const m = model.toLowerCase();
-    const accounts = (App.state && App.state.settings && App.state.settings.accounts) || [];
-    for (const acc of accounts) {
-      const mods = acc.models || [];
-      for (const mod of mods) {
-        if (mod && typeof mod === 'object' && mod.name && mod.name.toLowerCase() === m && mod.contextWindow > 0) {
-          return mod.contextWindow;
-        }
-      }
+    const Caps = (typeof window !== 'undefined' && window.App && window.App.ModelCapabilities) || null;
+    if (Caps && typeof Caps.contextWindowOfModel === 'function') {
+      const w = Caps.contextWindowOfModel(model, (App.state && App.state.settings && App.state.settings.accounts) || []);
+      if (w > 0) return w;
     }
     return fb;
   };
@@ -148,14 +197,14 @@
   function safeChunkTokens(window) { return Math.max(4000, Math.round(window * 0.5)); }
 
   // 分块合并摘要：把 middle 按 safe 大小切块，逐块并入 existingSummary，避免单次超窗口
-  async function summarizeChunked(existingSummary, middle, provider, window) {
+  async function summarizeChunked(existingSummary, middle, provider, window, extraContext) {
     const safe = safeChunkTokens(window);
     let s = existingSummary || '';
     let i = 0;
     while (i < middle.length) {
       let j = i + 1, acc = App.context.msgTokens(middle[i]);
       while (j < middle.length && acc + App.context.msgTokens(middle[j]) <= safe) { acc += App.context.msgTokens(middle[j]); j++; }
-      const ns = await App.context.summarizeDelta(s, middle.slice(i, j), provider);
+      const ns = await App.context.summarizeDelta(s, middle.slice(i, j), provider, extraContext);
       if (ns) s = truncateSummary(ns, App.context.SUMMARY_MAX_TOKENS); else if (j === i + 1) { /* 单条失败也前进，避免死循环 */ }
       else break; // 非单条失败则停止，保留已合并部分
       i = j;
@@ -163,7 +212,7 @@
     return s;
   }
 
-  // 上下文用量条渲染：百分比进度条 + token 计数（对齐 Claude Code /context）
+  // 上下文用量条渲染：百分比进度条 + token 计数
   App.context.renderUsage = function (el, tokens, threshold, breakdown) {
     if (!el) return;
     const pct = Math.max(0, Math.min(100, Math.round((tokens / threshold) * 100)));
@@ -240,11 +289,13 @@
   // opts: { messages, summary, summaryCount, recentKeep, systemContent, util, window }
   // 返回 { finalMessages, needsCompress, middleMsgs, newSummaryCount }
   App.context.getCompactMessages = function (opts) {
-    let { messages, summary, summaryCount, recentKeep, systemContent, util, window } = opts;
+    let { messages, summary, summaryCount, recentKeep, systemContent, util, window, toolReserve } = opts;
     if (summaryCount == null || summaryCount > messages.length) summaryCount = 0;
     const sysHead = [{ role: 'system', content: systemContent }];
     const sumMsg = (s) => ({ role: 'system', content: '【历史对话摘要（已自动压缩）】\n' + s });
-    const limit = Math.round((window || 128000) * (util || App.context.COMPACT_UTIL_CHAT));
+    // v3（P1）：toolReserve 真生效——发送集上限再为工具输出/最终回答预留比例（chat 端未传 toolReserve 时不扣）
+    const effectiveUtil = Math.max(0.05, (util || App.context.COMPACT_UTIL_CHAT) - (toolReserve || 0));
+    const limit = Math.round((window || 128000) * effectiveUtil);
     const headerTokens = App.context.messagesTokens(sysHead);
 
     // 没有摘要且整体未到阈值：原样发送
@@ -321,11 +372,12 @@
 
   // 后台异步压缩（fire-and-forget），返回新摘要或 null（失败）。
   // versionCheck：回调时检测版本号是否匹配，避免快速连发时旧压缩覆盖新状态。
-  App.context.compressAsync = async function (existingSummary, middleMsgs, provider, window, versionCheck) {
+  // G4：extraContext 可选——系统状态参考（用户长期记忆 / 活跃 Skill 名），透传给摘要生成。
+  App.context.compressAsync = async function (existingSummary, middleMsgs, provider, window, versionCheck, extraContext) {
     if (!middleMsgs || !middleMsgs.length) return existingSummary || null;
     if (!provider || !provider.ref || !provider.hasKey || !provider.model) return existingSummary || null;
     try {
-      const result = await summarizeChunked(existingSummary || '', middleMsgs, provider, window || 128000);
+      const result = await summarizeChunked(existingSummary || '', middleMsgs, provider, window || 128000, extraContext);
       // 若版本号变化（新消息已在压缩期间被处理），丢弃本次结果
       if (typeof versionCheck === 'function' && !versionCheck()) return null;
       return result;

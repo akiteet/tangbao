@@ -113,8 +113,11 @@
       App.ui.init();
       // 4) 绑定聊天视图事件并渲染欢迎区 / 建议
       App.chat.init();
-      // 5) 根据上次停留的模块进入对应视图
-      App.router.go(App.state.view || 'chat');
+      // 5) 进入模块视图：每次启动默认回到「糖包」聊天界面（v2 UX 决策：不记忆上次停留的模块）
+      App.router.go('chat');
+
+      // v2（统一热刷新）：一次性订阅技能变更广播（设置面板 + 糖码 / 菜单即时刷新）
+      if (App.ui && App.ui.bindSkillChanged) App.ui.bindSkillChanged();
 
       // 主窗监听浮窗回传的状态变更，合并并真实落盘
       if (!floatMode) {

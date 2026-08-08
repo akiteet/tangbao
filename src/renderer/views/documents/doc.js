@@ -74,7 +74,7 @@
                   <svg class="ico-expand" viewBox="0 0 24 24" width="16" height="16" style="display:none"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
               </div>
-              <div class="doc-sec">
+              <div class="doc-sec doc-sec-upload">
                 <div class="doc-toolbar">
                   <div class="dropzone compact" id="docDropzone">
                     <input type="file" id="docFile" accept=".txt,.md,.csv,.json,.jsonl,.log,.pdf,text/*" multiple>
@@ -83,10 +83,10 @@
                   <button class="btn-ghost mini" id="docPasteBtn">粘贴文本</button>
                 </div>
               </div>
-              <div class="doc-sec">
+              <div class="doc-sec doc-sec-files">
                 <div class="doc-list" id="docList">${docChips || '<span class="doc-list-empty">暂无文档</span>'}</div>
               </div>
-              <div class="doc-sec">
+              <div class="doc-sec doc-sec-analysis">
                 <div class="doc-analysis-bar" id="docAnalysisBar" style="display:${App.doc.activeDoc() ? 'flex' : 'none'}">
                   <button data-act="summary">摘要</button>
                   <button data-act="points">要点</button>
@@ -133,7 +133,7 @@
     bind() {
       const dz = document.getElementById('docDropzone');
       const input = document.getElementById('docFile');
-      dz.addEventListener('click', () => input.click());
+      // 原生 file input 已覆盖整个上传区；不要在父容器再次 input.click()，否则一次点击会弹出两次选择框。
       dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('hover'); });
       dz.addEventListener('dragleave', () => dz.classList.remove('hover'));
       dz.addEventListener('drop', (e) => {

@@ -2,6 +2,7 @@
 
 > 本文档汇总糖包 **v1.0.6** 的跨模块安全改造：所有涉及「API Key 如何保管、请求如何转发、本地目录如何隔离」的改动，以及它们如何贯穿聊天 / 绘图 / 文档 / 创作 / 智能体五大模块。
 > 配套阅读：[数据模型](./DATA_MODEL.md)。
+> **注**：本文为 v1.0.6 历史成果记录（文中 `js/`、`server/` 路径为当时架构）；v1.1.0 的关键演进（SQLite 持久化、src/ 分层、糖码 Plan 模式 / 权限 / 运行历史等）见文末 [第 8 节](#8-v110-演进2026-08-08)。
 
 ---
 
@@ -136,3 +137,40 @@ refreshSecrets()      // 取回主进程已存的密钥引用
 | `migrateSecrets` | 失败时保留明文、不乱删 Key |
 
 `gateway.js` 已导出 `checkTarget` / `buildUrl` / `KIND` 等纯函数，是最低成本的切入点。
+
+---
+
+## 8. v1.1.0 演进（2026-08-08）
+
+> v1.0.6 之后跨模块的主要演进。历史章节（第 1–7 节）保持 v1.0.6 原样记录；涉及路径以 v1.1.0 为准。
+
+### 8.1 存储：SQLite 权威化
+
+- v1.0.7 起引入 **SQLite（better-sqlite3）**：`userData/tangbao.db` 为权威源（Schema v15，21 张表，见 [DATA_MODEL.md](./DATA_MODEL.md)）。
+- `state.json` 降级为**双写副本**（可读、便于备份），不再权威；localStorage 废弃。
+- 数据迁移改为 `PRAGMA user_version` + 顺序 MIGRATIONS，替代旧版字段嗅探。
+
+### 8.2 架构：src/ 分层
+
+- 旧 `js/`、`server/` 平铺重构为 `src/` 分层：
+  - `src/main`（Electron 主进程：窗口、IPC、密钥库、糖码后端拉起）
+  - `src/preload`（安全 IPC 桥接）
+  - `src/renderer`（主窗口 SPA）
+  - `src/application`（渲染层服务封装）
+  - `src/core`（领域逻辑：模型能力、权限、完成门、技能、工作区、Schema）
+  - `src/infrastructure`（SQLite 存储、糖码 Runtime、模型网关、密钥库、工作区）
+- 密钥库 `server/secrets.js` → `src/infrastructure/secrets/kvstore.js`（机制不变：safeStorage / 原子写 / 回滚）。
+- 糖码后端由主进程 `startAgentServer` 直接拉起，不再需要单独 `npm run server`。
+
+### 8.3 糖码 · 编码助手
+
+- **Plan 模式（先计划后执行）**：只读探索产出任务清单；不确定时主动提问（问题 + 选项 + 自定义填空，单选/多选）；首次写文件时弹「计划待批准」，批准后同 run 自动切换执行模式。
+- **权限体系**：5 档权限模式（default / acceptEdits / auto / bypass / sandbox）+ 项目级规则（总是允许 / 总是拒绝 / 命令白名单），拒绝时给替代建议。
+- **运行历史与恢复**：每步落检查点，中断后可精确恢复并自动续段；设置页「运行历史」按页浏览与检索。
+- **多根工作区**：一个项目挂多个文件夹，任务按范围限定写入（单根 / 多根 / 全部）。
+- **上下文压缩**：结构化摘要 + 来源哈希 + 有效性，压缩不丢计划/错误/变更记录。
+- **本地安全评测**：内置受控评测任务（隔离 fixture），一键批量跑安全基线。
+
+### 8.4 测试现状更正
+
+> 第 7 节「当前零自动化测试」已过时。v1.1.0 当前 `npm test` **307 个用例**（覆盖 Runtime / 存储 / 权限 / 技能 / 工作区 / UI 契约），用托管 Node 以 `node --test "test/**/*.test.js"` 运行。

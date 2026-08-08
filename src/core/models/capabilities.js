@@ -144,8 +144,26 @@
 
   // M6：统一能力解析（Provider Adapter 的轻量版）。
   // 优先读账户模型声明的 caps 预设，未声明时用启发式回退。返回完整能力描述：
-  //   { streaming, toolCalling, visionInput, imageGeneration, imageEditing, reasoning, nativeWebSearch }
+  //   { streaming, toolCalling, visionInput, imageGeneration, imageEditing, reasoning, nativeWebSearch,
+  //     maxOutputTokens, supportsParallelToolCalls, supportsPromptCaching, preferredToolResultFormat }
   // 用途：UI 按能力隐藏/禁用入口；发送前校验（不给无工具模型发工具定义、不把图片编辑发给无视觉模型）。
+  // v2（P1-11）：上下文窗口单一来源——优先读账户模型声明的 contextWindow，未声明返回 0（调用方回退默认）。
+  // 取代原先散落在 state.js / context.js / sqlite-store.js 里的重复解析逻辑，双环境共用。
+  const DEFAULT_CONTEXT_WINDOW = 128000;
+  function contextWindowOfModel(model, accounts) {
+    const name = norm(model);
+    const accs = Array.isArray(accounts) ? accounts : [];
+    for (const a of accs) {
+      const models = (a && a.models) || [];
+      for (const mm of models) {
+        if (mm && typeof mm === 'object' && mm.name && norm(mm.name) === name && mm.contextWindow > 0) {
+          return mm.contextWindow;
+        }
+      }
+    }
+    return 0;
+  }
+
   function capsOfModel(model, accounts) {
     const name = norm(model);
     const preset = capsPresetOf(model, accounts || []);
@@ -157,6 +175,15 @@
     // 启发式回退
     if (toolCalling === undefined) toolCalling = true; // OpenAI-compatible 主流默认支持工具
     if (visionInput === undefined) visionInput = isVisionModel(model, null);
+    // v1.1.0（M6）：扩展字段——并行工具调用/缓存/结果格式默认值 + 按模型推断
+    const parallel = !/deepseek-r1|o1|o3|thinking/i.test(name); // reasoning 类模型通常不支持并行工具
+    // v3（Prompt Caching）：reasoning 类默认关闭；OpenAI 兼容/DeepSeek/Ark 自动前缀缓存，Anthropic 走 cache_control（见 promptCachingMode）
+    const caching = parallel;
+    const maxOut = (accounts || []).some((a) => a && Array.isArray(a.models))
+      ? (accounts.reduce((acc, a) => {
+          const m = (a.models || []).find((x) => norm(x && x.name ? x.name : '') === name);
+          return m && m.maxOutput ? m.maxOutput : acc;
+        }, 0) || 0) : 0;
     return {
       streaming: true,
       toolCalling: !!toolCalling,
@@ -165,12 +192,29 @@
       imageEditing: !!visionInput, // 图片编辑走 vision chat 兜底，依赖视觉输入
       reasoning: !!thinkSupport(model, accounts || []),
       nativeWebSearch: !!nativeWebModel(model),
+      // v1.1.0（M6）：扩展字段
+      maxOutputTokens: Number(maxOut) || 0,
+      supportsParallelToolCalls: parallel,
+      supportsPromptCaching: caching,
+      preferredToolResultFormat: 'json',
+      providerProtocol: /^claude/.test(name) ? 'anthropic-messages' : (/^gemini/.test(name) ? 'gemini-generate-content' : (/^(gpt-5|o[134]|codex)/.test(name) ? 'openai-responses' : 'openai-chat')),
+      usageFields: ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'],
+      // v2（P1-11）：上下文窗口单一来源（账户模型声明优先，未声明回退默认）
+      contextWindow: contextWindowOfModel(model, accounts) || DEFAULT_CONTEXT_WINDOW,
     };
   }
   function capsOfModelApp(model) {
     const accs = (typeof window !== 'undefined' && window.App && window.App.state && window.App.state.settings)
       ? window.App.state.settings.accounts : [];
     return capsOfModel(model, accs);
+  }
+
+  // Prompt Caching 模式：'anthropic'（需 cache_control 字段）| 'auto'（自动前缀缓存，无需字段）| 'off'
+  function promptCachingMode(model, apiBase) {
+    const nm = norm(model);
+    if (/deepseek-r1|o1|o3|thinking/i.test(nm)) return 'off';
+    if (/^claude/.test(nm) || /api\.anthropic\.com/i.test(String(apiBase || ''))) return 'anthropic';
+    return 'auto';
   }
 
   return {
@@ -181,5 +225,7 @@
     buildThinkParam, buildThinkParamWithSup,
     nativeWebModel, buildWebParam, isVisionModel,
     capsPresetOf, capsPresetOfApp, capsOfModel, capsOfModelApp,
+    contextWindowOfModel, DEFAULT_CONTEXT_WINDOW,
+    promptCachingMode,
   };
 });
