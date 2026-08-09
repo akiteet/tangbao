@@ -21,45 +21,89 @@ const fs = require('fs');
 const path = require('path');
 
 let filePath = '';
+let legacyFilePaths = [];
+let readPath = '';
 let safeStorage = null;
 let store = Object.create(null); // { ref: 明文 }
 let encrypted = false;           // 当前落盘是否真的加密了
 let loaded = false;
+let loadState = 'uninitialized'; // empty | ready | unavailable
+let loadCode = '';
 
 function fileHeader() {
   return { v: 1, enc: encrypted, data: '' };
 }
 
+function setLoadFailure(code, error) {
+  loaded = true;
+  store = Object.create(null);
+  loadState = 'unavailable';
+  loadCode = String(code || 'secret_store_unavailable');
+  const message = error && error.message ? error.message : error;
+  if (message) console.error('[糖包·密钥库] ' + loadCode + '：', message);
+}
+
+function candidatePaths() {
+  return [filePath].concat(legacyFilePaths).filter((value, index, list) => {
+    if (!value) return false;
+    const resolved = path.resolve(String(value));
+    return list.findIndex((item) => item && path.resolve(String(item)) === resolved) === index;
+  });
+}
+
+function decode(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.data !== 'string' || !raw.data) {
+    throw Object.assign(new Error('密钥文件格式无效'), { code: 'secret_store_invalid' });
+  }
+  if (raw.enc) {
+    if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function' || !safeStorage.isEncryptionAvailable()) {
+      throw Object.assign(new Error('系统密钥服务不可用'), { code: 'secret_decrypt_unavailable' });
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(raw.data, 'base64'));
+    } catch (error) {
+      throw Object.assign(new Error('当前 Windows 账户无法解密密钥文件'), { code: 'secret_decrypt_failed', cause: error });
+    }
+  }
+  return Buffer.from(raw.data, 'base64').toString('utf8');
+}
+
 function load() {
   store = Object.create(null);
+  readPath = candidatePaths().find((candidate) => {
+    try { return fs.existsSync(candidate); } catch (_) { return false; }
+  }) || '';
+  if (!readPath) {
+    loaded = true;
+    loadState = 'empty';
+    loadCode = '';
+    return;
+  }
   try {
-    if (!fs.existsSync(filePath)) { loaded = true; return; }
-    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (!raw || typeof raw.data !== 'string' || !raw.data) { loaded = true; return; }
-    let json = '';
-    if (raw.enc) {
-      if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
-        console.error('[糖包·密钥库] 密文已存在但当前系统无法解密（密钥服务不可用），本次不加载。');
-        loaded = true;
-        return;
-      }
-      json = safeStorage.decryptString(Buffer.from(raw.data, 'base64'));
-    } else {
-      json = Buffer.from(raw.data, 'base64').toString('utf8');
-    }
+    const raw = JSON.parse(fs.readFileSync(readPath, 'utf8'));
+    const json = decode(raw);
     const obj = JSON.parse(json);
     if (obj && typeof obj === 'object') {
       for (const k of Object.keys(obj)) {
         if (typeof obj[k] === 'string' && obj[k]) store[k] = obj[k];
       }
     }
+    encrypted = !!raw.enc;
+    loaded = true;
+    loadState = 'ready';
+    loadCode = '';
   } catch (e) {
-    console.error('[糖包·密钥库] 读取失败：', e && e.message ? e.message : e);
+    setLoadFailure((e && e.code) || 'secret_store_invalid', e);
   }
-  loaded = true;
+  // 旧版本可能把密钥库放在 userData 根目录或默认 userData 下。
+  // 读取成功后立即写到当前数据根，后续只使用当前路径。
+  if (loadState === 'ready' && readPath !== filePath && filePath) {
+    if (save()) readPath = filePath;
+  }
 }
 
 function save() {
+  if (!loaded || loadState === 'unavailable' || !filePath) return false;
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const json = JSON.stringify(store);
@@ -81,9 +125,11 @@ function save() {
     const tmp = filePath + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(out), 'utf8');
     fs.renameSync(tmp, filePath);
+    readPath = filePath;
     try { fs.chmodSync(filePath, 0o600); } catch (_) { /* Windows 上无意义，忽略 */ }
     return true;
   } catch (e) {
+    try { fs.unlinkSync(filePath + '.tmp'); } catch (_) {}
     console.error('[糖包·密钥库] 写入失败：', e && e.message ? e.message : e);
     return false;
   }
@@ -93,10 +139,26 @@ function save() {
 function init(opts) {
   const o = opts || {};
   safeStorage = o.safeStorage || null;
-  filePath = o.filePath || '';
+  filePath = o.filePath ? path.resolve(String(o.filePath)) : '';
+  legacyFilePaths = Array.isArray(o.legacyFilePaths)
+    ? o.legacyFilePaths.filter((value) => value).map((value) => path.resolve(String(value)))
+    : [];
   encrypted = !!(safeStorage && safeStorage.isEncryptionAvailable());
+  loaded = false;
+  loadState = 'uninitialized';
+  loadCode = '';
   load();
-  return { encrypted, count: Object.keys(store).length };
+  return Object.assign({ encrypted, count: Object.keys(store).length }, getStatus());
+}
+
+function getStatus() {
+  return {
+    state: loadState,
+    code: loadCode,
+    encrypted,
+    count: Object.keys(store).length,
+    source: readPath ? (readPath === filePath ? 'active' : 'legacy') : 'none',
+  };
 }
 
 /** 仅供主进程内部使用，绝不经 IPC 暴露 */
@@ -109,6 +171,9 @@ function setSecret(ref, value) {
   const k = String(ref || '').trim();
   const v = String(value == null ? '' : value);
   if (!k) return { ok: false, error: '缺少密钥标识' };
+  if (!loaded || loadState === 'unavailable') {
+    return { ok: false, code: loadCode || 'secret_store_unavailable', error: '密钥库无法读取，已保留原密钥文件' };
+  }
   if (!v) return deleteSecret(k);
 
   // 失败要能原样退回，所以先记住这个 ref 原来的值
@@ -122,22 +187,25 @@ function setSecret(ref, value) {
   // 写完立刻回读校验，确认加密/解密链路真的可用，避免用户以为存上了其实丢了
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    const json = raw.enc
-      ? safeStorage.decryptString(Buffer.from(raw.data, 'base64'))
-      : Buffer.from(raw.data, 'base64').toString('utf8');
+    const json = decode(raw);
     const probe = JSON.parse(json);
     if (!probe || probe[k] !== v) throw new Error('回读内容与写入不一致');
   } catch (e) {
     rollback();
-    save(); // 尽力把文件恢复成回滚后的状态
-    return { ok: false, error: '写入后校验失败：' + (e && e.message ? e.message : e) };
+    if (loadState !== 'unavailable') save(); // 尽力把文件恢复成回滚后的状态
+    return { ok: false, code: (e && e.code) || 'secret_write_verify_failed', error: '写入后校验失败，原密钥已保留' };
   }
-  return { ok: true, encrypted };
+  loadState = 'ready';
+  loadCode = '';
+  return { ok: true, encrypted, count: Object.keys(store).length };
 }
 
 function deleteSecret(ref) {
   const k = String(ref || '').trim();
   if (!k) return { ok: false, error: '缺少密钥标识' };
+  if (!loaded || loadState === 'unavailable') {
+    return { ok: false, code: loadCode || 'secret_store_unavailable', error: '密钥库无法读取，未执行删除' };
+  }
   if (!(k in store)) return { ok: true, encrypted };
   delete store[k];
   return { ok: save(), encrypted };
@@ -147,6 +215,9 @@ function deleteSecret(ref) {
 function deleteByPrefix(prefix) {
   const p = String(prefix || '');
   if (!p) return { ok: false };
+  if (!loaded || loadState === 'unavailable') {
+    return { ok: false, code: loadCode || 'secret_store_unavailable', error: '密钥库无法读取，未执行删除' };
+  }
   let hit = 0;
   for (const k of Object.keys(store)) {
     if (k.startsWith(p)) { delete store[k]; hit++; }
@@ -170,5 +241,5 @@ function isEncrypted() {
 
 module.exports = {
   init, getSecret, setSecret, deleteSecret, deleteByPrefix,
-  hasSecret, listRefs, isEncrypted,
+  hasSecret, listRefs, isEncrypted, getStatus,
 };

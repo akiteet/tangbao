@@ -19,7 +19,7 @@ test('设置弹窗使用统一固定可视高度且正文只有设置内容区�
 test('设置弹窗底部说明使用独立容器和与主体一致的安全留白', () => {
   const html = read('index.html');
   const css = read('styles.css');
-  assert.match(html, /<div class="settings-footer-notes">[\s\S]*密钥仅保存在本浏览器[\s\S]*浏览器直连第三方 API/);
+  assert.match(html, /<div class="settings-footer-notes">[\s\S]*密钥保存在本机系统安全存储中[\s\S]*不会上传到任何其他地方/);
   assert.match(css, /\.settings-footer-notes \{[^}]*padding: 10px 20px 12px[^}]*border-top:/s);
   assert.match(css, /\.settings-footer-notes \.hint \{[^}]*margin: 0/s);
 });

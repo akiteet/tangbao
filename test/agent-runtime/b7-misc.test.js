@@ -3,10 +3,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
-const agentSrc = read('src/infrastructure/agent-runtime/agent-server.js');
+const agentSrc = readRuntimeSource(ROOT);
 const mainSrc = read('src/main/main.js');
 const uiSrc = read('src/renderer/components/ui.js');
 const { exportRunJSONL } = require('../../src/core/agent-runtime/run-export');

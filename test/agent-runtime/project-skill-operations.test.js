@@ -4,13 +4,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 test('项目级 Skill 以 .workbuddy/skills 为标准根并保留旧目录兼容', () => {
   const main = read('src/main/main.js');
-  const runtime = read('src/infrastructure/agent-runtime/agent-server.js');
+  const runtime = readRuntimeSource(ROOT);
   assert.match(main, /path\.join\(cwd, '\.workbuddy', 'skills'\)/);
   assert.match(main, /path\.join\(cwd, '\.tangbao-skills'\)/);
   assert.match(main, /path\.join\(cwd, '\.claude', 'skills'\)/);
@@ -96,7 +97,7 @@ test('项目级 Skill 恢复跨盘回退：隔离区 → 项目盘 rename 失败
 
 test('同名Skill全部展示并由主进程按Runtime根顺序标记生效状态', () => {
   const main = read('src/main/main.js');
-  const runtime = read('src/infrastructure/agent-runtime/agent-server.js');
+  const runtime = readRuntimeSource(ROOT);
   const ui = read('src/renderer/components/ui.js');
   assert.match(main, /SkillRegistry\.enumerateInstalled\(\[\{ scope: 'builtin', dir: builtinRoot \}\]\)/);
   assert.match(main, /SkillRegistry\.annotateDuplicateResolution\(all, orderedRoots\)/);

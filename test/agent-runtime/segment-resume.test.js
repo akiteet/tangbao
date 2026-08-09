@@ -3,11 +3,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { readRuntimeSource } = require('./source-helper');
 const root = path.resolve(__dirname, '..', '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 test('Runtime 实现同 Run 自动续段并区分段事件与终态', () => {
-  const server = read('src/infrastructure/agent-runtime/agent-server.js');
+  const server = readRuntimeSource(root);
   assert.match(server, /const MAX_SEGMENTS = 5/);
   assert.match(server, /const MAX_CUMULATIVE_STEPS = 1000/);
   assert.match(server, /emit\('segment_completed'/);
@@ -21,7 +22,7 @@ test('Runtime 实现同 Run 自动续段并区分段事件与终态', () => {
 });
 
 test('Eval 模式使用显式累计总步数，普通产品任务仍默认 1000 步', () => {
-  const server = read('src/infrastructure/agent-runtime/agent-server.js');
+  const server = readRuntimeSource(root);
   const controlled = read('src/core/agent-runtime/controlled-eval.js');
   assert.match(server, /const evalMode = body\.evalMode === true/);
   assert.match(server, /Number\(body\.maxCumulativeSteps\) \|\| maxSteps/);
@@ -38,13 +39,13 @@ test('Eval 模式使用显式累计总步数，普通产品任务仍默认 1000 
 });
 
 test('Completion Gate 使用请求 maxSteps 而非固定 96', () => {
-  const server = read('src/infrastructure/agent-runtime/agent-server.js');
+  const server = readRuntimeSource(root);
   assert.match(server, /if \(step >= maxSteps - 1\) break;/);
   assert.doesNotMatch(server, /step >= MAX_STEPS - 1/);
 });
 
 test('精确恢复对来源 Run 与 Checkpoint 做结构化校验，不静默重发', () => {
-  const server = read('src/infrastructure/agent-runtime/agent-server.js');
+  const server = readRuntimeSource(root);
   assert.match(server, /resume_run_not_found/);
   assert.match(server, /resume_checkpoint_missing/);
   assert.match(server, /resume_thread_mismatch/);

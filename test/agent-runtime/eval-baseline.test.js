@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
-const { buildBaseline, metricsFor } = require('../../scripts/build-eval-baseline');
+const { buildBaseline, metricsFor, resolveDefaultDataRoot } = require('../../scripts/build-eval-baseline');
 
 function writeResult(root, dir, result) {
   const target = path.join(root, dir);
@@ -82,7 +82,7 @@ test('真实基线生成器优先使用桌面应用持久化的运行时检测�
   try {
     const report = buildBaseline({
       tasks: path.join(projectRoot, 'benchmarks', 'tasks.json'),
-      runsRoot: path.join(os.homedir(), 'AppData', 'Roaming', 'tangbao-web', 'tangbao-data', 'eval-runs'),
+      runsRoot: path.join(resolveDefaultDataRoot(), 'eval-runs'),
       readinessFile,
       missingRuntimes: [],
     });

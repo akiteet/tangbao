@@ -30,6 +30,7 @@ function normalizeFinding(value) {
     detail: stringValue(item.detail || item.description, ''),
     evidence: Array.isArray(item.evidence) ? item.evidence.slice(0, 20).map(normalizeEvidence) : [],
     recommendation: stringValue(item.recommendation || item.recommendationText, ''),
+    confidence: item.confidence == null ? null : Math.min(1, Math.max(0, Number(item.confidence) || 0)),
   };
 }
 
@@ -118,6 +119,11 @@ function normalize(raw, meta) {
     steps: Number.isFinite(Number(value.steps)) ? Number(value.steps) : Number(options.steps || 0),
     toolsUsed: Number.isFinite(Number(value.toolsUsed)) ? Number(value.toolsUsed) : Number(options.toolsUsed || 0),
     durationMs: Number.isFinite(Number(value.durationMs)) ? Number(value.durationMs) : Number(options.durationMs || 0),
+    inputTokens: Number.isFinite(Number(value.inputTokens)) ? Number(value.inputTokens) : Number(options.inputTokens || 0),
+    outputTokens: Number.isFinite(Number(value.outputTokens)) ? Number(value.outputTokens) : Number(options.outputTokens || 0),
+    reasoningTokens: Number.isFinite(Number(value.reasoningTokens)) ? Number(value.reasoningTokens) : Number(options.reasoningTokens || 0),
+    costUsd: Number.isFinite(Number(value.costUsd)) ? Number(value.costUsd) : Number(options.costUsd || 0),
+    cache: value.cache && typeof value.cache === 'object' ? value.cache : (options.cache || null),
     error,
   };
 }

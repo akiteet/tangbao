@@ -17,7 +17,8 @@
  */
 
 const { classify } = require('../../core/errors');
-const { detectAdapter, buildRequest, parseNonStream, normalizeUsage, parseSSE } = require('./adapters'); // v2（P2-7）
+const { detectAdapter, buildRequest, parseNonStream, normalizeUsage, mergeUsage, parseSSE } = require('./adapters'); // v2（P2-7）
+const { normalizeModelUsage } = require('../../core/agent-runtime/model-telemetry');
 
 const KIND = {
   chat:       { path: '/chat/completions',  method: 'POST' },
@@ -30,9 +31,13 @@ const MAX_BODY = 32 * 1024 * 1024; // 32MB：图生图会把参考图 base64 塞
 
 let endpoints = new Map();      // ref -> apiBase
 let getSecret = () => '';
+let recordModelCallMetric = null;
 
 function configure(opts) {
   if (opts && typeof opts.getSecret === 'function') getSecret = opts.getSecret;
+  if (opts && Object.prototype.hasOwnProperty.call(opts, 'recordModelCallMetric')) {
+    recordModelCallMetric = typeof opts.recordModelCallMetric === 'function' ? opts.recordModelCallMetric : null;
+  }
 }
 
 /** 渲染进程在启动/改设置时同步过来的「密钥引用 → API Base」映射表。
@@ -58,6 +63,50 @@ function setEndpoints(list) {
 
 function getEndpoint(ref) {
   return endpoints.get(String(ref || '')) || '';
+}
+
+function telemetryMeta(body, kind, adapter) {
+  const input = body && body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : {};
+  const clean = (value, fallback) => {
+    const text = String(value || fallback || '').slice(0, 80);
+    return /^[A-Za-z0-9_.:-]*$/.test(text) ? text : String(fallback || '');
+  };
+  return {
+    scope: clean(input.scope, kind === 'images' ? 'image' : 'chat') || 'chat',
+    callType: clean(input.callType, kind === 'images' ? 'image' : kind) || kind,
+    runId: String(input.runId || '').slice(0, 160),
+    rootRunId: String(input.rootRunId || '').slice(0, 160),
+    requestId: String(input.requestId || '').slice(0, 160),
+    provider: clean(input.provider, adapter),
+  };
+}
+
+function recordGatewayMetric(meta) {
+  if (!recordModelCallMetric || !meta || meta.kind === 'models') return;
+  const usage = normalizeModelUsage({ adapterUsage: meta.usage || null, cache: meta.cache || null });
+  try {
+    recordModelCallMetric({
+      id: meta.requestId || undefined,
+      runId: meta.runId,
+      rootRunId: meta.rootRunId || meta.runId,
+      scope: meta.scope,
+      callType: meta.callType,
+      modelId: meta.model,
+      provider: meta.provider,
+      requestId: meta.requestId,
+      adapterUsage: meta.usage || {},
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      reasoningTokens: usage.reasoningTokens,
+      cache: usage.cache,
+      costUsd: usage.costUsd,
+      latencyMs: Math.max(0, (Number(meta.finishedAt) || Date.now()) - (Number(meta.startedAt) || Date.now())),
+      status: meta.status || 'completed',
+      errorType: meta.errorType || '',
+      startedAt: meta.startedAt,
+      finishedAt: meta.finishedAt,
+    });
+  } catch (_) {}
 }
 
 /*
@@ -152,21 +201,47 @@ async function handleGateway(req, res) {
   const bad = checkTarget(target);
   if (bad) { fail(res, 403, bad); return; }
 
+  const adapter = detectAdapter((body.payload && body.payload.model) || '', base);
+  const telemetry = Object.assign(telemetryMeta(body, kind, adapter), {
+    kind,
+    model: String(body.payload && body.payload.model || ''),
+    startedAt: Date.now(),
+    status: 'completed',
+    usage: null,
+  });
+
   // 渲染进程取消（用户点停止 / 关闭页面）时同步掐断上游连接，别让请求继续烧 token
   const ctrl = new AbortController();
   let clientGone = false;
-  const onClose = () => { clientGone = true; try { ctrl.abort(); } catch (_) {} };
+  const onClose = () => {
+    if (res.writableEnded) return;
+    clientGone = true;
+    telemetry.status = 'cancelled';
+    telemetry.errorType = 'cancelled';
+    try { ctrl.abort(); } catch (_) {}
+  };
   res.on('close', onClose);
 
   try {
     // v4：非 OpenAI Chat 适配器走供应商原生流式，并在主进程转换为既有 OpenAI SSE 形状。
-    const adapter = detectAdapter((body.payload && body.payload.model) || '', base);
     if (kind === 'chat' && adapter !== 'openai') {
       const payload = body.payload || {};
-      const req = buildRequest(adapter, { apiBase: base, apiKey: key, model: payload.model, messages: payload.messages || [], tools: payload.tools || [], stream: !!payload.stream });
+      const req = buildRequest(adapter, {
+        apiBase: base,
+        apiKey: key,
+        model: payload.model,
+        messages: payload.messages || [],
+        tools: payload.tools || [],
+        stream: !!payload.stream,
+        maxOutputTokens: payload.maxOutputTokens || payload.max_tokens,
+        promptCaching: payload.promptCaching !== false,
+        cachedContentName: payload.cachedContentName || payload.cachedContent,
+      });
       const upA = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: ctrl.signal });
       if (clientGone) return;
-      if (!upA.ok) {
+       if (!upA.ok) {
+         telemetry.status = 'failed';
+         telemetry.errorType = classify(upA.status, '').type;
         const raw = await upA.text().catch(() => '');
         let upstreamMsg = '';
         try { const j = JSON.parse(raw); upstreamMsg = (j && j.error && (j.error.message || j.error)) || raw; } catch (_) { upstreamMsg = raw; }
@@ -177,7 +252,8 @@ async function handleGateway(req, res) {
       }
       if (!payload.stream) {
         const json = await upA.json().catch(() => ({}));
-        const parsed = parseNonStream(adapter, json);
+         const parsed = parseNonStream(adapter, json);
+         telemetry.usage = normalizeUsage(adapter, json);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: parsed.content, reasoning_content: parsed.reasoning, tool_calls: parsed.toolCalls.map((call) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } })) }, finish_reason: parsed.toolCalls.length ? 'tool_calls' : 'stop' }], usage: normalizeUsage(adapter, json) }));
         return;
@@ -192,7 +268,8 @@ async function handleGateway(req, res) {
         const lines = buffer.split(/\r?\n/); buffer = lines.pop() || '';
         for (const line of lines) {
           if (!line.trim().startsWith('data:')) continue;
-          const event = parseSSE(adapter, line, state); if (!event) continue;
+           const event = parseSSE(adapter, line, state); if (!event) continue;
+            if (event.usage) telemetry.usage = mergeUsage(telemetry.usage, event.usage);
           if (event.reasoning) res.write(enc({ choices: [{ delta: { reasoning_content: event.reasoning } }] }));
           if (event.content) res.write(enc({ choices: [{ delta: { content: event.content } }] }));
           for (const call of event.toolCalls || (event.toolCall ? [event.toolCall] : [])) res.write(enc({ choices: [{ delta: { tool_calls: [{ index: toolIndex++, id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }] } }] }));
@@ -211,7 +288,14 @@ async function handleGateway(req, res) {
       },
       signal: ctrl.signal,
     };
-    if (spec.method !== 'GET') init.body = JSON.stringify(body.payload || {});
+    if (spec.method !== 'GET') {
+      const outboundPayload = Object.assign({}, body.payload || {});
+      // OpenAI-compatible providers only send stream usage when explicitly asked.
+      if (kind === 'chat' && adapter === 'openai' && outboundPayload.stream) {
+        outboundPayload.stream_options = Object.assign({}, outboundPayload.stream_options || {}, { include_usage: true });
+      }
+      init.body = JSON.stringify(outboundPayload);
+    }
 
     const up = await fetch(target.href, init);
     if (clientGone) return;
@@ -219,6 +303,8 @@ async function handleGateway(req, res) {
     // 上游返回非 2xx：归类后统一成 { error: { type, message, status } } 信封回传前端。
     // 前端 gatewayError 已读取 error.message，新增的 type 用于后续精细化提示，向后兼容。
     if (!up.ok) {
+      telemetry.status = 'failed';
+      telemetry.errorType = classify(up.status, '').type;
       const raw = await up.text().catch(() => '');
       let upstreamMsg = '';
       try {
@@ -235,23 +321,57 @@ async function handleGateway(req, res) {
       'Content-Type': up.headers.get('content-type') || 'application/json',
       'Cache-Control': 'no-cache, no-transform',
     });
+    telemetry.requestId = telemetry.requestId || String(up.headers.get('x-request-id') || '');
+    if (up.body && !(body.payload && body.payload.stream)) {
+      const raw = await up.text();
+      try { telemetry.usage = normalizeUsage(adapter, JSON.parse(raw)); } catch (_) {}
+      if (!clientGone) res.end(raw);
+      return;
+    }
     if (up.body) {
       const reader = up.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const observe = (line) => {
+        const text = String(line || '').trim();
+        if (!text.startsWith('data:')) return;
+        const raw = text.slice(5).trim();
+        if (!raw || raw === '[DONE]') return;
+        try {
+          const json = JSON.parse(raw);
+          if (json.usage || json.usageMetadata || (json.response && json.response.usage)) telemetry.usage = mergeUsage(telemetry.usage, normalizeUsage(adapter, json.response || json));
+        } catch (_) {}
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         if (clientGone) { try { await reader.cancel(); } catch (_) {} break; }
-        res.write(Buffer.from(value));
+        const chunk = Buffer.from(value);
+        res.write(chunk);
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        lines.forEach(observe);
       }
+      observe(buffer);
     }
     res.end();
   } catch (e) {
-    if (clientGone || (e && e.name === 'AbortError')) { try { res.end(); } catch (_) {} return; }
+    if (clientGone || (e && e.name === 'AbortError')) {
+      telemetry.status = 'cancelled';
+      telemetry.errorType = 'cancelled';
+      try { res.end(); } catch (_) {}
+      return;
+    }
+    telemetry.status = 'failed';
+    telemetry.errorType = e && e.type || 'infrastructure_failure';
     // 错误信息里绝不能带上 Authorization / key
     const msg = (e && e.cause && e.cause.code) ? (e.cause.code + ': ' + e.cause.message)
       : (e && e.message) ? e.message : String(e);
     fail(res, 502, '连接模型服务失败：' + msg);
   } finally {
+    telemetry.finishedAt = Date.now();
+    recordGatewayMetric(telemetry);
     res.off('close', onClose);
   }
 }

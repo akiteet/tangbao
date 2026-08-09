@@ -20,16 +20,23 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { judgeTask } = require('../src/core/agent-runtime/eval-judge');
+const { runBenchmarkSuite } = require('../src/core/agent-runtime/benchmark-harness');
 
+const ROOT = path.join(__dirname, '..');
 const TASKS_FILE = path.join(__dirname, '..', 'benchmarks', 'tasks.json');
 
 function parseArgs() {
-  const out = { db: '', list: false, eval: undefined };
+  const out = { db: '', list: false, eval: undefined, suite: '', mode: '', seed: 1337, out: '', trace: '' };
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--db' && argv[i + 1]) out.db = argv[i + 1];
     else if (argv[i] === '--list') out.list = true;
     else if (argv[i] === '--eval') out.eval = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : true;
+    else if (argv[i] === '--suite' && argv[i + 1]) out.suite = argv[++i];
+    else if (argv[i] === '--mode' && argv[i + 1]) out.mode = argv[++i];
+    else if (argv[i] === '--seed' && argv[i + 1]) out.seed = Number(argv[++i]) || 1337;
+    else if ((argv[i] === '--out' || argv[i] === '--report') && argv[i + 1]) out.out = path.resolve(argv[++i]);
+    else if ((argv[i] === '--trace' || argv[i] === '--input') && argv[i + 1]) out.trace = path.resolve(argv[++i]);
   }
   return out;
 }
@@ -270,6 +277,14 @@ async function mainEval(onlyId) {
 
 function main() {
   const args = parseArgs();
+  if (args.suite || args.mode) {
+    const report = runBenchmarkSuite({ suite: args.suite || 'multi-agent', mode: args.mode || 'offline', seed: args.seed, replayFile: args.trace, model: process.env.EVAL_MODEL || '' });
+    const output = args.out || path.join(ROOT, 'benchmarks', 'reports', report.suite + '-' + report.mode + '.json');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, JSON.stringify(report, null, 2), 'utf8');
+    console.log(JSON.stringify({ suite: report.suite, mode: report.mode, seed: report.seed, summary: report.summary, output }, null, 2));
+    return;
+  }
   if (args.list) {
     const tasks = loadTasks();
     console.log('评测任务集（' + tasks.length + ' 个）：');
@@ -355,4 +370,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { loadTasks, resolveFixtureSource, prepareFixture, runEvalTask, mainEval };
+module.exports = { loadTasks, resolveFixtureSource, prepareFixture, runEvalTask, mainEval, parseArgs, runBenchmarkSuite };

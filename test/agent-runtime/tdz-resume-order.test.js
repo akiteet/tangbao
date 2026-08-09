@@ -3,9 +3,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
-const src = fs.readFileSync(path.join(ROOT, 'src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+const src = readRuntimeSource(ROOT);
 const lineOf = (needle, from) => {
   const idx = src.indexOf(needle, from == null ? 0 : from);
   assert.ok(idx >= 0, '应能找到：' + needle);

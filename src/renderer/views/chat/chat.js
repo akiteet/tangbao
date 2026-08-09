@@ -669,7 +669,7 @@
       };
       try {
         // 聊天修复 E：首字节看门狗——fetch 阶段挂起（网络半开）30s 后终止，走外层兜底保存
-        const res = await raceTimeout(App.rt.gatewayFetch({ ref: s.ref, kind: 'chat', payload }), STREAM_FIRST_BYTE_MS);
+        const res = await raceTimeout(App.rt.gatewayFetch({ ref: s.ref, kind: 'chat', telemetry: { scope: 'chat', callType: 'chat' }, payload }), STREAM_FIRST_BYTE_MS);
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
           ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 240))}</div>`;

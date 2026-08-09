@@ -31,6 +31,8 @@
   App.agent = {
     running: false,
     _ctrl: null,
+    _engineStripData: { threadId: '', run: null, metrics: null },
+    _engineStripRequest: 0,
 
     onShow() { App.agent.render(); },
 
@@ -446,6 +448,9 @@
                 <button class="btn-ghost mini" id="agentMemoryBtn" title="编辑项目记忆（糖码记忆.md）">项目记忆</button>
                 <button class="btn-ghost mini" id="agentHistoryBtn" title="查看本会话运行历史（计划 / TODO / 工具调用 / 测试结果）">历史</button>
                 <button class="btn-ghost mini" id="agentEvalBtn" title="在独立 fixture 中运行安全评测，不接触当前项目">安全评测</button>
+                <button class="btn-ghost mini agent-engine-launcher" id="agentEngineBtn" type="button" aria-haspopup="dialog" aria-controls="agentEngineMask" title="打开运行观测">
+                  运行观测 <span class="agent-engine-launcher-state" id="agentEngineLauncherState">待运行</span>
+                </button>
               </div>
               </div>
             </div>
@@ -505,6 +510,8 @@
       } else {
         App.agent.hideStatusSummary();
       }
+      App.agent.renderEngineStrip();
+      App.agent.refreshEngineStrip();
       // v2（UX）：发送前就绪检查改为轻量 toast（不再弹就地提示条）
     },
 
@@ -640,6 +647,8 @@
       App.agent.restoreThread();
       App.agent.restoreComposerDraft();
       App.agent.updateCtxBar();
+      App.agent.renderEngineStrip();
+      App.agent.refreshEngineStrip();
     },
     newChat() {
       App.agent.saveComposerDraft();
@@ -648,6 +657,8 @@
       App.agent.renderSessions();
       App.agent.restoreThread();
       App.agent.restoreComposerDraft();
+      App.agent.renderEngineStrip();
+      App.agent.refreshEngineStrip();
       const input = document.getElementById('agentInput');
       if (input) input.focus();
     },
@@ -830,6 +841,7 @@
         const model = modelSel ? modelSel.value : p.model;
         const res = await App.rt.gatewayFetch({
           ref: p.ref, kind: 'chat',
+          telemetry: { scope: 'agent', callType: 'prompt_enhance' },
           payload: {
             model, stream: false,
             messages: [
@@ -920,6 +932,8 @@
       if (histBtn) histBtn.addEventListener('click', () => App.agent.showRunHistory());
       const evalBtn = document.getElementById('agentEvalBtn');
       if (evalBtn) evalBtn.addEventListener('click', () => App.agent.showSafeEval());
+      const engineBtn = document.getElementById('agentEngineBtn');
+      if (engineBtn) engineBtn.addEventListener('click', () => App.agent.openEngineObserver());
       // Plan 模式开关
       const planToggle = document.getElementById('agentPlanToggle');
       if (planToggle) planToggle.addEventListener('change', () => {
@@ -1596,9 +1610,10 @@
     },
 
     // ===== v1.1.0（M1）：运行历史面板（仿糖创工作流历史）=====
-    async showRunHistory() {
+    async showRunHistory(options) {
       const thread = App.agent.activeThread();
       if (!thread) return;
+      let autoOpenRunId = options && options.openRunId ? String(options.openRunId) : '';
       const PAGE_SIZE = 30;
       let runs = [];
       let hasMore = true;
@@ -1704,6 +1719,7 @@
           </summary>
           <div class="wf-hist-detail"><div class="agent-hist-events" data-run="${App.escapeHtml(run.id)}"><div class="wf-step-out">加载中…</div></div>
             <div class="agent-hist-resume">
+              <button class="btn-ghost mini" data-inspector="${App.escapeHtml(run.id)}">Trace Inspector</button>
               <button class="btn-ghost mini" data-export-run="${App.escapeHtml(run.id)}">导出 JSONL</button>
               <button class="btn-ghost mini" data-diagnose="${App.escapeHtml(run.id)}">复制诊断</button>
               ${ri > 0 ? `<button class="btn-ghost mini" data-compare="${App.escapeHtml(run.id)}">对比上次</button>` : ''}
@@ -1793,6 +1809,132 @@
             else if (!(r && r.canceled)) App.ui.toast((r && r.error) || '导出失败');
           });
         });
+        const openTraceInspector = async (run) => {
+          if (!run || document.getElementById('agentTraceMask')) return;
+          const traceMask = document.createElement('div');
+          traceMask.className = 'modal-mask';
+          traceMask.id = 'agentTraceMask';
+          traceMask.innerHTML = `
+            <div class="modal agent-modal agent-trace-modal" role="dialog" aria-modal="true">
+              <div class="modal-header"><span>Agent Trace Inspector · ${App.escapeHtml(run.id)}</span>
+                <button class="icon-btn" data-trace-close aria-label="关闭">
+                  <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+              <div class="modal-body">
+                <div class="agent-trace-summary" data-trace-metrics><div class="wf-step-out">正在加载运行指标…</div></div>
+                <div class="agent-trace-tree" data-trace-tree><div class="wf-step-out">正在加载协作树…</div></div>
+                <div class="agent-trace-tools">
+                  <input type="text" data-trace-types placeholder="事件类型（逗号分隔）" aria-label="按事件类型筛选" />
+                  <select data-trace-status aria-label="按事件状态筛选"><option value="">全部状态</option><option value="running">运行中</option><option value="completed">完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select>
+                  <select data-trace-depth aria-label="按深度筛选"><option value="">全部深度</option><option value="0">根 Run</option><option value="1">深度 1</option><option value="2">深度 2</option></select>
+                  <label class="agent-trace-payload"><input type="checkbox" data-trace-payload checked /> 显示事件载荷</label>
+                  <button class="btn-ghost mini" data-trace-refresh>刷新</button>
+                  <button class="btn-ghost mini" data-trace-export>导出脱敏 JSONL</button>
+                </div>
+                <div class="agent-trace-timeline" data-trace-events><div class="wf-step-out">正在加载 Trace…</div></div>
+                <div class="agent-trace-more"><button class="btn-ghost" data-trace-more hidden>加载更多事件</button></div>
+              </div>
+              <div class="modal-footer"><span class="agent-hist-ux">只读 · 不支持重放和工具执行</span><button class="btn-ghost" data-trace-close>关闭</button></div>
+            </div>`;
+          document.body.appendChild(traceMask);
+          const timeline = traceMask.querySelector('[data-trace-events]');
+          const metricsBox = traceMask.querySelector('[data-trace-metrics]');
+          const treeBox = traceMask.querySelector('[data-trace-tree]');
+          const typeInput = traceMask.querySelector('[data-trace-types]');
+          const statusInput = traceMask.querySelector('[data-trace-status]');
+          const depthInput = traceMask.querySelector('[data-trace-depth]');
+          const payloadInput = traceMask.querySelector('[data-trace-payload]');
+          const moreButton = traceMask.querySelector('[data-trace-more]');
+          let cursor = null;
+          let hasMore = false;
+          let loading = false;
+          const closeTrace = () => traceMask.remove();
+          traceMask.querySelectorAll('[data-trace-close]').forEach((button) => button.addEventListener('click', closeTrace));
+          traceMask.addEventListener('click', (event) => { if (event.target === traceMask) closeTrace(); });
+          traceMask.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeTrace(); });
+          const formatMetric = (value, suffix) => value == null ? '未知' : String(value) + (suffix || '');
+          const renderMetrics = (metrics) => {
+            if (!metrics) { metricsBox.innerHTML = '<div class="wf-step-out">暂无运行指标</div>'; return; }
+            const cache = metrics.cache || {};
+            const errors = Object.entries(metrics.errorBreakdown || {}).map(([key, value]) => `${App.escapeHtml(key)} ${value}`).join(' · ') || '无';
+            const hitRate = cache.hitRate == null ? '未知' : Math.round(Number(cache.hitRate) * 1000) / 10 + '%';
+            metricsBox.innerHTML = `<div class="agent-trace-metric"><b>Steps</b><span>${formatMetric(metrics.steps)}</span></div><div class="agent-trace-metric"><b>Tool</b><span>${formatMetric(metrics.toolCalls)}</span></div><div class="agent-trace-metric"><b>Tokens</b><span>${formatMetric(metrics.inputTokens)} / ${formatMetric(metrics.outputTokens)}</span></div><div class="agent-trace-metric"><b>Cache</b><span>${hitRate} · 节省 ${formatMetric(cache.savedTokens)} tok</span></div><div class="agent-trace-metric"><b>Cost</b><span>${metrics.costUsd == null ? '未知' : '$' + metrics.costUsd} · 节省 ${cache.estimatedSavedCostUsd == null ? '未知' : '$' + cache.estimatedSavedCostUsd}</span></div><div class="agent-trace-metric"><b>Latency</b><span>${formatMetric(metrics.latencyMs, ' ms')} · Queue ${formatMetric(metrics.queueWaitMs, ' ms')}</span></div><div class="agent-trace-metric wide"><b>Errors</b><span>${errors}</span></div>`;
+          };
+          const renderTree = (tree) => {
+            if (!tree || !tree.root) { treeBox.innerHTML = '<div class="wf-step-out">暂无协作树</div>'; return; }
+            const nodes = [tree.root].concat(tree.children || []).filter(Boolean);
+            const byParent = new Map();
+            nodes.forEach((node) => { const parent = String(node.run && node.run.parentRunId || ''); if (!byParent.has(parent)) byParent.set(parent, []); byParent.get(parent).push(node); });
+            const renderNode = (node) => {
+              const item = node.run || {};
+              const children = (byParent.get(String(item.id || '')) || []).map(renderNode).join('');
+              const role = item.parentRunId ? (item.role || 'child') : 'main';
+              return `<details class="agent-trace-tree-node" ${item.id === tree.rootRunId ? 'open' : ''}><summary>${App.escapeHtml(role)} · ${App.escapeHtml(item.status || 'unknown')} · ${Number(item.usage && item.usage.steps || 0)} 步</summary><div>${App.escapeHtml(item.userGoal || '')}${children ? `<div class="agent-trace-tree-children">${children}</div>` : ''}</div></details>`;
+            };
+            treeBox.innerHTML = `<div class="agent-trace-tree-title">协作树</div>${renderNode(tree.root)}`;
+          };
+          const renderEvents = (items, replace) => {
+            if (replace) timeline.innerHTML = '';
+            if (!items.length && replace) { timeline.innerHTML = '<div class="wf-step-out">没有匹配的事件</div>'; return; }
+            const html = items.map((event) => {
+              const status = event.status || (event.runStatus || 'running');
+              const payload = event.payload == null ? '' : JSON.stringify(event.payload, null, 2);
+              return `<article class="agent-trace-event status-${App.escapeHtml(status)}"><div class="agent-trace-event-head"><b>${App.escapeHtml(event.type || 'event')}</b><span>${App.escapeHtml(event.role || 'main')} · d${Number(event.depth || 0)} · ${event.createdAt ? new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour12: false }) : ''}</span><em>${App.escapeHtml(status)}</em></div>${payloadInput.checked && payload ? `<pre>${App.escapeHtml(payload)}</pre>` : ''}</article>`;
+            }).join('');
+            timeline.insertAdjacentHTML('beforeend', html);
+          };
+          const load = async (reset) => {
+            if (loading) return;
+            loading = true;
+            if (reset) { cursor = null; hasMore = false; timeline.innerHTML = '<div class="wf-step-out">正在加载 Trace…</div>'; }
+            const types = String(typeInput.value || '').split(',').map((item) => item.trim()).filter(Boolean);
+            const statuses = statusInput.value ? [statusInput.value] : [];
+            const options = { rootRunId: run.id, cursor, limit: 50, types, statuses, includePayload: payloadInput.checked };
+            if (depthInput.value !== '') options.depth = Number(depthInput.value);
+            try {
+              const response = await (App.services.storage && App.services.storage.tracePage ? App.services.storage.tracePage(options) : null);
+              const page = response && response.ok !== false ? response : null;
+              renderEvents(page && Array.isArray(page.items) ? page.items : [], !!reset);
+              cursor = page && page.nextCursor || null;
+              hasMore = !!(page && page.hasMore);
+              moreButton.hidden = !hasMore;
+            } catch (_) {
+              if (reset) timeline.innerHTML = '<div class="wf-step-out">Trace 加载失败</div>';
+              moreButton.hidden = true;
+            } finally { loading = false; }
+          };
+          moreButton.addEventListener('click', () => load(false));
+          traceMask.querySelector('[data-trace-refresh]').addEventListener('click', () => load(true));
+          [typeInput, statusInput, depthInput, payloadInput].forEach((control) => control.addEventListener('change', () => load(true)));
+          traceMask.querySelector('[data-trace-export]').addEventListener('click', async () => {
+            const result = await (App.services.storage && App.services.storage.exportAgentTrace ? App.services.storage.exportAgentTrace({ rootRunId: run.id, redacted: true }) : null);
+            if (result && result.ok) App.ui.toast('脱敏 Trace 已导出'); else if (!(result && result.canceled)) App.ui.toast((result && result.error) || '导出失败');
+          });
+          try {
+            const [metricResponse, treeResponse] = await Promise.all([
+              App.services.storage.getAgentRunMetrics ? App.services.storage.getAgentRunMetrics(run.id) : null,
+              App.services.storage.getAgentRunTree ? App.services.storage.getAgentRunTree(run.id) : null,
+            ]);
+            renderMetrics(metricResponse && metricResponse.ok ? metricResponse.metrics : null);
+            renderTree(treeResponse && treeResponse.ok ? treeResponse.tree : null);
+          } catch (_) { renderMetrics(null); renderTree(null); }
+          await load(true);
+          typeInput.focus();
+        };
+        box.querySelectorAll('[data-inspector]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const run = list.find((item) => item.id === button.dataset.inspector);
+            openTraceInspector(run);
+          });
+        });
+        if (autoOpenRunId) {
+          const target = list.find((item) => item.id === autoOpenRunId);
+          if (target) {
+            autoOpenRunId = '';
+            setTimeout(() => openTraceInspector(target), 0);
+          }
+        }
         // v2（UX）：统一诊断复制——run 元数据 + 事件统计 + 错误与失败清单
         box.querySelectorAll('[data-diagnose]').forEach((b) => {
           b.addEventListener('click', async () => {
@@ -2309,6 +2451,199 @@
       }
     },
 
+    // v1.1.2：运行观测按需打开，首屏只保留紧凑入口。
+    openEngineObserver() {
+      const existing = document.getElementById('agentEngineMask');
+      if (existing) {
+        this.renderEngineStrip();
+        const closeButton = existing.querySelector('[data-engine-close]');
+        if (closeButton) closeButton.focus();
+        return;
+      }
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.id = 'agentEngineMask';
+      mask.innerHTML = `
+        <div class="modal agent-modal agent-engine-modal" role="dialog" aria-modal="true" aria-labelledby="agentEngineTitle" tabindex="-1">
+          <div class="modal-header">
+            <div class="agent-engine-modal-heading">
+              <span class="agent-engine-kicker">AGENT ENGINE</span>
+              <strong id="agentEngineTitle">运行观测</strong>
+            </div>
+            <button class="icon-btn" data-engine-close type="button" aria-label="关闭">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="agent-engine-modal-copy">Runtime · Tool Registry · Cache Telemetry · Trace</div>
+            <div class="agent-engine-stats" id="agentEngineStats"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-ghost mini" id="agentEngineTraceBtn" type="button" title="查看当前会话最近一次运行的 Trace Inspector">查看 Trace</button>
+            <button class="btn-ghost" data-engine-close type="button">关闭</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelectorAll('[data-engine-close]').forEach((button) => button.addEventListener('click', close));
+      mask.addEventListener('click', (event) => { if (event.target === mask) close(); });
+      mask.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
+      const traceButton = mask.querySelector('#agentEngineTraceBtn');
+      if (traceButton) traceButton.addEventListener('click', async () => {
+        close();
+        await App.agent.openLatestTrace();
+      });
+      this.renderEngineStrip();
+      this.refreshEngineStrip();
+      const modal = mask.querySelector('.agent-engine-modal');
+      if (modal) modal.focus();
+    },
+
+    renderEngineStrip() {
+      const launcher = document.getElementById('agentEngineBtn');
+      const launcherState = document.getElementById('agentEngineLauncherState');
+      const statsBox = document.getElementById('agentEngineStats');
+      const thread = App.agent.activeThread();
+      const stored = App.agent._engineStripData || {};
+      const run = stored.threadId === (thread && thread.id) ? stored.run : null;
+      const metrics = stored.threadId === (thread && thread.id) ? stored.metrics : null;
+      const live = App.agent._runState && (!thread || App.agent._runState.threadId === thread.id) ? App.agent._runState : null;
+      const usage = (run && run.usage) || {};
+      const budgetSnapshot = (run && run.budget) || {};
+      const limits = budgetSnapshot.budget || (run && run.limits) || {};
+      const spent = budgetSnapshot.spent || {};
+      const remaining = budgetSnapshot.remaining || {};
+      const cache = (metrics && metrics.cache) || usage.cache || {};
+      const numeric = (value) => {
+        if (value == null || value === '') return null;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+      };
+      const firstNumber = (...values) => {
+        for (const value of values) {
+          const n = numeric(value);
+          if (n != null) return n;
+        }
+        return null;
+      };
+      const esc = (value) => App.escapeHtml(value == null ? '' : String(value));
+      const formatVersion = (value, fallback) => {
+        const raw = String(value || '').trim();
+        if (!raw || raw === 'legacy/unknown') return fallback;
+        return raw.startsWith('v') ? raw : 'v' + raw;
+      };
+      const formatTokens = (value) => {
+        const n = numeric(value);
+        if (n == null) return '未知';
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+        return String(Math.round(n));
+      };
+      const formatDuration = (value) => {
+        const n = numeric(value);
+        if (n == null) return '未知';
+        return n >= 1000 ? (n / 1000).toFixed(1) + 's' : Math.round(n) + 'ms';
+      };
+      const formatCost = (value) => {
+        const n = numeric(value);
+        return n == null ? '未知' : '$' + n.toFixed(4);
+      };
+      const runStatus = String((live && live.status) || (run && run.status) || 'idle');
+      const statusLabels = {
+        idle: '待运行', running: '运行中', completed: '已完成', done: '已完成', failed: '失败', error: '失败',
+        stopped: '已停止', cancelled: '已取消', blocked: '受阻', budget_exhausted: '预算耗尽',
+      };
+      const statusClass = ['running', 'completed', 'done'].includes(runStatus) ? 'is-running' : (['failed', 'error'].includes(runStatus) ? 'is-error' : (runStatus === 'idle' ? 'is-idle' : 'is-warn'));
+      if (launcher) {
+        launcher.dataset.state = statusClass;
+        launcher.title = '打开运行观测 · ' + (statusLabels[runStatus] || runStatus);
+        if (launcherState) launcherState.textContent = statusLabels[runStatus] || runStatus;
+      }
+      if (!statsBox) return;
+      const steps = live ? Number(live.step || 0) : firstNumber(usage.steps, spent.steps, 0);
+      const maxSteps = firstNumber(limits.maxSteps, budgetSnapshot.granted && budgetSnapshot.granted.maxSteps, run && run.limits && run.limits.maxSteps);
+      const budgetValue = maxSteps != null && maxSteps > 0 ? Math.round(steps || 0) + '/' + Math.round(maxSteps) : (steps == null ? '未知' : Math.round(steps) + ' 步');
+      const remainingSteps = numeric(remaining.steps);
+      const budgetDetail = remainingSteps != null ? '剩余 ' + Math.round(remainingSteps) + ' 步' : (live ? '实时累计' : '等待 Run 数据');
+      const hitRate = numeric(cache.hitRate);
+      const cacheValue = hitRate == null ? '未知' : (Math.round(hitRate * 1000) / 10) + '%';
+      const savedTokens = numeric(cache.savedTokens);
+      const cacheDetail = savedTokens == null ? 'Provider 未返回' : '节省 ' + formatTokens(savedTokens) + ' tok';
+      const cost = firstNumber(metrics && metrics.costUsd, usage.estimatedCost);
+      const latency = firstNumber(metrics && metrics.latencyMs, live ? Date.now() - (live.startedAt || Date.now()) : null, run && run.finishedAt && run.startedAt ? run.finishedAt - run.startedAt : null);
+      const queueWait = firstNumber(metrics && metrics.queueWaitMs);
+      const runtimeVersion = formatVersion(run && run.runtimeVersion, 'v1.1.2');
+      const rawToolset = String((run && run.toolsetVersion) || '');
+      const toolsetVersion = formatVersion(rawToolset.split(':')[0], 'v1.1.2');
+      const role = (run && run.role) || 'main';
+      const promptVersion = formatVersion(run && run.promptVersion, 'legacy');
+      const runDetail = live
+        ? ((live.phase || 'understanding') + ' · ' + Math.round(live.step || 0) + ' 步')
+        : (run ? String(run.id || '').slice(0, 18) : '首个任务将自动记录');
+      const stat = (key, label, value, detail, extraClass) => `<div class="agent-engine-stat${extraClass ? ' ' + extraClass : ''}" data-engine-stat="${key}"><span>${label}</span><strong>${esc(value)}</strong><small>${esc(detail)}</small></div>`;
+      statsBox.innerHTML = [
+        stat('runtime', 'Runtime', runtimeVersion, 'Agent Engine'),
+        stat('toolset', 'Toolset', toolsetVersion, 'Tool Registry · ' + role + ' · ' + promptVersion),
+        stat('run', 'Run', statusLabels[runStatus] || runStatus, runDetail, statusClass),
+        stat('cache', 'Cache', cacheValue, cacheDetail, hitRate == null ? 'is-unknown' : 'is-cache'),
+        stat('budget', 'Budget', budgetValue, budgetDetail, 'is-budget'),
+        stat('cost', 'Cost', formatCost(cost), cost == null ? '无价格表或未完成' : '估算值', cost == null ? 'is-unknown' : ''),
+        stat('latency', 'Latency', formatDuration(latency), queueWait == null ? 'Queue 未知' : 'Queue ' + formatDuration(queueWait), latency == null ? 'is-unknown' : ''),
+      ].join('');
+      const traceButton = document.getElementById('agentEngineTraceBtn');
+      if (traceButton && !traceButton.dataset.bound) {
+        traceButton.dataset.bound = '1';
+        traceButton.addEventListener('click', () => App.agent.openLatestTrace());
+      }
+    },
+
+    async refreshEngineStrip() {
+      const thread = App.agent.activeThread();
+      const requestId = ++App.agent._engineStripRequest;
+      if (!thread) {
+        App.agent._engineStripData = { threadId: '', run: null, metrics: null };
+        App.agent.renderEngineStrip();
+        return;
+      }
+      let run = null;
+      try {
+        const response = App.services.storage && App.services.storage.listAgentRuns
+          ? await App.services.storage.listAgentRuns(thread.id, 1, 0) : null;
+        if (response && response.ok && Array.isArray(response.runs)) run = response.runs[0] || null;
+      } catch (_) {}
+      if (requestId !== App.agent._engineStripRequest || App.agent.activeThread().id !== thread.id) return;
+      let metrics = null;
+      try {
+        if (run && App.services.storage && App.services.storage.getAgentRunMetrics) {
+          const response = await App.services.storage.getAgentRunMetrics(run.rootRunId || run.id);
+          if (response && response.ok) metrics = response.metrics || null;
+        }
+      } catch (_) {}
+      if (requestId !== App.agent._engineStripRequest || App.agent.activeThread().id !== thread.id) return;
+      App.agent._engineStripData = { threadId: thread.id, run, metrics };
+      App.agent.renderEngineStrip();
+    },
+
+    async openLatestTrace() {
+      const thread = App.agent.activeThread();
+      if (!thread) return;
+      let run = null;
+      try {
+        const response = App.services.storage && App.services.storage.listAgentRuns
+          ? await App.services.storage.listAgentRuns(thread.id, 1, 0) : null;
+        if (response && response.ok && Array.isArray(response.runs)) run = response.runs[0] || null;
+      } catch (_) {}
+      if (!run && App.agent._runState && App.agent._runState.threadId === thread.id && App.agent._runState.runId) {
+        run = { id: App.agent._runState.runId };
+      }
+      if (!run) {
+        App.ui.toast('当前会话还没有运行记录');
+        App.agent.showRunHistory();
+        return;
+      }
+      App.agent.showRunHistory({ openRunId: run.id });
+    },
+
     stop() {
       if (App.agent._ctrl) { try { App.agent._ctrl.abort(); } catch (e) {} }
     },
@@ -2411,6 +2746,7 @@
       if (App.agent._runPillTimer) clearInterval(App.agent._runPillTimer);
       App.agent._runPillTimer = setInterval(() => App.agent.renderRunPill(), 1000);
       App.agent.renderRunPill();
+      App.agent.renderEngineStrip();
       // v1.1.0（Fix 4）+ v15（单状态卡）：新任务开始——隐藏旧状态卡、记录目标（供「继续任务」）、恢复在线状态
       App.agent.hideStatusSummary();
       const offBox = document.getElementById('agentOffline');
@@ -2862,9 +3198,10 @@
     // v1.1.0：全局运行状态药丸——渲染（由 _runState 驱动，1s 定时器补耗时）
     renderRunPill() {
       const pill = document.getElementById('agentRunPill');
-      if (!pill) return;
+      if (!pill) { App.agent.renderEngineStrip(); return; }
       const rs = App.agent._runState;
-      if (!rs) { pill.hidden = true; return; }
+      if (!rs) { pill.hidden = true; App.agent.renderEngineStrip(); return; }
+      App.agent.renderEngineStrip();
       // v15（单状态卡）：位于糖码页面时隐藏全局药丸，避免出现第二张状态卡；离开糖码页后作为导航提示
       if (App.router && typeof App.router.current === 'function' && App.router.current() === 'agent') { pill.hidden = true; return; }
       const textEl = document.getElementById('agentRunText');
@@ -2891,6 +3228,7 @@
       App.agent._runState = null;
       const pill = document.getElementById('agentRunPill');
       if (pill) pill.hidden = true;
+      App.agent.renderEngineStrip();
     },
 
     /* ===== v2（UX）：统一状态摘要条——默认一行当前状态，异常时展开下一步动作 ===== */
@@ -3009,6 +3347,7 @@
       if (!box) return;
       if (App.agent._compactTimer) { clearTimeout(App.agent._compactTimer); App.agent._compactTimer = null; }
       App.agent.renderStatusSummary('running');
+      App.agent.renderEngineStrip();
     },
     // 上下文压缩：短暂提示，5 秒自动隐藏（用户也可手动关闭）
     showStatusCompact(detail) {
@@ -3051,6 +3390,8 @@
       App.agent._ctrl = null;
       App.agent.hideMeta();
       App.agent.setRunning(false);
+      App.agent.renderEngineStrip();
+      App.agent.refreshEngineStrip();
     },
 
     // 手动压缩当前会话上下文：整段生成摘要并持久化，保留全部 UI 历史

@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { readRuntimeSource } = require('./source-helper');
 const root = path.resolve(__dirname, '..', '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
@@ -19,7 +20,7 @@ test('输入区提供主根、指定根和全部根范围并随请求发送', ()
 });
 
 test('Runtime 将 rootScope 解析成 allowedRootIds 并强制工具范围', () => {
-  const server = read('src/infrastructure/agent-runtime/agent-server.js');
+  const server = readRuntimeSource(root);
   assert.match(server, /WorkspaceRoots\.resolveRootScope\(workspace, body\.rootScope\)/);
   assert.match(server, /allowedRootIds/);
   assert.match(server, /root_out_of_scope/);

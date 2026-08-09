@@ -59,10 +59,29 @@
   ];
 
   const SYSTEM_PROMPT = BLOCKS.join('\n\n');
+  // Prompt metadata is persisted with every Run so benchmark results remain comparable.
+  const PROMPT_VERSION = '1.1.2';
+  const PROMPT_SECTIONS = Object.freeze({
+    identity: BLOCKS[0],
+    completionCriteria: BLOCKS[1],
+    honestReporting: BLOCKS[2],
+    contextContinuity: BLOCKS[3],
+    toolDiscipline: BLOCKS[4],
+    outputFormat: BLOCKS[5],
+    securityPolicy: BLOCKS[6],
+  });
+  function buildPrompt(options) {
+    const opts = options || {};
+    const names = Array.isArray(opts.sections) && opts.sections.length ? opts.sections : Object.keys(PROMPT_SECTIONS);
+    return names.map((name) => PROMPT_SECTIONS[name]).filter(Boolean).join('\n\n');
+  }
 
   return {
     BLOCKS,
     SYSTEM_PROMPT,
+    PROMPT_VERSION,
+    PROMPT_SECTIONS,
+    buildPrompt,
     // 估算用的后端固定注入开销（P1：workingState/historicalSummary/skill/environment/projectInstructions/runtimePolicy/userMemory/autoSummary ≈2000 token）
     EST_SYSTEM_OVERHEAD: 2000,
   };

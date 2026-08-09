@@ -4,11 +4,19 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { resolveRuntime } = require('../src/core/agent-runtime/eval-judge');
+const dataLocation = require('../src/infrastructure/storage/data-location');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const DEFAULT_TASKS = path.join(PROJECT_ROOT, 'benchmarks', 'tasks.json');
 const DEFAULT_OUTPUT = path.join(PROJECT_ROOT, 'benchmarks', 'last-eval.json');
-const DEFAULT_DATA_ROOT = path.join(os.homedir(), 'AppData', 'Roaming', 'tangbao-web', 'tangbao-data');
+function resolveDefaultDataRoot() {
+  const defaultUserDataRoot = path.join(os.homedir(), 'AppData', 'Roaming', 'tangbao-web');
+  const pointer = dataLocation.readLocation(defaultUserDataRoot);
+  const activeRoot = pointer && pointer.rootPath ? pointer.rootPath : defaultUserDataRoot;
+  return path.join(activeRoot, 'tangbao-data');
+}
+
+const DEFAULT_DATA_ROOT = process.env.TANGBAO_DATA || resolveDefaultDataRoot();
 const DEFAULT_RUNS = process.env.TANGBAO_EVAL_RUNS || path.join(DEFAULT_DATA_ROOT, 'eval-runs');
 const DEFAULT_READINESS = process.env.TANGBAO_EVAL_RUNTIME_READINESS || path.join(DEFAULT_DATA_ROOT, 'eval-runtime-readiness.json');
 
@@ -224,4 +232,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { parseArgs, automaticTasks, readRuns, requiredRuntimes, selectResult, metricsFor, buildBaseline, writeBaseline };
+module.exports = { resolveDefaultDataRoot, parseArgs, automaticTasks, readRuns, requiredRuntimes, selectResult, metricsFor, buildBaseline, writeBaseline };

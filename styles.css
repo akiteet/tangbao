@@ -1232,6 +1232,7 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
   display: flex; flex-direction: column; gap: 12px;
 }
 .set-card-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.storage-location-path { display: block; max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 .set-card .sub-title { margin: -4px 0 0; }
 /* 帮助面板 —— 排版 */
 .help-section-title {
@@ -1375,7 +1376,7 @@ a.help-module:hover { border-color: var(--primary); }
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
   background: rgba(30, 30, 35, .92); color: #fff; padding: 10px 18px; border-radius: 20px;
-  font-size: 13px; z-index: 200; opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none;
+  font-size: 13px; z-index: 420; opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -1611,6 +1612,38 @@ th { background: var(--hover-bg); font-weight: 600; }
 .agent-main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
 .agent-cwd-row { display: flex; gap: 6px; align-items: center; }
 .agent-cwd-row input { flex: 1; min-width: 0; }
+.agent-engine-launcher { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.agent-engine-launcher-state { color: var(--text-tertiary); font-size: 10.5px; font-weight: 500; }
+.agent-engine-launcher[data-state="is-running"] .agent-engine-launcher-state { color: #1a7f37; }
+.agent-engine-launcher[data-state="is-error"] .agent-engine-launcher-state { color: #c62828; }
+.agent-engine-launcher[data-state="is-warn"] .agent-engine-launcher-state { color: #b06b00; }
+.agent-engine-modal { width: min(780px, calc(100vw - 28px)); max-height: min(82vh, 760px); }
+.agent-engine-modal .modal-body { overflow-y: auto; }
+.agent-engine-modal-heading { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.agent-engine-modal-copy { color: var(--text-tertiary); font-size: 11.5px; margin-bottom: 10px; }
+.agent-engine-kicker { color: var(--primary); font: 700 10px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.agent-engine-modal-heading strong { color: var(--text); font-size: 14px; }
+.agent-engine-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; min-width: 0; }
+.agent-engine-stat { min-width: 0; padding: 10px 11px; border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: 7px; background: var(--bg); }
+.agent-engine-stat > span, .agent-engine-stat > strong, .agent-engine-stat > small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-engine-stat > span { color: var(--text-tertiary); font-size: 10.5px; line-height: 1.3; }
+.agent-engine-stat > strong { margin-top: 3px; color: var(--text); font-size: 15px; line-height: 1.35; font-weight: 700; }
+.agent-engine-stat > small { margin-top: 2px; color: var(--text-secondary); font-size: 10.5px; line-height: 1.3; }
+.agent-engine-stat.is-running > strong { color: #1a7f37; }
+.agent-engine-stat.is-error > strong { color: #c62828; }
+.agent-engine-stat.is-warn > strong { color: #b06b00; }
+.agent-engine-stat.is-cache > strong { color: var(--primary); }
+.agent-engine-stat.is-unknown > strong { color: var(--text-tertiary); font-weight: 600; }
+[data-theme="dark"] .agent-engine-stat.is-running > strong { color: #72d890; }
+[data-theme="dark"] .agent-engine-stat.is-error > strong { color: #ff8585; }
+[data-theme="dark"] .agent-engine-stat.is-warn > strong { color: #f2bd63; }
+@media (max-width: 980px) {
+  .agent-engine-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .agent-engine-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 10px; }
+  .agent-engine-stat { padding: 9px; }
+}
 .agent-meta { align-items: center; gap: 8px; margin: 10px 0 0; padding: 6px 12px; font-size: 12.5px; color: var(--text-secondary); background: var(--hover-bg); border-radius: var(--radius-sm); }
 /* ===== v1.1.0：糖码任务运行状态药丸（顶栏，跨模块常驻） ===== */
 .agent-run-pill {
@@ -2100,6 +2133,37 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .agent-hist-check.pass { color: #1e8e3e; }
 .agent-hist-check.fail { color: #c62828; }
 .agent-hist-check.warn { color: #d4772a; }
+
+/* ===== v1.1.2：只读 Agent Trace Inspector ===== */
+.agent-trace-modal { width: min(1080px, calc(100vw - 28px)); max-height: min(88vh, 900px); }
+.agent-trace-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.agent-trace-metric { min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: 12px; }
+.agent-trace-metric b, .agent-trace-metric span { display: block; overflow-wrap: anywhere; }
+.agent-trace-metric b { color: var(--text-tertiary); font-size: 11px; font-weight: 600; margin-bottom: 3px; }
+.agent-trace-metric.wide { grid-column: span 2; }
+.agent-trace-tree { margin-bottom: 10px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--hover-bg); }
+.agent-trace-tree-title { color: var(--text-secondary); font-size: 12px; font-weight: 600; margin-bottom: 5px; }
+.agent-trace-tree-node { margin: 4px 0; padding-left: 8px; border-left: 2px solid var(--primary); font-size: 12px; }
+.agent-trace-tree-node summary { cursor: pointer; overflow-wrap: anywhere; }
+.agent-trace-tree-children { margin: 4px 0 0 8px; }
+.agent-trace-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 8px; }
+.agent-trace-tools input[type="text"], .agent-trace-tools select { min-width: 132px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-bg); color: var(--text); font-size: 12px; }
+.agent-trace-payload { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.agent-trace-timeline { display: flex; flex-direction: column; gap: 6px; min-height: 120px; max-height: 48vh; overflow: auto; padding-right: 3px; }
+.agent-trace-event { padding: 7px 9px; border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: 6px; background: var(--bg); }
+.agent-trace-event.status-failed, .agent-trace-event.status-cancelled { border-left-color: #c62828; }
+.agent-trace-event.status-completed { border-left-color: #1e8e3e; }
+.agent-trace-event.status-running { border-left-color: var(--primary); }
+.agent-trace-event-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.agent-trace-event-head span { color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-trace-event-head em { margin-left: auto; color: var(--text-tertiary); font-style: normal; white-space: nowrap; }
+.agent-trace-event pre { max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 7px; border-radius: 5px; background: var(--code-bg); color: var(--text-secondary); font: 11.5px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-trace-more { display: flex; justify-content: center; padding-top: 8px; }
+@media (max-width: 760px) {
+  .agent-trace-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .agent-trace-metric.wide { grid-column: span 2; }
+  .agent-trace-tools input[type="text"], .agent-trace-tools select { flex: 1 1 140px; }
+}
 
 /* ===== v1.1.0（M7）：子代理卡片（explore 蓝 / test 橙 / review 紫） ===== */
 .agent-subagent { border-left: 3px solid var(--primary); }

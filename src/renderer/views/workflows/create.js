@@ -951,7 +951,7 @@
           const timer = setTimeout(() => ctrl.abort(), 60000);
           try {
             const res = await App.rt.gatewayFetch({
-              ref: s.ref, kind: 'chat',
+              ref: s.ref, kind: 'chat', telemetry: { scope: 'workflows', callType: 'workflow_step' },
               payload: { model: stepModel, messages: [{ role: 'user', content: promptText }], stream: false },
               signal: ctrl.signal,
             });

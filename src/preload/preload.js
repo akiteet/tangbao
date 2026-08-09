@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('electron', {
   // 本地文件（如用户设置的本地模块）用系统关联程序打开：仅允许绝对路径，且主进程拒绝可执行后缀
   openPath: (absPath) => ipcRenderer.invoke('shell:openPath', absPath),
   openChildWindow: (opts) => ipcRenderer.invoke('custom:openChildWindow', opts),
+  getStorageInfo: () => ipcRenderer.invoke('storage:info'),
+  chooseStorageLocation: () => ipcRenderer.invoke('storage:chooseLocation'),
+  relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
   saveStateJSON: (jsonStr) => ipcRenderer.invoke('fs:writeState', jsonStr),
   // 读取磁盘 state.json（与端口无关，用于随机端口下稳定恢复数据）
   loadStateJSON: () => ipcRenderer.invoke('fs:readState'),
@@ -48,7 +51,10 @@ contextBridge.exposeInMainWorld('electron', {
   listAgentRuns: (threadId, limit, offset) => ipcRenderer.invoke('agent:listRuns', threadId, limit, offset),
   listAgentEvents: (runId) => ipcRenderer.invoke('agent:runEvents', runId),
   getAgentRunTree: (rootRunId) => ipcRenderer.invoke('agent:runTree', rootRunId),
+  tracePage: (input) => ipcRenderer.invoke('agent:tracePage', input || {}),
+  getAgentRunMetrics: (rootRunId) => ipcRenderer.invoke('agent:runMetrics', rootRunId),
   exportAgentRun: (runId) => ipcRenderer.invoke('agent:exportRun', runId),
+  exportAgentTrace: (input) => ipcRenderer.invoke('agent:exportTrace', input || {}),
   listAgentEvalTasks: () => ipcRenderer.invoke('agent:evalTasks'),
   runAgentEval: (payload) => ipcRenderer.invoke('agent:runEval', payload),
   getAgentSummary: (threadId) => ipcRenderer.invoke('agent:summary', threadId),

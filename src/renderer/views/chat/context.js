@@ -76,6 +76,7 @@
       const r = await App.rt.gatewayFetch({
         ref: provider.ref,
         kind: 'chat',
+        telemetry: { scope: 'chat', callType: 'context_summary' },
         payload: { model: provider.model, stream: false, messages },
       });
       if (!r.ok) return null;

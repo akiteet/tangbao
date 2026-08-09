@@ -16,6 +16,22 @@
     return '更早';
   }
 
+  function storageLocationMessage(result, fallback) {
+    const item = result || {};
+    const raw = String(item.error || '');
+    const code = String(item.code || '');
+    const systemCode = String(item.systemCode || '');
+    const target = item.path || item.target || item.targetRoot || '';
+    if (code === 'location_not_writable' || ['EPERM', 'EACCES'].includes(systemCode) || /\b(EPERM|EACCES)\b/i.test(raw)) {
+      return '所选目录没有写入权限' + (target ? '：' + target : '') + '。请换一个当前账户可写的目录，或授予当前 Windows 账户“修改”权限。';
+    }
+    if (code === 'same_location') return '新目录不能与当前数据目录相同。';
+    if (code === 'nested_location') return '新目录不能位于当前数据目录内部，也不能包含当前数据目录。';
+    if (code === 'active_agent_runs') return '当前还有运行中的任务，请等待任务结束后再迁移。';
+    if (code === 'location_write_failed') return '无法写入数据目录指针，请检查默认数据目录权限。';
+    return raw || code || fallback || '数据目录操作失败。';
+  }
+
   App.ui = {
     $,
     groupLabel,
@@ -386,6 +402,95 @@
       }
     },
 
+    async refreshStorageLocation() {
+      const mode = $('storageLocationMode');
+      const target = $('storageLocationPath');
+      if (!mode || !target) return;
+      const service = App.services.fs;
+      const info = service && service.getStorageInfo ? await service.getStorageInfo() : { ok: false };
+      if (!info || !info.ok) {
+        mode.textContent = '当前环境无法读取数据目录';
+        target.textContent = '';
+        return;
+      }
+      mode.textContent = info.mode === 'custom' ? '当前使用自定义数据目录（不占用默认 C 盘记录目录）' : '当前使用系统默认数据目录';
+      target.textContent = info.recordsRoot || info.activeRoot || '';
+      const open = $('openStorageLocation');
+      if (open) open.disabled = !info.activeRoot;
+    },
+
+    refreshSecretStoreStatus() {
+      const el = $('secretStoreStatus');
+      if (!el) return;
+      const rt = App.rt || {};
+      const state = String(rt.secretStoreState || 'uninitialized');
+      const count = Number(rt.secretStoreCount || 0);
+      el.classList.toggle('warn', state === 'unavailable' || rt.secretsEncrypted === false);
+      if (state === 'unavailable') {
+        if (rt.secretStoreCode === 'secret_decrypt_failed') {
+          el.textContent = '密钥库无法解密已有密钥。请使用原 Windows 账户运行，或重新填写 Key；原密钥文件未被覆盖。';
+        } else {
+          el.textContent = '密钥库暂时不可用，无法确认已有 Key；原密钥文件未被覆盖。请检查系统安全存储或重启应用。';
+        }
+        return;
+      }
+      if (state === 'empty') {
+        el.textContent = '密钥库已就绪，当前没有已保存的 Key。密钥保存在本机系统安全存储中。';
+        return;
+      }
+      if (state === 'ready' && rt.secretsEncrypted === false) {
+        el.textContent = '密钥库已加载 ' + count + ' 个引用，但当前系统无法加密存储；请检查系统密钥服务。';
+        return;
+      }
+      if (state === 'ready') {
+        el.textContent = '密钥库已加载 ' + count + ' 个引用，密钥保存在本机系统安全存储中。';
+        return;
+      }
+      el.textContent = '正在读取本机系统密钥库...';
+    },
+
+    async chooseStorageLocation() {
+      const service = App.services.fs;
+      const button = $('chooseStorageLocation');
+      if (!service || !service.chooseStorageLocation || (button && button.dataset.busy === '1')) return;
+      const originalText = button ? button.textContent : '';
+      if (button) {
+        button.dataset.busy = '1';
+        button.disabled = true;
+        button.textContent = '正在准备迁移...';
+      }
+      try {
+        if (service.flushStorageSync) service.flushStorageSync(JSON.stringify(App.state));
+        const result = await service.chooseStorageLocation();
+        if (!result || !result.ok) {
+          if (!(result && result.canceled)) App.ui.toast(storageLocationMessage(result, '选择数据目录失败'));
+          return;
+        }
+        if (button) button.textContent = '正在重启应用...';
+        App.ui.closeSettings();
+        App.ui.toast('数据目录已设置，应用即将重启并迁移记录');
+        if (!service.relaunchApp) throw new Error('当前版本不支持自动重启，请手动重启应用');
+        const relaunch = await service.relaunchApp();
+        if (relaunch && relaunch.ok === false) throw Object.assign(new Error(storageLocationMessage(relaunch, '应用重启失败')), relaunch);
+      } catch (error) {
+        App.ui.toast('迁移失败：' + storageLocationMessage(error, (error && error.message) || String(error)));
+      } finally {
+        if (button) {
+          button.dataset.busy = '0';
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+      }
+    },
+
+    async openStorageLocation() {
+      const info = App.services.fs && App.services.fs.getStorageInfo ? await App.services.fs.getStorageInfo() : null;
+      if (info && info.ok && info.activeRoot && App.services.shell && App.services.shell.openPath) {
+        const result = await App.services.shell.openPath(info.recordsRoot || info.activeRoot);
+        if (result && result.ok === false) App.ui.toast(result.error || '打开数据目录失败');
+      }
+    },
+
     refreshSettingsUI() {
       const s = App.state.settings;
       const apiModuleSel = $('apiModuleSel');
@@ -393,6 +498,8 @@
       App.ui.renderAccounts();
       // 自定义面板：提示词 / 模块 / 外观
       App.ui.renderModulesPanel();
+      App.ui.refreshStorageLocation();
+      App.ui.refreshSecretStoreStatus();
       const pr = App.state.settings.prompts || {};
       const DP = App.DEFAULT_PROMPTS;
       if ($('pChat')) { $('pChat').value = pr.chat || ''; $('pChat').placeholder = DP.chat; }
@@ -740,6 +847,12 @@
      */
     markKeyField(el, ref, emptyPlaceholder) {
       if (!el) return;
+      if (App.rt && App.rt.secretStoreState === 'unavailable') {
+        el.value = '';
+        el.placeholder = '密钥库不可用 · 原密钥未覆盖，请先修复存储后再保存';
+        el.dataset.saved = '';
+        return;
+      }
       const saved = !!(App.rt && App.rt.hasSecret && App.rt.hasSecret(ref));
       el.value = '';
       el.placeholder = saved ? '已保存 · 留空不变，输入新 Key 可替换' : (emptyPlaceholder || '粘贴你的 API Key');
@@ -1366,6 +1479,8 @@
       // M6：完整数据备份（经系统文件对话框）
       const expFull = $('exportFull'); if (expFull) expFull.addEventListener('click', () => App.config.exportFull());
       const impFull = $('importFull'); if (impFull) impFull.addEventListener('click', () => App.config.importFull());
+      const chooseStorage = $('chooseStorageLocation'); if (chooseStorage) chooseStorage.addEventListener('click', () => App.ui.chooseStorageLocation());
+      const openStorage = $('openStorageLocation'); if (openStorage) openStorage.addEventListener('click', () => App.ui.openStorageLocation());
 
       const addBtn = $('addCustomModule');
       if (addBtn) addBtn.addEventListener('click', () => App.ui.openModuleEditor());

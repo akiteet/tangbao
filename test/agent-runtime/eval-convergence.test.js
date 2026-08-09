@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const test = require('node:test');
 const { executeSafeTask } = require('../../src/core/agent-runtime/controlled-eval');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 
@@ -89,7 +90,7 @@ test('机器 checks 未全过时不得早停', async () => {
 });
 
 test('Runtime 包含半程收敛、重复失败恢复和源码门接线', () => {
-  const server = fs.readFileSync(path.join(ROOT, 'src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+  const server = readRuntimeSource(ROOT);
   assert.match(server, /const repeatedFailures = new Map\(\)/);
   assert.match(server, /const failedRequests = new Map\(\)/);
   assert.match(server, /failureSignature\(tc\.name, args, result\)/);

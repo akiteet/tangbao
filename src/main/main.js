@@ -24,6 +24,7 @@ const SkillRegistry = require('../core/skills/skill-registry');
 const SkillSecurity = require('../core/skills/skill-security');
 const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
+const dataLocation = require('../infrastructure/storage/data-location');
 
 // M5（#254）：自定义协议 tangbao-file:// —— 渲染进程不再直接持有本地文件绝对路径，
 // 改为「用户选文件 → 主进程发不透明 fileId → tangbao-file://<fileId> 读取」，收敛本地文件暴露面。
@@ -35,8 +36,39 @@ protocol.registerSchemesAsPrivileged([
 const fileRegistry = new Map();
 const pathToFileId = new Map();
 
+// Resolve the selected data root before Electron creates browser storage.
+const defaultUserDataRoot = dataLocation.canonical(app.getPath('userData'));
+const startupLocation = dataLocation.resolveStartupLocation({
+  defaultRoot: defaultUserDataRoot,
+  packaged: app.isPackaged,
+  executablePath: process.execPath,
+});
+const startupUsesDefaultRoot = path.resolve(startupLocation.rootPath).toLowerCase() === defaultUserDataRoot.toLowerCase();
+const startupHasLocationPointer = !!dataLocation.readLocation(defaultUserDataRoot);
+if (startupLocation.rootPath && !startupUsesDefaultRoot) {
+  try { app.setPath('userData', startupLocation.rootPath); } catch (error) {
+    console.error('[tangbao] failed to select data root:', error && error.message ? error.message : error);
+  }
+}
+
+function secretStorePaths(activeRoot) {
+  const roots = [
+    activeRoot,
+    defaultUserDataRoot,
+    startupLocation.pointer && startupLocation.pointer.sourceRoot,
+  ].filter(Boolean).map((root) => dataLocation.canonical(root));
+  const paths = [];
+  for (const root of roots) {
+    paths.push(path.join(root, 'tangbao-data', 'secrets.json'));
+    // 兼容 v1.0.5 及早期自定义目录直接存放 secrets.json 的布局。
+    paths.push(path.join(root, 'secrets.json'));
+    paths.push(path.join(root, 'tangbao-data.backup', 'secrets.json'));
+  }
+  return Array.from(new Set(paths.map((value) => path.resolve(value))));
+}
+
 // 便携化：优先 exe 所在盘，不落 C 盘。保护目录（Program Files）会弹窗征得用户授权。
-if (app.isPackaged) {
+if (app.isPackaged && startupUsesDefaultRoot && !startupHasLocationPointer) {
   let defaultUserData;
   try { defaultUserData = app.getPath('userData'); } catch (e) { defaultUserData = null; }
   const { dialog } = require('electron');
@@ -520,8 +552,16 @@ function resolveWorkspace(id) {
 safeHandle('secrets:set', (e, ref, value) => secrets.setSecret(ref, value));
 safeHandle('secrets:delete', (e, ref) => secrets.deleteSecret(ref));
 safeHandle('secrets:deletePrefix', (e, prefix) => secrets.deleteByPrefix(prefix));
-// 只回 ref 列表 + 是否真的加密存储，绝不回明文
-safeHandle('secrets:list', () => ({ refs: secrets.listRefs(), encrypted: secrets.isEncrypted() }));
+// 只回 ref 列表 + 密钥库状态，绝不回明文。读取失败时 refs 保持为空，前端不能把它误判成“没有 Key”。
+safeHandle('secrets:list', () => {
+  const status = typeof secrets.getStatus === 'function' ? secrets.getStatus() : { state: 'ready', code: '' };
+  return {
+    ok: status.state !== 'unavailable',
+    refs: status.state === 'unavailable' ? [] : secrets.listRefs(),
+    encrypted: secrets.isEncrypted(),
+    status,
+  };
+});
 
 // 渲染进程同步「密钥引用 → API Base」映射表；网关据此决定往哪转发（渲染进程指定不了目标）
 safeHandle('gateway:setEndpoints', (e, list) => ({ ok: true, count: gateway.setEndpoints(list) }));
@@ -574,6 +614,73 @@ safeHandle('shell:openPath', async (e, absPath) => {
     return { ok: true, result: r || '' };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// Data location is user-selectable. The pointer stays in the original Electron
+// userData directory; records are copied and activated after the next launch.
+safeHandle('storage:info', () => dataLocation.describe({
+  defaultRoot: defaultUserDataRoot,
+  activeRoot: app.getPath('userData'),
+}));
+
+safeHandle('storage:chooseLocation', async () => {
+  try {
+    if (typeof hasActiveAgentRuns === 'function' && hasActiveAgentRuns()) {
+      return { ok: false, code: 'active_agent_runs', error: '请等待运行结束后再迁移数据目录' };
+    }
+    const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    while (true) {
+      const result = await dialog.showOpenDialog(owner, {
+        title: '选择糖包数据目录',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (result.canceled || !result.filePaths || !result.filePaths.length) return { ok: false, canceled: true };
+      const selectedRoot = result.filePaths[0];
+      const move = dataLocation.requestMove({
+        pointerRoot: defaultUserDataRoot,
+        sourceRoot: app.getPath('userData'),
+        targetRoot: selectedRoot,
+      });
+      if (move.ok) {
+        return {
+          ok: true,
+          restartRequired: true,
+          targetRoot: move.target,
+          recordsRoot: path.join(move.target, 'tangbao-data'),
+        };
+      }
+      if (move.code !== 'location_not_writable') return move;
+
+      const permissionAction = await dialog.showMessageBox(owner, {
+        type: 'warning',
+        title: '数据目录没有写入权限',
+        message: '当前 Windows 账户无法写入所选目录',
+        detail: (move.path || selectedRoot) + '\n\n请选择“重新选择”换一个可写目录；或选择“打开目录”，在资源管理器中打开属性 → 安全 → 给当前账户授予“修改”权限，然后返回继续选择。',
+        buttons: ['重新选择', '打开目录', '取消'],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+      if (permissionAction.response === 1) {
+        try { await shell.openPath(move.path || selectedRoot); } catch (_) {}
+        continue;
+      }
+      if (permissionAction.response === 0) continue;
+      return Object.assign({}, move, { canceled: true });
+    }
+  } catch (error) {
+    return { ok: false, code: 'choose_location_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('app:relaunch', () => {
+  try {
+    app.relaunch({ args: process.argv.slice(1) });
+    setTimeout(() => app.exit(0), 50);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error) };
   }
 });
 
@@ -788,6 +895,26 @@ safeHandle('agent:runTree', async (_e, rootRunId) => {
   } catch (err) { return { ok: false, reason: 'list-agent-run-tree-error', tree: null, error: err && err.message ? err.message : String(err) }; }
 });
 
+// v1.1.2：只读 Trace Inspector 查询，按根 Run 分页，避免一次性载入大型事件流。
+safeHandle('agent:tracePage', async (_e, input) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || typeof svc.listAgentTracePage !== 'function') return { ok: false, reason: 'no-sqlite', items: [], nextCursor: null, hasMore: false, total: 0 };
+    const opts = input && typeof input === 'object' ? input : {};
+    return Object.assign({ ok: true }, svc.listAgentTracePage(String(opts.rootRunId || opts.runId || ''), opts));
+  } catch (err) {
+    return { ok: false, reason: 'agent-trace-page-error', items: [], nextCursor: null, hasMore: false, total: 0, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+safeHandle('agent:runMetrics', async (_e, rootRunId) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || typeof svc.aggregateAgentRunMetrics !== 'function') return { ok: false, reason: 'no-sqlite', metrics: null };
+    return { ok: true, metrics: svc.aggregateAgentRunMetrics(String(rootRunId || '')) };
+  } catch (err) { return { ok: false, reason: 'agent-run-metrics-error', metrics: null, error: err && err.message ? err.message : String(err) }; }
+});
+
 safeHandle('agent:exportRun', async (_e, runId) => {
   try {
     const svc = getStorageService();
@@ -801,6 +928,21 @@ safeHandle('agent:exportRun', async (_e, runId) => {
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
+});
+
+safeHandle('agent:exportTrace', async (_e, input) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || typeof svc.exportAgentTrace !== 'function') return { ok: false, reason: 'no-sqlite' };
+    const payload = input && typeof input === 'object' ? input : { rootRunId: input };
+    const rootRunId = String(payload.rootRunId || payload.runId || '');
+    const jsonl = svc.exportAgentTrace({ rootRunId, redacted: true });
+    if (!jsonl) return { ok: false, error: '未找到该根运行记录' };
+    const result = await dialog.showSaveDialog(mainWindow, { title: '导出脱敏 Agent Trace', defaultPath: 'tangbao-trace-' + rootRunId.replace(/[^A-Za-z0-9_-]/g, '_') + '.jsonl', filters: [{ name: 'JSON Lines', extensions: ['jsonl'] }] });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(result.filePath, jsonl, 'utf8');
+    return { ok: true, filePath: result.filePath, redacted: true };
+  } catch (err) { return { ok: false, error: err && err.message ? err.message : String(err) }; }
 });
 
 // P0 Eval：受控主进程入口。渲染层只能选择白名单 taskId + 当前账户 ref/model，
@@ -1726,16 +1868,23 @@ if (!gotLock) {
       const info = secrets.init({
         safeStorage,
         filePath: path.join(app.getPath('userData'), 'tangbao-data', 'secrets.json'),
+        legacyFilePaths: secretStorePaths(app.getPath('userData')),
       });
       if (!info.encrypted) console.error('[糖包] 当前系统密钥服务不可用，API Key 将以未加密形式保存。');
     } catch (e) {
       console.error('[糖包] 密钥库初始化失败：', e);
     }
     // 模型网关与糖码后端都直接从主进程密钥库取密钥，密钥不经渲染层
-    gateway.configure({ getSecret: secrets.getSecret });
+    gateway.configure({
+      getSecret: secrets.getSecret,
+      recordModelCallMetric(metric) {
+        const svc = getStorageService();
+        return svc && typeof svc.recordModelCallMetric === 'function' ? svc.recordModelCallMetric(metric) : null;
+      },
+    });
     loadWorkspaces(); // M7（#253）：启动即恢复工作区注册表，使持久化的 workspaceId 仍有效
     // v1.1.0（M1）：给糖码后端注入 Agent Run 持久化存储（lazy 代理，storage 就绪后生效；不可用则静默降级为无持久化模式）
-const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'getAgentRun', 'listAgentRunTree', 'appendAgentEvent', 'listAgentEvents', 'upsertWorkingState', 'getWorkingState', 'saveAgentCheckpoint', 'getCheckpoint', 'listCheckpoints', 'saveContextSummary', 'getLatestContextSummary', 'saveChangeset', 'listChangesets'];
+const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'getAgentRun', 'listAgentRunTree', 'appendAgentEvent', 'listAgentEvents', 'upsertWorkingState', 'getWorkingState', 'saveAgentCheckpoint', 'getCheckpoint', 'listCheckpoints', 'saveContextSummary', 'getLatestContextSummary', 'saveChangeset', 'listChangesets', 'recordModelCallMetric', 'upsertAgentRunMetrics', 'aggregateAgentRunMetrics'];
     const runStoreProxy = {};
     runStoreMethods.forEach((m) => {
       runStoreProxy[m] = (...a) => {

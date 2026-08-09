@@ -12,6 +12,7 @@
 const path = require('path');
 const fs = require('fs');
 const { buildComparison } = require('../src/core/agent-runtime/compare-eval');
+const { compareBenchmarkReports } = require('../src/core/agent-runtime/benchmark-harness');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -20,12 +21,18 @@ function parseArgs() {
     tasks: path.join(ROOT, 'benchmarks', 'tasks.json'),
     self: path.join(ROOT, 'benchmarks', 'last-eval.json'),
     traces: path.join(ROOT, 'benchmarks', 'traces'),
+    baseline: '',
+    current: '',
+    out: '',
   };
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--tasks' && argv[i + 1]) out.tasks = path.resolve(argv[i + 1]);
     else if (argv[i] === '--self' && argv[i + 1]) out.self = path.resolve(argv[i + 1]);
     else if (argv[i] === '--traces' && argv[i + 1]) out.traces = path.resolve(argv[i + 1]);
+    else if (argv[i] === '--baseline' && argv[i + 1]) out.baseline = path.resolve(argv[i + 1]);
+    else if (argv[i] === '--current' && argv[i + 1]) out.current = path.resolve(argv[i + 1]);
+    else if (argv[i] === '--out' && argv[i + 1]) out.out = path.resolve(argv[i + 1]);
   }
   return out;
 }
@@ -103,6 +110,30 @@ function render(out) {
 
 function main() {
   const args = parseArgs();
+  if (args.baseline || args.current) {
+    if (!args.baseline || !args.current) {
+      console.error('Benchmark 比较需要同时提供 --baseline 和 --current');
+      process.exitCode = 2;
+      return;
+    }
+    let baseline;
+    let current;
+    try {
+      baseline = JSON.parse(fs.readFileSync(args.baseline, 'utf8'));
+      current = JSON.parse(fs.readFileSync(args.current, 'utf8'));
+    } catch (error) {
+      console.error('Benchmark 报告读取失败：' + (error.message || error));
+      process.exitCode = 2;
+      return;
+    }
+    const result = compareBenchmarkReports(baseline, current);
+    const output = args.out || path.join(ROOT, 'benchmarks', 'compare-report.json');
+    fs.writeFileSync(output, JSON.stringify({ at: new Date().toISOString(), ...result }, null, 2), 'utf8');
+    console.log(JSON.stringify(result, null, 2));
+    console.log('报告已保存：' + output);
+    process.exitCode = result.pass ? 0 : 1;
+    return;
+  }
   const tasks = loadTasks(args.tasks);
   const self = loadSelf(args.self);
   const traces = loadTraces(args.traces);

@@ -13,9 +13,12 @@
  */
 let Database = null;
 try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
+const fs = require('fs');
 
 const { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS } = require('../../core/schemas/db-schema');
 const { normalizeRunStatus } = require('../../core/agent-runtime/state-machine');
+const { tracePage, exportRedactedJSONL, redactPayload, eventStatus } = require('../../core/agent-runtime/trace-recorder');
+const { normalizeModelUsage, mergeCacheMetrics } = require('../../core/agent-runtime/model-telemetry');
 
 let db = null;
 let fileRepo = null;
@@ -29,7 +32,20 @@ function init(dbPath, fileRepoInstance) {
   if (db) return true;
   if (!Database) return false;
   let opened = null;
+  let migrationBackup = '';
   try {
+    // Keep a recoverable copy before a version upgrade. SQLite transactions still
+    // protect individual steps; the copy covers startup failures and WAL issues.
+    if (dbPath && fs.existsSync(dbPath)) {
+      const probe = new Database(dbPath, { readonly: true });
+      let probeVersion = 0;
+      try { probeVersion = Number(probe.pragma('user_version', { simple: true })) || 0; } catch (_) {}
+      try { probe.close(); } catch (_) {}
+      if (probeVersion < SCHEMA_VERSION) {
+        migrationBackup = String(dbPath) + '.pre-v' + SCHEMA_VERSION + '.bak';
+        try { fs.copyFileSync(dbPath, migrationBackup); } catch (_) { migrationBackup = ''; }
+      }
+    }
     opened = new Database(dbPath);
     opened.pragma('journal_mode = WAL');
     opened.pragma('foreign_keys = ON');
@@ -48,6 +64,9 @@ function init(dbPath, fileRepoInstance) {
   } catch (e) {
     // B5（P2）：初始化/迁移失败时回收连接并置空——避免半初始化 DB 被后续复用（调用方回退 state.json）
     try { if (opened) opened.close(); } catch (_) {}
+    if (migrationBackup && fs.existsSync(migrationBackup)) {
+      try { fs.copyFileSync(migrationBackup, dbPath); } catch (_) {}
+    }
     db = null;
     console.error('[存储层] SQLite 初始化/迁移失败，已回退 state.json：', e && e.message ? e.message : e);
     return false;
@@ -179,18 +198,41 @@ function prepare() {
 
   // ---- v1.1.0（M1）：糖码 Agent Run 持久化（五表） ----
   stmt.insRun = db.prepare(
-    `INSERT INTO agent_runs (id,thread_id,workspace_id,cwd,workspace_snapshot_json,workspace_fingerprint,primary_root_id,user_goal,status,phase,model_id,provider_ref,plan_mode,limits_json,usage_json,error,started_at,finished_at,working_state_id,latest_checkpoint_id,created_at,parent_run_id,role,depth,read_only,budget_json,continued_from_run_id,root_run_id,continuation_index,root_scope_json)
-     VALUES (@id,@thread_id,@workspace_id,@cwd,@workspace_snapshot_json,@workspace_fingerprint,@primary_root_id,@user_goal,@status,@phase,@model_id,@provider_ref,@plan_mode,@limits_json,@usage_json,@error,@started_at,@finished_at,@working_state_id,@latest_checkpoint_id,@created_at,@parent_run_id,@role,@depth,@read_only,@budget_json,@continued_from_run_id,@root_run_id,@continuation_index,@root_scope_json)`);
+    `INSERT INTO agent_runs (id,thread_id,workspace_id,cwd,workspace_snapshot_json,workspace_fingerprint,primary_root_id,user_goal,status,phase,model_id,provider_ref,plan_mode,limits_json,usage_json,error,started_at,finished_at,working_state_id,latest_checkpoint_id,created_at,parent_run_id,role,depth,read_only,budget_json,continued_from_run_id,root_run_id,continuation_index,root_scope_json,prompt_version,toolset_version,runtime_version)
+     VALUES (@id,@thread_id,@workspace_id,@cwd,@workspace_snapshot_json,@workspace_fingerprint,@primary_root_id,@user_goal,@status,@phase,@model_id,@provider_ref,@plan_mode,@limits_json,@usage_json,@error,@started_at,@finished_at,@working_state_id,@latest_checkpoint_id,@created_at,@parent_run_id,@role,@depth,@read_only,@budget_json,@continued_from_run_id,@root_run_id,@continuation_index,@root_scope_json,@prompt_version,@toolset_version,@runtime_version)`);
   stmt.updRun = db.prepare(
-    'UPDATE agent_runs SET status=@status, phase=@phase, usage_json=@usage_json, error=@error, finished_at=@finished_at WHERE id=@id');
+    `UPDATE agent_runs SET status=@status, phase=@phase, usage_json=@usage_json, error=@error, finished_at=@finished_at,
+       prompt_version=COALESCE(@prompt_version,prompt_version), toolset_version=COALESCE(@toolset_version,toolset_version), runtime_version=COALESCE(@runtime_version,runtime_version),
+       budget_json=COALESCE(@budget_json,budget_json), model_id=COALESCE(@model_id,model_id), provider_ref=COALESCE(@provider_ref,provider_ref)
+     WHERE id=@id`);
   stmt.listRuns = db.prepare('SELECT * FROM agent_runs WHERE thread_id=? ORDER BY started_at DESC LIMIT ? OFFSET ?');
   stmt.listRunsByRoot = db.prepare('SELECT * FROM agent_runs WHERE root_run_id=? OR id=? ORDER BY depth ASC, started_at ASC');
+  stmt.listRunsAll = db.prepare('SELECT * FROM agent_runs ORDER BY started_at ASC, created_at ASC');
   stmt.getRun = db.prepare('SELECT * FROM agent_runs WHERE id=?');
   stmt.insEvent = db.prepare(
     `INSERT INTO agent_run_events (id,run_id,seq,type,payload_json,created_at)
      VALUES (@id,@run_id,@seq,@type,@payload_json,@created_at)`);
   stmt.listEvents = db.prepare('SELECT * FROM agent_run_events WHERE run_id=? ORDER BY seq ASC');
+  stmt.listTraceEvents = db.prepare(
+    `SELECT e.*, r.root_run_id, r.parent_run_id, r.role, r.depth, r.status AS run_status
+       FROM agent_run_events e
+       JOIN agent_runs r ON r.id=e.run_id
+      WHERE r.root_run_id=? OR r.id=?
+      ORDER BY e.created_at ASC, e.id ASC`);
   stmt.maxEventSeq = db.prepare('SELECT COALESCE(MAX(seq),0) AS m FROM agent_run_events WHERE run_id=?');
+  stmt.upsertRunMetrics = db.prepare(
+    `INSERT INTO agent_run_metrics (run_id,root_run_id,steps,tool_calls,input_tokens,output_tokens,reasoning_tokens,cache_json,cost_usd,latency_ms,queue_wait_ms,process_ms,human_interventions,recovery_rate,error_breakdown_json,source,created_at,updated_at)
+     VALUES (@run_id,@root_run_id,@steps,@tool_calls,@input_tokens,@output_tokens,@reasoning_tokens,@cache_json,@cost_usd,@latency_ms,@queue_wait_ms,@process_ms,@human_interventions,@recovery_rate,@error_breakdown_json,@source,@created_at,@updated_at)
+     ON CONFLICT(run_id) DO UPDATE SET root_run_id=@root_run_id,steps=@steps,tool_calls=@tool_calls,input_tokens=@input_tokens,output_tokens=@output_tokens,reasoning_tokens=@reasoning_tokens,cache_json=@cache_json,cost_usd=@cost_usd,latency_ms=@latency_ms,queue_wait_ms=@queue_wait_ms,process_ms=@process_ms,human_interventions=@human_interventions,recovery_rate=@recovery_rate,error_breakdown_json=@error_breakdown_json,source=@source,updated_at=@updated_at`);
+  stmt.getRunMetrics = db.prepare('SELECT * FROM agent_run_metrics WHERE run_id=?');
+  stmt.listRunMetricsByRoot = db.prepare('SELECT * FROM agent_run_metrics WHERE root_run_id=? OR run_id=? ORDER BY updated_at ASC');
+  stmt.insModelCallMetric = db.prepare(
+    `INSERT INTO model_call_metrics (id,run_id,root_run_id,scope,call_type,model_id,provider,request_id,input_tokens,output_tokens,reasoning_tokens,cache_json,cost_usd,latency_ms,queue_wait_ms,status,error_type,started_at,finished_at)
+     VALUES (@id,@run_id,@root_run_id,@scope,@call_type,@model_id,@provider,@request_id,@input_tokens,@output_tokens,@reasoning_tokens,@cache_json,@cost_usd,@latency_ms,@queue_wait_ms,@status,@error_type,@started_at,@finished_at)
+     ON CONFLICT(id) DO UPDATE SET run_id=@run_id,root_run_id=@root_run_id,scope=@scope,call_type=@call_type,model_id=@model_id,provider=@provider,request_id=@request_id,input_tokens=@input_tokens,output_tokens=@output_tokens,reasoning_tokens=@reasoning_tokens,cache_json=@cache_json,cost_usd=@cost_usd,latency_ms=@latency_ms,queue_wait_ms=@queue_wait_ms,status=@status,error_type=@error_type,started_at=@started_at,finished_at=@finished_at`);
+  stmt.listModelCallMetrics = db.prepare('SELECT * FROM model_call_metrics WHERE run_id=? ORDER BY started_at ASC');
+  stmt.listModelCallMetricsByRoot = db.prepare(
+    'SELECT * FROM model_call_metrics WHERE root_run_id=? OR run_id=? ORDER BY started_at ASC');
   stmt.upsertWS = db.prepare(
     `INSERT INTO agent_working_states (run_id,goal,constraints_json,plan_json,completed_json,pending_json,blocked_json,files_read_json,files_changed_json,commands_json,checks_json,decisions_json,unresolved_errors_json,verification_skips_json,pending_decisions_json,subagents_json,skill_context_json,assumptions_json,user_confirmations_json,updated_at)
      VALUES (@run_id,@goal,@constraints_json,@plan_json,@completed_json,@pending_json,@blocked_json,@files_read_json,@files_changed_json,@commands_json,@checks_json,@decisions_json,@unresolved_errors_json,@verification_skips_json,@pending_decisions_json,@subagents_json,@skill_context_json,@assumptions_json,@user_confirmations_json,@updated_at)
@@ -494,6 +536,9 @@ function createAgentRun(run) {
     read_only: r.readOnly ? 1 : 0, budget_json: r.budget ? JSON.stringify(r.budget) : null,
     continued_from_run_id: String(r.continuedFromRunId || ''), root_run_id: String(r.rootRunId || id),
     continuation_index: Math.max(0, Number(r.continuationIndex) || 0), root_scope_json: r.rootScope ? JSON.stringify(r.rootScope) : null,
+    prompt_version: String(r.promptVersion || 'legacy/unknown'),
+    toolset_version: String(r.toolsetVersion || 'legacy/unknown'),
+    runtime_version: String(r.runtimeVersion || 'legacy/unknown'),
   });
   return id;
 }
@@ -511,6 +556,12 @@ function updateAgentRun(id, patch) {
     usage_json: keep(p.usage, cur && cur.usage_json) != null ? JSON.stringify(keep(p.usage, cur && cur.usage_json)) : null,
     error: keep(p.error, cur && cur.error) != null ? String(keep(p.error, cur && cur.error)) : null,
     finished_at: Number(keep(p.finishedAt, cur && cur.finished_at, 0)) || 0,
+    prompt_version: p.promptVersion != null ? String(p.promptVersion) : null,
+    toolset_version: p.toolsetVersion != null ? String(p.toolsetVersion) : null,
+    runtime_version: p.runtimeVersion != null ? String(p.runtimeVersion) : null,
+    budget_json: p.budget != null ? JSON.stringify(p.budget) : null,
+    model_id: p.modelId != null ? String(p.modelId) : null,
+    provider_ref: p.providerRef != null ? String(p.providerRef) : null,
   });
 }
 
@@ -529,6 +580,7 @@ function listAgentRuns(threadId, limit, offset) {
       parentRunId: row.parent_run_id || '', role: row.role || 'main', depth: Number(row.depth) || 0, readOnly: !!row.read_only, budget: jp(row.budget_json),
       continuedFromRunId: row.continued_from_run_id || '', rootRunId: row.root_run_id || row.id,
       continuationIndex: Number(row.continuation_index) || 0, rootScope: jp(row.root_scope_json) || { mode: 'primary', rootId: '' },
+      promptVersion: row.prompt_version || 'legacy/unknown', toolsetVersion: row.toolset_version || 'legacy/unknown', runtimeVersion: row.runtime_version || 'legacy/unknown',
     }));
   } catch (_) { return []; }
 }
@@ -547,6 +599,7 @@ function getAgentRun(id) {
     parentRunId: row.parent_run_id || '', role: row.role || 'main', depth: Number(row.depth) || 0, readOnly: !!row.read_only, budget: jp(row.budget_json),
     continuedFromRunId: row.continued_from_run_id || '', rootRunId: row.root_run_id || row.id,
     continuationIndex: Number(row.continuation_index) || 0, rootScope: jp(row.root_scope_json) || { mode: 'primary', rootId: '' },
+    promptVersion: row.prompt_version || 'legacy/unknown', toolsetVersion: row.toolset_version || 'legacy/unknown', runtimeVersion: row.runtime_version || 'legacy/unknown',
   };
 }
 
@@ -582,6 +635,190 @@ function listAgentEvents(runId) {
     return stmt.listEvents.all(String(runId || '')).map((row) => ({
       id: row.id, runId: row.run_id, seq: row.seq, type: row.type,
       payload: jp(row.payload_json), createdAt: row.created_at,
+    }));
+  } catch (_) { return []; }
+}
+
+function listAgentEventsPage(runId, options) {
+  try {
+    const page = tracePage(listAgentEvents(runId), options || {});
+    return Object.assign({ runId: String(runId || '') }, page);
+  } catch (_) {
+    return { runId: String(runId || ''), items: [], nextCursor: null, hasMore: false, total: 0 };
+  }
+}
+
+function listAgentTracePage(rootRunId, options) {
+  try {
+    const requested = String(rootRunId || '');
+    const root = getAgentRun(requested);
+    if (!root) return { rootRunId: requested, items: [], nextCursor: null, hasMore: false, total: 0 };
+    const actualRootId = root.rootRunId || root.id;
+    const opts = options && typeof options === 'object' ? options : {};
+    const statuses = new Set((Array.isArray(opts.statuses) ? opts.statuses : []).map(String));
+    const events = stmt.listTraceEvents.all(actualRootId, actualRootId).map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      seq: row.seq,
+      type: row.type,
+      payload: jp(row.payload_json),
+      createdAt: row.created_at,
+      rootRunId: row.root_run_id || actualRootId,
+      parentRunId: row.parent_run_id || '',
+      role: row.role || 'main',
+      depth: Number(row.depth) || 0,
+      runStatus: normalizeRunStatus(row.run_status),
+    })).filter((event) => !statuses.size || statuses.has(eventStatus(event)) || statuses.has(event.runStatus));
+    const page = tracePage(events, Object.assign({}, opts, { sortBy: 'createdAt' }));
+    return Object.assign({ rootRunId: actualRootId }, page);
+  } catch (_) {
+    return { rootRunId: String(rootRunId || ''), items: [], nextCursor: null, hasMore: false, total: 0 };
+  }
+}
+
+function metricFromRow(row) {
+  if (!row) return null;
+  return {
+    runId: row.run_id,
+    rootRunId: row.root_run_id || row.run_id,
+    steps: Number(row.steps) || 0,
+    toolCalls: Number(row.tool_calls) || 0,
+    inputTokens: Number(row.input_tokens) || 0,
+    outputTokens: Number(row.output_tokens) || 0,
+    reasoningTokens: Number(row.reasoning_tokens) || 0,
+    cache: jp(row.cache_json),
+    costUsd: row.cost_usd == null ? null : Number(row.cost_usd),
+    latencyMs: row.latency_ms == null ? null : Number(row.latency_ms),
+    queueWaitMs: row.queue_wait_ms == null ? null : Number(row.queue_wait_ms),
+    processMs: row.process_ms == null ? null : Number(row.process_ms),
+    humanInterventions: Number(row.human_interventions) || 0,
+    recoveryRate: row.recovery_rate == null ? null : Number(row.recovery_rate),
+    errorBreakdown: jp(row.error_breakdown_json) || {},
+    source: row.source || 'runtime',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function upsertAgentRunMetrics(metrics) {
+  const m = metrics || {};
+  const cache = m.cache ? mergeCacheMetrics([m.cache]) : (m.usage && m.usage.cache ? mergeCacheMetrics([m.usage.cache]) : null);
+  const now = Date.now();
+  stmt.upsertRunMetrics.run({
+    run_id: String(m.runId || ''), root_run_id: String(m.rootRunId || m.runId || ''),
+    steps: Number(m.steps) || 0, tool_calls: Number(m.toolCalls) || 0,
+    input_tokens: Number(m.inputTokens) || 0, output_tokens: Number(m.outputTokens) || 0, reasoning_tokens: Number(m.reasoningTokens) || 0,
+    cache_json: cache ? JSON.stringify(cache) : null,
+    cost_usd: m.costUsd == null ? null : Number(m.costUsd), latency_ms: m.latencyMs == null ? null : Number(m.latencyMs),
+    queue_wait_ms: m.queueWaitMs == null ? null : Number(m.queueWaitMs), process_ms: m.processMs == null ? null : Number(m.processMs),
+    human_interventions: Number(m.humanInterventions) || 0, recovery_rate: m.recoveryRate == null ? null : Number(m.recoveryRate),
+    error_breakdown_json: m.errorBreakdown ? JSON.stringify(m.errorBreakdown) : null, source: String(m.source || 'runtime'), created_at: Number(m.createdAt) || now, updated_at: now,
+  });
+  return getAgentRunMetrics(m.runId);
+}
+
+function getAgentRunMetrics(runId) {
+  try {
+    const direct = metricFromRow(stmt.getRunMetrics.get(String(runId || '')));
+    if (direct) return direct;
+    const run = getAgentRun(runId);
+    if (!run) return null;
+    const usage = run.usage || {};
+    const normalized = normalizeModelUsage(usage);
+    return {
+      runId: run.id, rootRunId: run.rootRunId || run.id,
+      steps: Number(usage.steps) || 0, toolCalls: Number(usage.toolCalls) || 0,
+      inputTokens: normalized.inputTokens || 0, outputTokens: normalized.outputTokens || 0, reasoningTokens: normalized.reasoningTokens || 0,
+      cache: normalized.cache, costUsd: normalized.costUsd,
+      latencyMs: run.finishedAt && run.startedAt ? Math.max(0, run.finishedAt - run.startedAt) : null,
+      queueWaitMs: null, processMs: null, humanInterventions: Number(usage.approvals) || 0,
+      recoveryRate: null, errorBreakdown: run.error ? { legacy: 1 } : {}, source: 'legacy/unknown', createdAt: run.createdAt, updatedAt: run.finishedAt || run.startedAt,
+    };
+  } catch (_) { return null; }
+}
+
+function sumMetric(values) {
+  const items = values.filter((value) => value != null && Number.isFinite(Number(value)));
+  return items.length === values.length ? items.reduce((total, value) => total + Number(value), 0) : null;
+}
+
+function aggregateAgentRunMetrics(rootRunId) {
+  try {
+    const root = getAgentRun(rootRunId);
+    if (!root) return null;
+    const actualRootId = root.rootRunId || root.id;
+    const runs = stmt.listRunsByRoot.all(actualRootId, actualRootId).map((row) => getAgentRun(row.id)).filter(Boolean);
+    const metrics = runs.map((run) => getAgentRunMetrics(run.id)).filter(Boolean);
+    const statusCounts = runs.reduce((out, run) => {
+      const status = String(run.status || 'unknown');
+      out[status] = (out[status] || 0) + 1;
+      return out;
+    }, {});
+    const errors = {};
+    metrics.forEach((metric) => Object.entries(metric.errorBreakdown || {}).forEach(([key, value]) => { errors[key] = (errors[key] || 0) + Number(value || 0); }));
+    const rootLatency = root.startedAt && root.finishedAt && root.finishedAt >= root.startedAt ? root.finishedAt - root.startedAt : null;
+    const cache = metrics.length ? mergeCacheMetrics(metrics.map((metric) => metric.cache || {})) : normalizeModelUsage({}).cache;
+    return {
+      runId: root.id,
+      rootRunId: actualRootId,
+      runCount: runs.length,
+      statusCounts,
+      steps: metrics.reduce((total, metric) => total + (Number(metric.steps) || 0), 0),
+      toolCalls: metrics.reduce((total, metric) => total + (Number(metric.toolCalls) || 0), 0),
+      inputTokens: sumMetric(metrics.map((metric) => metric.inputTokens)),
+      outputTokens: sumMetric(metrics.map((metric) => metric.outputTokens)),
+      reasoningTokens: sumMetric(metrics.map((metric) => metric.reasoningTokens)),
+      cache,
+      costUsd: sumMetric(metrics.map((metric) => metric.costUsd)),
+      latencyMs: rootLatency,
+      totalLatencyMs: sumMetric(metrics.map((metric) => metric.latencyMs)),
+      queueWaitMs: sumMetric(metrics.map((metric) => metric.queueWaitMs)),
+      processMs: sumMetric(metrics.map((metric) => metric.processMs)),
+      humanInterventions: metrics.reduce((total, metric) => total + (Number(metric.humanInterventions) || 0), 0),
+      recoveryRate: metrics.length ? metrics.reduce((total, metric) => total + (Number(metric.recoveryRate) || 0), 0) / metrics.length : null,
+      errorBreakdown: errors,
+      source: metrics.every((metric) => metric.source === 'runtime') ? 'runtime' : 'mixed',
+      createdAt: root.createdAt,
+      updatedAt: root.finishedAt || root.startedAt,
+    };
+  } catch (_) { return null; }
+}
+
+function recordModelCallMetric(metric) {
+  const m = metric || {};
+  const usage = normalizeModelUsage(m);
+  const id = String(m.id || 'mc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  stmt.insModelCallMetric.run({
+    id, run_id: String(m.runId || ''), root_run_id: String(m.rootRunId || m.runId || ''), scope: String(m.scope || 'agent'), call_type: String(m.callType || 'chat'),
+    model_id: String(m.modelId || ''), provider: String(m.provider || m.providerRef || ''), request_id: String(m.requestId || ''),
+    input_tokens: usage.inputTokens == null ? 0 : usage.inputTokens, output_tokens: usage.outputTokens == null ? 0 : usage.outputTokens, reasoning_tokens: usage.reasoningTokens == null ? 0 : usage.reasoningTokens,
+    cache_json: usage.cache ? JSON.stringify(usage.cache) : null, cost_usd: usage.costUsd,
+    latency_ms: m.latencyMs == null ? null : Number(m.latencyMs), queue_wait_ms: m.queueWaitMs == null ? null : Number(m.queueWaitMs),
+    status: String(m.status || 'completed'), error_type: String(m.errorType || ''), started_at: Number(m.startedAt) || Date.now(), finished_at: Number(m.finishedAt) || Date.now(),
+  });
+  return id;
+}
+
+function listModelCallMetrics(runId) {
+  try {
+    return stmt.listModelCallMetrics.all(String(runId || '')).map((row) => ({
+      id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type, modelId: row.model_id, provider: row.provider,
+      requestId: row.request_id, inputTokens: row.input_tokens, outputTokens: row.output_tokens, reasoningTokens: row.reasoning_tokens,
+      cache: jp(row.cache_json), costUsd: row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
+      startedAt: row.started_at, finishedAt: row.finished_at,
+    }));
+  } catch (_) { return []; }
+}
+
+function listModelCallMetricsByRoot(rootRunId) {
+  try {
+    const root = getAgentRun(rootRunId);
+    const actualRootId = root ? (root.rootRunId || root.id) : String(rootRunId || '');
+    return stmt.listModelCallMetricsByRoot.all(actualRootId, actualRootId).map((row) => ({
+      id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type, modelId: row.model_id, provider: row.provider,
+      requestId: row.request_id, inputTokens: row.input_tokens, outputTokens: row.output_tokens, reasoningTokens: row.reasoning_tokens,
+      cache: jp(row.cache_json), costUsd: row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
+      startedAt: row.started_at, finishedAt: row.finished_at,
     }));
   } catch (_) { return []; }
 }
@@ -662,6 +899,22 @@ function exportAgentRun(runId) {
   return exportRunJSONL({ run, events: listAgentEvents(runId), workingState: getWorkingState(runId), checkpoints: listCheckpoints(runId), summary: getLatestContextSummary(run.threadId), artifacts: [] });
 }
 
+function exportAgentTrace(input) {
+  const opts = typeof input === 'string' ? { rootRunId: input } : (input || {});
+  const rootRunId = String(opts.rootRunId || opts.runId || '');
+  const run = getAgentRun(rootRunId);
+  if (!run) return null;
+  const tree = listAgentRunTree(rootRunId);
+  const nodes = tree ? [tree.root].concat(tree.children || []).filter(Boolean) : [{ run, events: listAgentEvents(rootRunId) }];
+  const events = nodes.flatMap((node) => (node.events || []).map((event) => Object.assign({}, event, { runId: node.run.id })));
+  const metrics = getAgentRunMetrics(rootRunId);
+  if (opts.redacted === false) {
+    const { exportRunJSONL: exportRaw } = require('../../core/agent-runtime/run-export');
+    return exportRaw({ run, events, workingState: getWorkingState(rootRunId), checkpoints: listCheckpoints(rootRunId), summary: getLatestContextSummary(run.threadId), artifacts: [], metrics });
+  }
+  return exportRedactedJSONL({ run: redactPayload(run), runs: nodes.map((node) => redactPayload(node.run)), events, workingState: getWorkingState(rootRunId), metrics: aggregateAgentRunMetrics(rootRunId) || metrics });
+}
+
 function saveContextSummary(s) {
   const x = s || {};
   stmt.insSummary.run({
@@ -731,7 +984,8 @@ const StorageService = {
   clearAll, transaction,
   // v1.1.0（M1）：Agent Run 持久化
   createAgentRun, updateAgentRun, listAgentRuns, getAgentRun, listAgentRunTree,
-  appendAgentEvent, listAgentEvents,
+   appendAgentEvent, listAgentEvents, listAgentEventsPage, listAgentTracePage,
+   upsertAgentRunMetrics, getAgentRunMetrics, aggregateAgentRunMetrics, recordModelCallMetric, listModelCallMetrics, listModelCallMetricsByRoot, exportAgentTrace,
   upsertWorkingState, getWorkingState,
   saveAgentCheckpoint, getCheckpoint, listCheckpoints, exportAgentRun, saveContextSummary, getLatestContextSummary,
   // v1.1.0（M3）：ChangeSet

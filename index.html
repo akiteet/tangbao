@@ -385,6 +385,17 @@
             </div>
             <div class="settings-panel" data-panel="data">
               <div class="set-card">
+                <div class="set-card-title">数据存储位置</div>
+                <p class="hint" id="storageLocationMode">正在读取数据目录...</p>
+                <code id="storageLocationPath" class="storage-location-path"></code>
+                <p class="hint" id="secretStoreStatus">正在读取本机系统密钥库...</p>
+                <div class="row-inline">
+                  <button type="button" class="btn-primary" id="chooseStorageLocation">迁移到其他磁盘</button>
+                  <button type="button" class="btn-ghost" id="openStorageLocation">打开目录</button>
+                </div>
+                <p class="hint">对话、运行记录、SQLite、文件仓和密钥库会一起迁移；旧目录不会自动删除。目标目录必须允许当前 Windows 账户写入，请勿选择受保护的安装目录。</p>
+              </div>
+              <div class="set-card">
                 <div class="set-card-title">备份与恢复</div>
                 <p class="hint">导出/导入配置用于备份或迁移到其他设备</p>
                 <p class="hint">API Key 保存在本机系统安全存储中，不会包含在导出文件里；迁移到新设备后需在「账户」中重新填写密钥。</p>
@@ -469,7 +480,7 @@
               <div class="set-card">
                 <div class="set-card-title">配置</div>
                 <p class="hint">在「配置」先选模块（默认 / 糖包 / 糖绘 / 糖读），再到「账户」新增账户：API Base URL、API Key、模型列表。可设一个默认账户，也允许各模块独立账户。</p>
-                <p class="hint warn">⚠️ 密钥仅保存在本机浏览器 localStorage，不会上传到糖包服务器；但为明文存储，请勿在公共电脑导出含 Key 的配置给他人。</p>
+                <p class="hint warn">⚠️ 密钥保存在本机系统安全存储中，不会上传到糖包服务器；导出配置不会包含密钥。</p>
               </div>
               <div class="set-card">
                 <div class="set-card-title">自定义模块</div>
@@ -590,7 +601,7 @@
           </div>
         </div>
         <div class="settings-footer-notes">
-          <p class="hint">密钥仅保存在本浏览器 localStorage，不会上传到任何其他地方。</p>
+          <p class="hint">密钥保存在本机系统安全存储中，不会上传到任何其他地方；导出配置不会包含密钥。</p>
           <p class="hint warn">注意：浏览器直连第三方 API 可能受 CORS 限制。若请求被拦截，请将 Base URL 指向支持跨域的端点或本地代理。</p>
         </div>
       </div>

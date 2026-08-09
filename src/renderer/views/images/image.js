@@ -440,11 +440,11 @@
           const content = [{ type: 'text', text: task.finalPrompt }, { type: 'image_url', image_url: { url: task.refImg } }];
           const chatPayload = { model: p.model, messages: [{ role: 'user', content }], stream: false };
           if (task.adv && task.adv.extra && typeof task.adv.extra === 'object') Object.assign(chatPayload, task.adv.extra);
-          res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', payload: chatPayload, signal: ctrl.signal });
+          res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', telemetry: { scope: 'image', callType: 'vision_edit' }, payload: chatPayload, signal: ctrl.signal });
         } else {
           // 文生图：标准 images/generations（M12：高级参数映射）
           res = await App.rt.gatewayFetch({
-            ref: p.ref, kind: 'images',
+            ref: p.ref, kind: 'images', telemetry: { scope: 'image', callType: 'image_generation' },
             payload: App.image.buildImagePayload(task, p),
             signal: ctrl.signal,
           });

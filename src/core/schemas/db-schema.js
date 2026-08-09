@@ -159,9 +159,9 @@ const TABLES = [
 ];
 
 // ===== Schema 版本化迁移（M6） =====
-// 当前版本 = 15。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
+// 当前版本 = 16。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
 // 新装库 user_version=0 → 顺序执行 MIGRATIONS[0..] 建全表；未来改结构时追加新迁移并把 SCHEMA_VERSION +1。
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 /** 迁移 0（v0→v1）：建全部表。CREATE TABLE IF NOT EXISTS 幂等，可安全作用于已存在的旧库。 */
 function migration_0(db) {
@@ -379,7 +379,7 @@ function migration_11(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_agentruns_parent ON agent_runs(parent_run_id, started_at ASC)');
 }
 
-const MIGRATIONS = [migration_0, migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7, migration_8, migration_9, migration_10, migration_11, migration_12, migration_13, migration_14];
+const MIGRATIONS = [migration_0, migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7, migration_8, migration_9, migration_10, migration_11, migration_12, migration_13, migration_14, migration_15];
 
 // v10：迁移 12（v12→v13）：Working State 追加 Skill 工具权限归因上下文（激活来源/包哈希/声明工具），供工具约束与恢复使用。
 function migration_12(db) {
@@ -412,6 +412,63 @@ function migration_14(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_agentruns_root ON agent_runs(root_run_id, continuation_index ASC)');
   const threadCols = new Set(db.prepare('PRAGMA table_info(agent_threads)').all().map((c) => c.name));
   if (!threadCols.has('draft_root_scope_json')) db.exec('ALTER TABLE agent_threads ADD COLUMN draft_root_scope_json TEXT');
+}
+
+// v13：迁移 15（v15→v16）：Run 版本追踪、Run 汇总指标和跨模块模型调用指标。
+// 所有字段/索引均使用存在性检查或 IF NOT EXISTS，允许迁移重复执行。
+function migration_15(db) {
+  const runCols = new Set(db.prepare('PRAGMA table_info(agent_runs)').all().map((c) => c.name));
+  const addRun = (name, ddl) => { if (!runCols.has(name)) db.exec('ALTER TABLE agent_runs ADD COLUMN ' + ddl); };
+  addRun('prompt_version', "prompt_version TEXT NOT NULL DEFAULT 'legacy/unknown'");
+  addRun('toolset_version', "toolset_version TEXT NOT NULL DEFAULT 'legacy/unknown'");
+  addRun('runtime_version', "runtime_version TEXT NOT NULL DEFAULT 'legacy/unknown'");
+  db.exec(`
+CREATE TABLE IF NOT EXISTS agent_run_metrics (
+  run_id              TEXT PRIMARY KEY,
+  root_run_id         TEXT NOT NULL DEFAULT '',
+  steps               INTEGER NOT NULL DEFAULT 0,
+  tool_calls          INTEGER NOT NULL DEFAULT 0,
+  input_tokens        INTEGER NOT NULL DEFAULT 0,
+  output_tokens       INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+  cache_json          TEXT,
+  cost_usd            REAL,
+  latency_ms          INTEGER,
+  queue_wait_ms       INTEGER,
+  process_ms          INTEGER,
+  human_interventions INTEGER NOT NULL DEFAULT 0,
+  recovery_rate       REAL,
+  error_breakdown_json TEXT,
+  source              TEXT NOT NULL DEFAULT 'runtime',
+  created_at          INTEGER NOT NULL DEFAULT 0,
+  updated_at          INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_agent_run_metrics_root ON agent_run_metrics(root_run_id, updated_at ASC);
+
+CREATE TABLE IF NOT EXISTS model_call_metrics (
+  id                  TEXT PRIMARY KEY,
+  run_id              TEXT NOT NULL DEFAULT '',
+  root_run_id         TEXT NOT NULL DEFAULT '',
+  scope               TEXT NOT NULL DEFAULT 'agent',
+  call_type           TEXT NOT NULL DEFAULT 'chat',
+  model_id            TEXT NOT NULL DEFAULT '',
+  provider            TEXT NOT NULL DEFAULT '',
+  request_id          TEXT NOT NULL DEFAULT '',
+  input_tokens        INTEGER,
+  output_tokens       INTEGER,
+  reasoning_tokens    INTEGER,
+  cache_json          TEXT,
+  cost_usd            REAL,
+  latency_ms          INTEGER,
+  queue_wait_ms       INTEGER,
+  status              TEXT NOT NULL DEFAULT 'completed',
+  error_type          TEXT NOT NULL DEFAULT '',
+  started_at          INTEGER NOT NULL DEFAULT 0,
+  finished_at         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_model_call_metrics_run ON model_call_metrics(run_id, started_at ASC);
+CREATE INDEX IF NOT EXISTS idx_model_call_metrics_scope ON model_call_metrics(scope, started_at DESC);
+`);
 }
 
 module.exports = { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS };

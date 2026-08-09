@@ -4,18 +4,19 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 
 test('B3：normalizeResult 坏前缀含「工具执行出错」（外层 catch 文案不再误判成功）', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+  const src = readRuntimeSource(ROOT);
   const m = src.match(/const bad = \/([^/]+)\/\.test\(s\)/);
   assert.ok(m, '应能找到 normalizeResult 坏前缀正则');
   assert.match(m[1], /工具执行出错|工具执行失败/, '前缀应含工具执行出错/失败');
 });
 
 test('B3：safePath 具备 realpath 符号链接逃逸校验', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+  const src = readRuntimeSource(ROOT);
   const i = src.indexOf('function safePath');
   const seg = src.slice(i, i + 1200);
   assert.match(seg, /fs\.realpathSync/, 'safePath 应解析 realpath');

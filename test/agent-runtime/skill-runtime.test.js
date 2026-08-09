@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { readRuntimeSource } = require('./source-helper');
 
 const server = require('../../src/infrastructure/agent-runtime/agent-server');
 const Tx = require('../../src/core/agent-runtime/change-transaction');
@@ -88,7 +89,7 @@ test('超长 Skill 指引进入统一窗口护栏并保留持久化任务状态'
 });
 
 test('生产运行时提供资源工具且 Skill 脚本默认显式审批', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../../src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+  const source = readRuntimeSource(path.join(__dirname, '../..'));
   for (const name of ['list_skill_resources', 'read_skill_resource', 'run_skill_script', 'copy_skill_asset']) assert.ok(source.includes("name: '" + name + "'"));
   assert.ok(source.includes("const bypass = opts.permCtx && opts.permCtx.mode === 'bypass'"));
   assert.ok(source.includes("waitApproval(emit, runId, display, { toolName: name, skillName: skill.name"));

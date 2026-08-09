@@ -4,12 +4,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const AS = require('../../src/infrastructure/agent-runtime/agent-server');
 const CT = require('../../src/core/agent-runtime/change-transaction');
 const { judgeTask } = require('../../src/core/agent-runtime/eval-judge');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+const readRuntime = () => readRuntimeSource(ROOT);
 
 test('B6：parsePatch 支持新建文件（--- /dev/null）路径归一', () => {
   const patch = '--- /dev/null\n+++ b/src/newfile.js\n@@ -0,0 +1 @@\n+new content\n';
@@ -64,7 +66,7 @@ test('B6：skill-registry EXDEV 失败恢复 backup（源码级）', () => {
 });
 
 test('B6：runTool apply_patch 支持 fromNull 新建（源码级）', () => {
-  const src = read('src/infrastructure/agent-runtime/agent-server.js');
+  const src = readRuntime();
   assert.match(src, /f\.fromNull && e && e\.code === 'ENOENT'\) \{ content = ''; \}/, '新建文件应从空内容应用补丁');
   assert.match(src, /f\.toNull\) return \{ ok: false, error: \{ code: 'not_supported'/, '删除文件段应引导 delete_file');
 });

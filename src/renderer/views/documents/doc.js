@@ -569,7 +569,7 @@
       let acc = '', started = false;
       try {
         // 走主进程模型网关（原来是渲染进程直连，既暴露密钥又受 CORS 限制）
-        const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', payload });
+        const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', telemetry: { scope: 'documents', callType: 'document_qa' }, payload });
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
           aiBubble.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;

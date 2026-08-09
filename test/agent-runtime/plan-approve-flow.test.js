@@ -4,11 +4,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
-const agentServer = read('src/infrastructure/agent-runtime/agent-server.js');
+const agentServer = readRuntimeSource(ROOT);
 const agentJs = read('src/renderer/views/agent/agent.js');
 const styles = read('styles.css');
 

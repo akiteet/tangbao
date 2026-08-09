@@ -3,10 +3,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const CM = require('../../src/core/agent-runtime/context-manager');
-const agentSrc = fs.readFileSync(path.join(ROOT, 'src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+const agentSrc = readRuntimeSource(ROOT);
 
 test('B4：summaryIsValid——current 非空时已删除文件判 stale', () => {
   const summary = { schemaVersion: 2, coveredFromSeq: 1, coveredToSeq: 5, sourceHashes: { 'a.js': 'h1', 'b.js': 'h2' }, requirements: [], constraints: [], completed: [], pending: [], files: [], decisions: [], checks: [], errors: [], nextSteps: [] };

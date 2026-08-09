@@ -3,9 +3,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { readRuntimeSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
-const server = fs.readFileSync(path.join(ROOT, 'src/infrastructure/agent-runtime/agent-server.js'), 'utf8');
+const server = readRuntimeSource(ROOT);
 const prompt = fs.readFileSync(path.join(ROOT, 'src/core/models/agent-prompt.js'), 'utf8');
 const controlled = fs.readFileSync(path.join(ROOT, 'src/core/agent-runtime/controlled-eval.js'), 'utf8');
 

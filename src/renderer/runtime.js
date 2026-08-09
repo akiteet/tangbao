@@ -72,21 +72,42 @@
     // 已保存密钥的引用集合；只知道「有没有」，不知道内容
     secretRefs: new Set(),
     secretsEncrypted: true,
+    secretStoreState: 'uninitialized',
+    secretStoreCode: '',
+    secretStoreCount: 0,
 
     hasSecret(ref) {
       return !!ref && rt.secretRefs.has(ref);
     },
     async refreshSecrets() {
       try {
-        if (!App.services.secrets || !App.services.secrets.listSecrets) return;
+        if (!App.services.secrets || !App.services.secrets.listSecrets) return null;
         const r = await App.services.secrets.listSecrets();
+        const status = (r && r.status) || {};
+        rt.secretStoreState = String(status.state || (r && r.ok === false ? 'unavailable' : 'ready'));
+        rt.secretStoreCode = String(status.code || (r && r.code) || '');
+        rt.secretStoreCount = Number(status.count != null ? status.count : ((r && r.refs) || []).length) || 0;
+        if (r && typeof r.encrypted === 'boolean') rt.secretsEncrypted = r.encrypted;
+        // 读取失败时不能用空 refs 覆盖已有状态，否则 UI 会把“无法解密”显示成“未配置”。
+        if (!r || r.ok === false || rt.secretStoreState === 'unavailable') return r || { ok: false };
         rt.secretRefs = new Set((r && r.refs) || []);
-        rt.secretsEncrypted = !r || r.encrypted !== false;
-      } catch (e) { console.error('读取密钥列表失败：', e); }
+        return r;
+      } catch (e) {
+        rt.secretStoreState = 'unavailable';
+        rt.secretStoreCode = 'secret_store_unavailable';
+        console.error('读取密钥列表失败：', e);
+        return { ok: false, code: rt.secretStoreCode };
+      }
     },
     async setSecret(ref, value) {
       const r = await App.services.secrets.setSecret(ref, value);
-      if (r && r.ok) { if (value) rt.secretRefs.add(ref); else rt.secretRefs.delete(ref); }
+      if (r && r.ok) {
+        if (value) rt.secretRefs.add(ref); else rt.secretRefs.delete(ref);
+        rt.secretStoreState = 'ready';
+        rt.secretStoreCode = '';
+        if (typeof r.count === 'number') rt.secretStoreCount = r.count;
+        if (typeof r.encrypted === 'boolean') rt.secretsEncrypted = r.encrypted;
+      }
       return r || { ok: false };
     },
     async deleteSecret(ref) {
@@ -150,7 +171,7 @@
       return fetch(rt.gatewayUrl(), {
         method: 'POST',
         headers: rt.authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ ref: o.ref, kind: o.kind || 'chat', payload: o.payload || {} }),
+        body: JSON.stringify({ ref: o.ref, kind: o.kind || 'chat', payload: o.payload || {}, telemetry: o.telemetry || undefined }),
         signal: o.signal,
       });
     },

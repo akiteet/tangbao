@@ -18,6 +18,7 @@ benchmarks/last-eval.json
 benchmarks/first-raw-eval.json
 benchmarks/compare-report.json
 benchmarks/traces/
+benchmarks/reports/
 outputs/
 *.tmp
 *.report.json
