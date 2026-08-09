@@ -34,6 +34,14 @@ function fileHeader() {
   return { v: 1, enc: encrypted, data: '' };
 }
 
+function encryptionAvailable() {
+  try {
+    return !!(safeStorage && typeof safeStorage.isEncryptionAvailable === 'function' && safeStorage.isEncryptionAvailable());
+  } catch (_) {
+    return false;
+  }
+}
+
 function setLoadFailure(code, error) {
   loaded = true;
   store = Object.create(null);
@@ -56,7 +64,7 @@ function decode(raw) {
     throw Object.assign(new Error('密钥文件格式无效'), { code: 'secret_store_invalid' });
   }
   if (raw.enc) {
-    if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function' || !safeStorage.isEncryptionAvailable()) {
+    if (!encryptionAvailable()) {
       throw Object.assign(new Error('系统密钥服务不可用'), { code: 'secret_decrypt_unavailable' });
     }
     try {
@@ -108,7 +116,7 @@ function save() {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const json = JSON.stringify(store);
     const out = fileHeader();
-    if (safeStorage && safeStorage.isEncryptionAvailable()) {
+    if (encryptionAvailable()) {
       out.enc = true;
       encrypted = true;
       out.data = safeStorage.encryptString(json).toString('base64');
@@ -143,7 +151,7 @@ function init(opts) {
   legacyFilePaths = Array.isArray(o.legacyFilePaths)
     ? o.legacyFilePaths.filter((value) => value).map((value) => path.resolve(String(value)))
     : [];
-  encrypted = !!(safeStorage && safeStorage.isEncryptionAvailable());
+  encrypted = encryptionAvailable();
   loaded = false;
   loadState = 'uninitialized';
   loadCode = '';
@@ -156,9 +164,82 @@ function getStatus() {
     state: loadState,
     code: loadCode,
     encrypted,
+    encryptionAvailable: encryptionAvailable(),
+    canCreateFresh: loadState === 'unavailable' && encryptionAvailable(),
     count: Object.keys(store).length,
     source: readPath ? (readPath === filePath ? 'active' : 'legacy') : 'none',
   };
+}
+
+function unreadableBackupPath(sourcePath) {
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17);
+  const base = sourcePath + '.unreadable-' + stamp + '.bak';
+  let candidate = base;
+  let suffix = 1;
+  while (fs.existsSync(candidate)) candidate = base + '.' + suffix++;
+  return candidate;
+}
+
+/**
+ * Replace an unreadable store only after an explicit user action.
+ * The old ciphertext is moved intact to a timestamped backup first.
+ */
+function resetUnreadableStore() {
+  if (!loaded || loadState !== 'unavailable') {
+    return { ok: false, code: 'secret_store_not_unavailable', error: '当前密钥库不需要重建' };
+  }
+  if (!filePath) {
+    return { ok: false, code: 'secret_store_path_missing', error: '密钥库路径不可用' };
+  }
+  if (!encryptionAvailable()) {
+    return { ok: false, code: 'secret_decrypt_unavailable', error: '系统密钥服务仍不可用，暂时不能建立加密密钥库' };
+  }
+
+  const sourcePath = readPath && fs.existsSync(readPath) ? readPath : '';
+  const backupPath = sourcePath ? unreadableBackupPath(sourcePath) : '';
+  const tempPath = filePath + '.fresh.tmp';
+  let sourceMoved = false;
+  let freshInstalled = false;
+
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const fresh = { v: 1, enc: true, data: safeStorage.encryptString('{}').toString('base64') };
+    // Verify the new ciphertext before moving the old file out of the active path.
+    const probe = JSON.parse(decode(fresh));
+    if (!probe || typeof probe !== 'object') throw new Error('新密钥库校验失败');
+    fs.writeFileSync(tempPath, JSON.stringify(fresh), { encoding: 'utf8', flag: 'wx' });
+
+    if (sourcePath) {
+      fs.renameSync(sourcePath, backupPath);
+      sourceMoved = true;
+    }
+    fs.renameSync(tempPath, filePath);
+    freshInstalled = true;
+
+    store = Object.create(null);
+    encrypted = true;
+    loaded = true;
+    loadState = 'ready';
+    loadCode = '';
+    readPath = filePath;
+    return {
+      ok: true,
+      encrypted: true,
+      count: 0,
+      backupFile: backupPath ? path.basename(backupPath) : '',
+    };
+  } catch (error) {
+    try { fs.unlinkSync(tempPath); } catch (_) {}
+    if (sourceMoved && !freshInstalled) {
+      try {
+        if (!fs.existsSync(sourcePath) && fs.existsSync(backupPath)) fs.renameSync(backupPath, sourcePath);
+      } catch (restoreError) {
+        console.error('[糖包·密钥库] 恢复原密文失败：', restoreError && restoreError.message ? restoreError.message : restoreError);
+      }
+    }
+    console.error('[糖包·密钥库] 建立新密钥库失败：', error && error.message ? error.message : error);
+    return { ok: false, code: 'secret_store_reset_failed', error: '建立新密钥库失败，原密钥文件未覆盖' };
+  }
 }
 
 /** 仅供主进程内部使用，绝不经 IPC 暴露 */
@@ -241,5 +322,5 @@ function isEncrypted() {
 
 module.exports = {
   init, getSecret, setSecret, deleteSecret, deleteByPrefix,
-  hasSecret, listRefs, isEncrypted, getStatus,
+  hasSecret, listRefs, isEncrypted, getStatus, resetUnreadableStore,
 };

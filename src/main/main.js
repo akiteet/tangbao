@@ -25,6 +25,7 @@ const SkillSecurity = require('../core/skills/skill-security');
 const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
 const dataLocation = require('../infrastructure/storage/data-location');
+const legacySecretContext = require('../infrastructure/secrets/legacy-context');
 
 // M5（#254）：自定义协议 tangbao-file:// —— 渲染进程不再直接持有本地文件绝对路径，
 // 改为「用户选文件 → 主进程发不透明 fileId → tangbao-file://<fileId> 读取」，收敛本地文件暴露面。
@@ -49,6 +50,22 @@ if (startupLocation.rootPath && !startupUsesDefaultRoot) {
   try { app.setPath('userData', startupLocation.rootPath); } catch (error) {
     console.error('[tangbao] failed to select data root:', error && error.message ? error.message : error);
   }
+}
+
+// Electron's Windows safeStorage context is selected from Local State. Adopt
+// the legacy context before app.ready so safeStorage initializes with the old
+// key and the migrated ciphertext remains readable.
+let adoptedLegacySecretContext = null;
+try {
+  adoptedLegacySecretContext = legacySecretContext.adoptLegacyContext({
+    activeRoot: app.getPath('userData'),
+    legacyRoot: defaultUserDataRoot,
+  });
+  if (adoptedLegacySecretContext.changed) {
+    console.warn('[糖包] 已备份当前 Local State，并采用旧数据目录的密钥上下文：', adoptedLegacySecretContext.backupFile || '无备份');
+  }
+} catch (e) {
+  console.warn('[糖包] 旧密钥上下文迁移跳过：', e && e.message ? e.message : e);
 }
 
 function secretStorePaths(activeRoot) {
@@ -561,6 +578,12 @@ safeHandle('secrets:list', () => {
     encrypted: secrets.isEncrypted(),
     status,
   };
+});
+safeHandle('secrets:reset', () => {
+  if (typeof secrets.resetUnreadableStore !== 'function') {
+    return { ok: false, code: 'secret_store_reset_unsupported', error: '当前版本不支持重建密钥库' };
+  }
+  return secrets.resetUnreadableStore();
 });
 
 // 渲染进程同步「密钥引用 → API Base」映射表；网关据此决定往哪转发（渲染进程指定不了目标）
@@ -1870,6 +1893,13 @@ if (!gotLock) {
         filePath: path.join(app.getPath('userData'), 'tangbao-data', 'secrets.json'),
         legacyFilePaths: secretStorePaths(app.getPath('userData')),
       });
+      if (adoptedLegacySecretContext && adoptedLegacySecretContext.changed && info.state !== 'ready') {
+        legacySecretContext.restoreBackup(
+          path.join(app.getPath('userData'), 'Local State'),
+          adoptedLegacySecretContext.backupPath,
+        );
+        console.error('[糖包] 旧密钥上下文迁移后仍无法读取密钥，已恢复当前 Local State。');
+      }
       if (!info.encrypted) console.error('[糖包] 当前系统密钥服务不可用，API Key 将以未加密形式保存。');
     } catch (e) {
       console.error('[糖包] 密钥库初始化失败：', e);

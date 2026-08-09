@@ -75,6 +75,7 @@
     secretStoreState: 'uninitialized',
     secretStoreCode: '',
     secretStoreCount: 0,
+    secretStoreCanCreateFresh: false,
 
     hasSecret(ref) {
       return !!ref && rt.secretRefs.has(ref);
@@ -87,6 +88,7 @@
         rt.secretStoreState = String(status.state || (r && r.ok === false ? 'unavailable' : 'ready'));
         rt.secretStoreCode = String(status.code || (r && r.code) || '');
         rt.secretStoreCount = Number(status.count != null ? status.count : ((r && r.refs) || []).length) || 0;
+        rt.secretStoreCanCreateFresh = status.canCreateFresh === true;
         if (r && typeof r.encrypted === 'boolean') rt.secretsEncrypted = r.encrypted;
         // 读取失败时不能用空 refs 覆盖已有状态，否则 UI 会把“无法解密”显示成“未配置”。
         if (!r || r.ok === false || rt.secretStoreState === 'unavailable') return r || { ok: false };
@@ -107,6 +109,18 @@
         rt.secretStoreCode = '';
         if (typeof r.count === 'number') rt.secretStoreCount = r.count;
         if (typeof r.encrypted === 'boolean') rt.secretsEncrypted = r.encrypted;
+      }
+      return r || { ok: false };
+    },
+    async resetSecretStore() {
+      const r = await App.services.secrets.resetSecretStore();
+      if (r && r.ok) {
+        rt.secretRefs = new Set();
+        rt.secretStoreState = 'ready';
+        rt.secretStoreCode = '';
+        rt.secretStoreCount = 0;
+        rt.secretStoreCanCreateFresh = false;
+        rt.secretsEncrypted = r.encrypted !== false;
       }
       return r || { ok: false };
     },

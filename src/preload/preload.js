@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electron', {
   deleteSecret: (ref) => ipcRenderer.invoke('secrets:delete', ref),
   deleteSecretsByPrefix: (prefix) => ipcRenderer.invoke('secrets:deletePrefix', prefix),
   listSecrets: () => ipcRenderer.invoke('secrets:list'),
+  resetSecretStore: () => ipcRenderer.invoke('secrets:reset'),
   // 同步「密钥引用 → API Base」映射表给模型网关（渲染进程只能指定 ref，指定不了转发目标）
   setGatewayEndpoints: (list) => ipcRenderer.invoke('gateway:setEndpoints', list),
   // M5：把本地文件绝对路径交给主进程，换回不透明 fileId（只回 id，不回路径/内容）

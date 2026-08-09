@@ -392,8 +392,10 @@
                 <div class="row-inline">
                   <button type="button" class="btn-primary" id="chooseStorageLocation">迁移到其他磁盘</button>
                   <button type="button" class="btn-ghost" id="openStorageLocation">打开目录</button>
+                  <button type="button" class="btn-ghost danger" id="resetSecretStore" hidden>建立新密钥库</button>
                 </div>
                 <p class="hint">对话、运行记录、SQLite、文件仓和密钥库会一起迁移；旧目录不会自动删除。目标目录必须允许当前 Windows 账户写入，请勿选择受保护的安装目录。</p>
+                <p class="hint warn" id="secretStoreRecoveryHint" hidden>建立新密钥库不会恢复旧 Key；原密文会先完整备份，之后请在“账户”中重新填写 API Key。</p>
               </div>
               <div class="set-card">
                 <div class="set-card-title">备份与恢复</div>

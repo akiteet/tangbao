@@ -90,6 +90,50 @@ test('secret store reports unavailable system storage without replacing encrypte
   }
 });
 
+test('secret store can explicitly rebuild an unreadable store after preserving its ciphertext', () => {
+  const root = tempRoot();
+  try {
+    const active = path.join(root, 'secrets.json');
+    writeLegacyFile(active, { 'acc:one': 'key-one' }, true);
+    const before = fs.readFileSync(active);
+
+    const storage = safeStorage({ failDecrypt: true });
+    const info = store.init({ filePath: active, safeStorage: storage });
+    assert.equal(info.state, 'unavailable');
+    // The old ciphertext is invalid for this context, while a newly encrypted
+    // value from the current context must still be readable.
+    storage.decryptString = safeStorage().decryptString;
+    const result = store.resetUnreadableStore();
+    assert.equal(result.ok, true);
+    assert.match(result.backupFile, /^secrets\.json\.unreadable-/);
+    assert.equal(store.getStatus().state, 'ready');
+    assert.equal(store.getStatus().count, 0);
+    assert.equal(JSON.parse(fs.readFileSync(active, 'utf8')).enc, true);
+    assert.deepEqual(fs.readFileSync(path.join(root, result.backupFile)), before);
+    assert.equal(store.setSecret('acc:new', 'key-new').ok, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('secret store does not rebuild while the system encryption service is unavailable', () => {
+  const root = tempRoot();
+  try {
+    const active = path.join(root, 'secrets.json');
+    writeLegacyFile(active, { 'acc:one': 'key-one' }, true);
+    const before = fs.readFileSync(active);
+
+    store.init({ filePath: active, safeStorage: safeStorage({ available: false }) });
+    const result = store.resetUnreadableStore();
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'secret_decrypt_unavailable');
+    assert.deepEqual(fs.readFileSync(active), before);
+    assert.equal(fs.readdirSync(root).length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('secret store can create a new encrypted file when no previous file exists', () => {
   const root = tempRoot();
   try {

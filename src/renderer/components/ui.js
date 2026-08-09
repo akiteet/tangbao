@@ -425,6 +425,16 @@
       const rt = App.rt || {};
       const state = String(rt.secretStoreState || 'uninitialized');
       const count = Number(rt.secretStoreCount || 0);
+      const canCreateFresh = state === 'unavailable' && rt.secretStoreCanCreateFresh === true;
+      const resetButton = $('resetSecretStore');
+      const recoveryHint = $('secretStoreRecoveryHint');
+      if (resetButton) resetButton.hidden = !canCreateFresh;
+      if (recoveryHint) {
+        recoveryHint.hidden = state !== 'unavailable';
+        recoveryHint.textContent = canCreateFresh
+          ? '建立新密钥库不会恢复旧 Key；原密文会先完整备份，之后请在“账户”中重新填写 API Key。'
+          : '系统密钥服务当前不可用，暂时不能建立加密密钥库；请完全退出糖包后，用当前 Windows 账户重新启动。';
+      }
       el.classList.toggle('warn', state === 'unavailable' || rt.secretsEncrypted === false);
       if (state === 'unavailable') {
         if (rt.secretStoreCode === 'secret_decrypt_failed') {
@@ -447,6 +457,42 @@
         return;
       }
       el.textContent = '正在读取本机系统密钥库...';
+    },
+
+    async resetSecretStore() {
+      const button = $('resetSecretStore');
+      const rt = App.rt || {};
+      if (!rt.resetSecretStore || rt.secretStoreCanCreateFresh !== true || (button && button.dataset.busy === '1')) return;
+      if (!window.confirm('当前密钥库无法解密。建立新密钥库会保留原密文备份，但旧 API Key 需要重新填写。继续吗？')) return;
+      if (button) {
+        button.dataset.busy = '1';
+        button.disabled = true;
+        button.textContent = '正在备份并建立...';
+      }
+      try {
+        const result = await rt.resetSecretStore();
+        if (!result || !result.ok) {
+          if (rt.refreshSecrets) await rt.refreshSecrets();
+          App.ui.refreshSecretStoreStatus();
+          App.ui.toast((result && result.error) || '建立新密钥库失败，原密钥文件未覆盖');
+          return;
+        }
+        let moved = 0;
+        if (rt.migrateSecrets) moved = await rt.migrateSecrets();
+        if (moved) App.persist();
+        if (rt.refreshSecrets) await rt.refreshSecrets();
+        App.ui.refreshSecretStoreStatus();
+        const suffix = result.backupFile ? '原密文已备份为 ' + result.backupFile : '原密文已保留';
+        App.ui.toast('新的加密密钥库已建立；' + suffix + (moved ? '，已迁移 ' + moved + ' 个旧 Key' : '，请重新填写 API Key'));
+      } catch (error) {
+        App.ui.toast((error && error.message) || '建立新密钥库失败，原密钥文件未覆盖');
+      } finally {
+        if (button) {
+          button.dataset.busy = '0';
+          button.disabled = false;
+          button.textContent = '建立新密钥库';
+        }
+      }
     },
 
     async chooseStorageLocation() {
@@ -1123,20 +1169,21 @@
       if (!apiKey && !hasSaved) { App.ui.toast('请填写 API Key'); return; }
       if (!models.length) { App.ui.toast('请至少填写一个模型名称'); return; }
       const s = App.state.settings;
-      let accId = id;
+      const accId = id || App.uid();
+      // 先确认密钥写入成功，再改变账户配置，避免出现“账户保存了但 Key 没有保存”。
+      if (apiKey && App.rt && App.rt.setSecret) {
+        const r = await App.rt.setSecret('acc:' + accId, apiKey);
+        if (!r || !r.ok) {
+          App.ui.toast('密钥保存失败：' + ((r && r.error) || '未知原因'));
+          return;
+        }
+      }
       if (id) {
         const a = s.accounts.find(x => x.id === id);
         if (a) { Object.assign(a, { name, apiBase, models }); delete a.model; delete a.apiKey; }
       } else {
-        const acc = { id: App.uid(), name, apiBase, models };
-        s.accounts.push(acc);
-        accId = acc.id;
-        if (!s.defaultAccountId) s.defaultAccountId = acc.id;
-      }
-      // Key 只进系统密钥库，账户对象里不再留明文
-      if (apiKey && App.rt && App.rt.setSecret) {
-        const r = await App.rt.setSecret('acc:' + accId, apiKey);
-        if (!r || !r.ok) App.ui.toast('密钥保存失败：' + ((r && r.error) || '未知原因'));
+        s.accounts.push({ id: accId, name, apiBase, models });
+        if (!s.defaultAccountId) s.defaultAccountId = accId;
       }
       App.persist();
       App.ui.refreshSettingsUI();
@@ -1481,6 +1528,7 @@
       const impFull = $('importFull'); if (impFull) impFull.addEventListener('click', () => App.config.importFull());
       const chooseStorage = $('chooseStorageLocation'); if (chooseStorage) chooseStorage.addEventListener('click', () => App.ui.chooseStorageLocation());
       const openStorage = $('openStorageLocation'); if (openStorage) openStorage.addEventListener('click', () => App.ui.openStorageLocation());
+      const resetSecretStore = $('resetSecretStore'); if (resetSecretStore) resetSecretStore.addEventListener('click', () => App.ui.resetSecretStore());
 
       const addBtn = $('addCustomModule');
       if (addBtn) addBtn.addEventListener('click', () => App.ui.openModuleEditor());
