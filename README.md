@@ -37,7 +37,7 @@
 
 ## 安装
 
-- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.0-setup.exe`，双击安装即可。
+- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.1-setup.exe`，双击安装即可。
 - **从源码运行**：
 
 ```bash
@@ -49,7 +49,7 @@ npm start          # 启动应用（糖码本地后端随应用自动启动）
 
 > `npm run server` 仅用于独立调试糖码后端；正常使用不需要单独启动。
 >
-> **打包**：`npm run dist` → `dist/tangbao-1.1.0-setup.exe`
+> **打包**：`npm run dist` → `dist/tangbao-1.1.1-setup.exe`
 
 ## 配置
 
@@ -64,7 +64,7 @@ npm start          # 启动应用（糖码本地后端随应用自动启动）
 糖码是内置的本地 AI 编程助手，采用先计划后执行、工具驱动的交互范式，面向真实项目开发场景：
 
 - **Plan 模式** —— 只读探索并产出任务清单；不确定时主动向你提问（问题 + 选项 + 自定义填空，单选/多选）；首次写文件时弹「计划待批准」，批准后自动切换执行模式继续。
-- **权限体系** —— 5 档权限模式（default / acceptEdits / auto / bypass / sandbox）+ 项目级规则（总是允许 / 总是拒绝 / 命令白名单），拒绝时给出替代建议。
+- **权限体系** —— 6 档权限模式（plan / default / acceptEdits / auto / bypass / sandbox）+ 项目级规则（总是允许 / 总是拒绝 / 命令白名单），拒绝时给出替代建议。
 - **技能机制** —— 标准 `SKILL.md` 技能机制（兼容 `.claude/skills`、`.codex/skills` 目录），设置面板可导入、启停、隔离卸载。
 - **运行历史与恢复** —— 每步落检查点，任务中断后可**精确恢复**并自动续段；历史面板按页浏览与全文检索。
 - **上下文管理** —— 自动压缩长对话，保留计划、错误与变更记录，避免上下文溢出。
@@ -106,9 +106,15 @@ tangbao/
 └── package.json
 ```
 
-- **测试**：`npm test`（全量 307 个用例，覆盖 Runtime / 存储 / 权限 / 技能 / UI 契约）
+- **测试**：`npm test`（全量 323 个用例，覆盖 Runtime / 存储 / 权限 / 技能 / UI 契约）
 - **打包**：`npm run dist`（Electron 31 + electron-builder，产物在 `dist/`）
 - **数据模型**：见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
+
+## v1.1.1
+
+- 并行 `explore / test / review` 子代理最多 8 个任务、3 个并发，超出并发进入队列；子代理只读，父代理统一修改。
+- 子代理结果包含 findings、证据、checks、耗时和失败原因；部分成功会标记为 degraded/blocked，并可在运行历史中查看协作树。
+- 安装包：`tangbao-1.1.1-setup.exe`。权限模式共 6 档：`plan / default / acceptEdits / auto / bypass / sandbox`。
 
 ## License
 

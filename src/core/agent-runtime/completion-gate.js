@@ -158,8 +158,11 @@ function completionGap(wsState, todos, options) {
   const errors = Array.isArray(ws.unresolvedErrors) ? ws.unresolvedErrors : [];
   if (errors.length) gaps.push('存在未解决的错误：' + errors.map((error) => error.message || String(error)).slice(0, 2).join('；'));
   const childRuns = Array.isArray(ws.subagents) ? ws.subagents : [];
-  const activeChildren = childRuns.filter((child) => child && (child.status === 'pending' || child.status === 'running'));
+  const activeChildren = childRuns.filter((child) => child && (child.status === 'pending' || child.status === 'queued' || child.status === 'running'));
   const failedChildren = childRuns.filter((child) => child && child.status === 'failed');
+  const cancelledChildren = childRuns.filter((child) => child && child.status === 'cancelled');
+  if (cancelledChildren.length) gaps.push('有 ' + cancelledChildren.length + ' 个子任务已取消，需由父任务确认降级结果');
+  if (ws.subagentSummary && (ws.subagentSummary.status === 'degraded' || ws.subagentSummary.status === 'blocked')) gaps.push('子代理协作处于 ' + ws.subagentSummary.status + ' 状态，不能直接宣告父任务完全完成');
   if (activeChildren.length) gaps.push('仍有 ' + activeChildren.length + ' 个子任务尚未结束');
   if (failedChildren.length) gaps.push('有 ' + failedChildren.length + ' 个子任务失败，需处理或明确取消');
 

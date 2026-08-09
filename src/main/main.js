@@ -780,6 +780,14 @@ safeHandle('agent:runEvents', async (_e, runId) => {
   }
 });
 
+safeHandle('agent:runTree', async (_e, rootRunId) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || typeof svc.listAgentRunTree !== 'function') return { ok: false, reason: 'no-sqlite', tree: null };
+    return { ok: true, tree: svc.listAgentRunTree(rootRunId) };
+  } catch (err) { return { ok: false, reason: 'list-agent-run-tree-error', tree: null, error: err && err.message ? err.message : String(err) }; }
+});
+
 safeHandle('agent:exportRun', async (_e, runId) => {
   try {
     const svc = getStorageService();
@@ -1727,7 +1735,7 @@ if (!gotLock) {
     gateway.configure({ getSecret: secrets.getSecret });
     loadWorkspaces(); // M7（#253）：启动即恢复工作区注册表，使持久化的 workspaceId 仍有效
     // v1.1.0（M1）：给糖码后端注入 Agent Run 持久化存储（lazy 代理，storage 就绪后生效；不可用则静默降级为无持久化模式）
-    const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'getAgentRun', 'appendAgentEvent', 'listAgentEvents', 'upsertWorkingState', 'getWorkingState', 'saveAgentCheckpoint', 'getCheckpoint', 'listCheckpoints', 'saveContextSummary', 'getLatestContextSummary', 'saveChangeset', 'listChangesets'];
+const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'getAgentRun', 'listAgentRunTree', 'appendAgentEvent', 'listAgentEvents', 'upsertWorkingState', 'getWorkingState', 'saveAgentCheckpoint', 'getCheckpoint', 'listCheckpoints', 'saveContextSummary', 'getLatestContextSummary', 'saveChangeset', 'listChangesets'];
     const runStoreProxy = {};
     runStoreMethods.forEach((m) => {
       runStoreProxy[m] = (...a) => {

@@ -26,6 +26,7 @@ const ChangeTransaction = require('../../core/agent-runtime/change-transaction')
 const WorkspaceRoots = require('../../core/workspace/workspace-roots');
 const RepoIndex = require('../workspace/repo-index');
 const SubagentManager = require('../../core/agent-runtime/subagent-manager');
+const SubagentContract = require('../../core/agent-runtime/subagent-contract');
 const SkillPackage = require('../../core/skills/skill-package');
 const SkillRegistry = require('../../core/skills/skill-registry');
 const SkillSecurity = require('../../core/skills/skill-security');
@@ -258,8 +259,8 @@ const TOOLS = [
       type: { type: 'string', enum: ['explore', 'test', 'review'], description: '子代理类型' },
       goal: { type: 'string', description: '调查/测试/审查目标（中文）' },
       context: { type: 'string', description: '可选上下文（相关文件路径/已知信息）' },
-      parallel: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: ['explore', 'test', 'review'] }, goal: { type: 'string' }, context: { type: 'string' } }, required: ['type', 'goal'] }, description: '并发执行的多个子代理任务' },
-    }, required: ['type', 'goal'] },
+      parallel: { type: 'array', maxItems: 8, items: { type: 'object', properties: { type: { type: 'string', enum: ['explore', 'test', 'review'] }, goal: { type: 'string' }, context: { type: 'string' } }, required: ['type', 'goal'] }, description: '并发执行的多个子代理任务（最多 8 个；可单独传 parallel，不必同时提供 type/goal）' },
+    } },
   } },
   { type: 'function', function: {
     name: 'todo_write',
@@ -444,18 +445,8 @@ function readBody(req) {
 // 工作目录自身若是符号链接（网盘/链接路径），先归一为真实根再比较，避免误拒。
 function safePath(p, cwd) {
   if (typeof p !== 'string' || !p.trim()) return null;
-  const rootRaw = path.resolve(cwd);
-  let root = rootRaw;
-  try { root = fs.realpathSync(rootRaw); } catch (_) {}
-  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
-  const rel = path.relative(root, abs);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  try {
-    const real = fs.realpathSync(abs);
-    const realRel = path.relative(root, real);
-    if (realRel.startsWith('..') || path.isAbsolute(realRel)) return null;
-  } catch (_) { /* 文件/目录不存在：新建场景，词法校验已通过 */ }
-  return abs;
+  // ChangeTransaction.resolveInside 统一执行 fs.realpathSync 校验，并比较 realRel。
+  try { return ChangeTransaction.resolveInside(cwd, p); } catch (_) { return null; }
 }
 
 function truncate(s) {
@@ -1232,6 +1223,8 @@ function subagentTypePrompt(type) {
   }[type] || '你是一个子代理，完成给定目标，禁止修改文件。';
 }
 
+const SUBAGENT_RESULT_INSTRUCTION = '最终回答必须是 JSON 对象，字段必须包含 ok、summary、findings、checks、steps、toolsUsed、durationMs、error；findings 中给出 path/startLine/endLine/detail 证据，checks 的 status 只能是 passed、failed 或 skipped。不要输出 JSON 以外的说明。';
+
 // 按名称从 TOOLS 里取工具定义（子代理白名单）
 function toolDef(name) {
   const t = TOOLS.find((x) => x.function && x.function.name === name);
@@ -1243,64 +1236,125 @@ async function runSubagent(cfg, ctx) {
   // cfg: {type, goal, context}  ctx: {cwd, emit, runId, llm, planMode}
   const type = cfg.type;
   const tools = SUBAGENT_TOOLS[type] || [];
-  if (!tools.length) return { ok: false, summary: '未知子代理类型：' + type, steps: 0, toolsUsed: 0 };
-  if (ctx.planMode && type !== 'explore') return { ok: false, summary: 'Plan 模式下仅允许 explore 子代理', steps: 0, toolsUsed: 0 };
+  if (!tools.length) return SubagentContract.normalize({ ok: false, summary: '未知子代理类型：' + type, error: { code: 'invalid_role', message: '未知子代理类型：' + type, retryable: false } });
+  if (ctx.planMode && type !== 'explore') return SubagentContract.normalize({ ok: false, summary: 'Plan 模式下仅允许 explore 子代理', error: { code: 'plan_mode_role_denied', message: 'Plan 模式下仅允许 explore 子代理', retryable: false } });
   let child;
+  let shouldQueue = false;
   try {
     child = subagentManager.add({ id: cfg.subId, type, goal: cfg.goal, parentRunId: ctx.runId, budget: { maxSteps: SUBAGENT_MAX_STEPS[type] || 6 } }, { id: ctx.runId, depth: Number(ctx.depth) || 0 });
-    subagentManager.start(child.id);
+    shouldQueue = subagentManager.isAtCapacity();
   } catch (e) {
-    return { ok: false, summary: e.message, steps: 0, toolsUsed: 0, errorCode: e.code || 'subagent_rejected' };
+    return SubagentContract.normalize({ ok: false, summary: e.message, error: { code: e.code || 'subagent_rejected', message: e.message, retryable: false } });
   }
   const subId = child.id;
   if (ctx.runStore && typeof ctx.runStore.createAgentRun === 'function') {
     try {
-      ctx.runStore.createAgentRun({ id: subId, threadId: ctx.threadId, workspaceId: ctx.workspaceId, cwd: ctx.cwd, workspaceSnapshot: ctx.workspace || null, workspaceFingerprint: ctx.workspace && ctx.workspace.fingerprint ? ctx.workspace.fingerprint : '', primaryRootId: ctx.workspace && ctx.workspace.primaryRootId ? ctx.workspace.primaryRootId : '', userGoal: child.goal, status: 'running', phase: 'exploring', modelId: ctx.model, providerRef: ctx.providerRef, parentRunId: ctx.runId, role: type, depth: child.depth, readOnly: true, budget: child.budget, startedAt: child.startedAt });
+      ctx.runStore.createAgentRun({ id: subId, threadId: ctx.threadId, workspaceId: ctx.workspaceId, cwd: ctx.cwd, workspaceSnapshot: ctx.workspace || null, workspaceFingerprint: ctx.workspace && ctx.workspace.fingerprint ? ctx.workspace.fingerprint : '', primaryRootId: ctx.workspace && ctx.workspace.primaryRootId ? ctx.workspace.primaryRootId : '', userGoal: child.goal, status: shouldQueue ? 'queued' : 'running', phase: 'exploring', modelId: ctx.model, providerRef: ctx.providerRef, parentRunId: ctx.runId, role: type, depth: child.depth, readOnly: true, budget: child.budget, startedAt: shouldQueue ? child.createdAt : child.startedAt, rootRunId: ctx.rootRunId || ctx.runId });
       ctx.runStore.upsertWorkingState(subId, { goal: child.goal, plan: [], completedWork: [], pendingWork: [], blockedWork: [], filesRead: [], filesChanged: [], commandsRun: [], checks: [], decisions: [], unresolvedErrors: [] });
     } catch (e) { console.warn('[subagent] createAgentRun/upsertWorkingState 失败：', e && e.message ? e.message : e); }
   }
   const childEmit = (eventType, payload) => {
-    ctx.emit(eventType, payload);
-    if (ctx.runStore && typeof ctx.runStore.appendAgentEvent === 'function') { try { ctx.runStore.appendAgentEvent(subId, eventType, payload || {}); } catch (e) { console.warn('[subagent] appendAgentEvent 失败：', e && e.message ? e.message : e); } }
+    const eventPayload = Object.assign({}, payload || {});
+    if (eventPayload.type && eventPayload.type !== eventType) { eventPayload.role = eventPayload.type; delete eventPayload.type; }
+    ctx.emit(eventType, eventPayload);
+    if (ctx.runStore && typeof ctx.runStore.appendAgentEvent === 'function') { try { ctx.runStore.appendAgentEvent(subId, eventType, eventPayload); } catch (e) { console.warn('[subagent] appendAgentEvent 失败：', e && e.message ? e.message : e); } }
   };
-  childEmit('subagent_start', { subId, parentRunId: ctx.runId, type, goal: String(cfg.goal || '').slice(0, 200), depth: child.depth, readOnly: true });
   if (ctx.parentWs) {
     ctx.parentWs.subagents = ctx.parentWs.subagents || [];
-    ctx.parentWs.subagents.push({ id: subId, role: type, goal: child.goal, status: 'running', depth: child.depth, readOnly: true, at: Date.now() });
+    ctx.parentWs.subagents.push({ id: subId, role: type, goal: child.goal, status: shouldQueue ? 'queued' : 'running', depth: child.depth, readOnly: true, at: Date.now() });
     persistWS({ ws: ctx.parentWs, runStore: ctx.runStore, runId: ctx.runId });
   }
   const updateParent = (status, result) => {
     if (!ctx.parentWs) return;
     const item = (ctx.parentWs.subagents || []).find((entry) => entry.id === subId);
-    if (item) { item.status = status; item.result = result ? String(result.summary || '').slice(0, 500) : ''; item.finishedAt = Date.now(); }
+    if (item) {
+      item.status = status;
+      item.summary = result ? String(result.summary || '').slice(0, 500) : '';
+      item.result = item.summary;
+      item.durationMs = result && Number(result.durationMs) ? Number(result.durationMs) : item.durationMs || 0;
+      item.steps = result && Number(result.steps) ? Number(result.steps) : item.steps || 0;
+      item.toolsUsed = result && Number(result.toolsUsed) ? Number(result.toolsUsed) : item.toolsUsed || 0;
+      item.errorCode = result && result.error ? String(result.error.code || '') : '';
+      if (['completed', 'failed', 'cancelled', 'degraded', 'blocked'].includes(status)) item.finishedAt = Date.now();
+    }
     persistWS({ ws: ctx.parentWs, runStore: ctx.runStore, runId: ctx.runId });
+  };
+  let queuedNotified = shouldQueue;
+  const notifyQueued = () => {
+    if (queuedNotified) return;
+    queuedNotified = true;
+    shouldQueue = true;
+    updateParent('queued', { summary: '' });
+    childEmit('subagent_queued', { subId, parentRunId: ctx.runId, type, goal: String(cfg.goal || '').slice(0, 200), depth: child.depth, readOnly: true, queuedAt: Date.now() });
+    if (ctx.runStore) { try { ctx.runStore.updateAgentRun(subId, { status: 'queued', phase: 'exploring' }); } catch (e) {} }
+  };
+  if (shouldQueue) childEmit('subagent_queued', { subId, parentRunId: ctx.runId, type, goal: String(cfg.goal || '').slice(0, 200), depth: child.depth, readOnly: true, queuedAt: Date.now() });
+  const started = await subagentManager.waitForStart(subId, () => !!(ctx.aborted && ctx.aborted()), notifyQueued);
+  if (!started) {
+    const cancelled = SubagentContract.normalize({ ok: false, summary: '父任务已取消', error: { code: 'parent_cancelled', message: '父任务已取消', retryable: false } });
+    updateParent('cancelled', cancelled);
+    childEmit('subagent_result', { subId, parentRunId: ctx.runId, type, status: 'cancelled', result: cancelled, ok: false, summary: cancelled.summary, steps: 0, toolsUsed: 0 });
+    if (ctx.runStore) { try { ctx.runStore.updateAgentRun(subId, { status: 'cancelled', phase: 'cancelled', error: cancelled.error && cancelled.error.message, finishedAt: Date.now() }); } catch (e) { console.warn('[subagent] updateAgentRun(cancelled) 失败：', e && e.message ? e.message : e); } }
+    return cancelled;
+  }
+  if (queuedNotified) updateParent('running', { summary: '' });
+  childEmit('subagent_start', { subId, parentRunId: ctx.runId, type, goal: String(cfg.goal || '').slice(0, 200), depth: child.depth, readOnly: true, startedAt: child.startedAt });
+  if (ctx.runStore && shouldQueue) { try { ctx.runStore.updateAgentRun(subId, { status: 'running', phase: 'exploring' }); } catch (e) {} }
+  const subagentStartedAt = Date.now();
+  const finishSubagent = (raw, forcedStatus) => {
+    let result = SubagentContract.normalize(raw, { steps, toolsUsed: toolCalls, durationMs: Date.now() - subagentStartedAt });
+    let status = forcedStatus || (result.ok ? 'completed' : 'failed');
+    if (ctx.aborted && ctx.aborted() && status !== 'cancelled') {
+      result = SubagentContract.normalize({ ok: false, summary: '父任务已取消', error: { code: 'parent_cancelled', message: '父任务已取消', retryable: false } }, { steps, toolsUsed: toolCalls, durationMs: Date.now() - subagentStartedAt });
+      status = 'cancelled';
+    }
+    subagentManager.finish(subId, result, status);
+    updateParent(status, result);
+    childEmit('subagent_result', { subId, parentRunId: ctx.runId, type, status, result, ok: result.ok, summary: result.summary.slice(0, 400), steps: result.steps, toolsUsed: result.toolsUsed });
+    if (ctx.runStore) {
+      try {
+        ctx.runStore.updateAgentRun(subId, {
+          status,
+          phase: status,
+          usage: { steps: result.steps, toolCalls: result.toolsUsed, durationMs: result.durationMs },
+          error: result.error ? (result.error.message || result.error.code) : '',
+          finishedAt: Date.now(),
+        });
+      } catch (e) { console.warn('[subagent] updateAgentRun(result) 失败：', e && e.message ? e.message : e); }
+    }
+    return result;
   };
   const messages = [{
     role: 'system',
     content: subagentTypePrompt(type) + '\n\n【子代理目标】' + String(cfg.goal || '') + (cfg.context ? '\n【上下文】' + String(cfg.context).slice(0, 1500) : ''),
   }];
+  messages.push({ role: 'system', content: SUBAGENT_RESULT_INSTRUCTION });
   const maxSteps = SUBAGENT_MAX_STEPS[type] || 6;
   const toolDefs = tools.map(toolDef).filter(Boolean);
   let steps = 0, toolCalls = 0, content = '';
   for (let i = 0; i <= maxSteps; i++) {
+    if (ctx.aborted && ctx.aborted()) return finishSubagent({ ok: false, summary: '父任务已取消', error: { code: 'parent_cancelled', message: '父任务已取消', retryable: false } }, 'cancelled');
     if (i === maxSteps) {
       // 步数耗尽：追加一次强制总结（tools 为空）
       messages.push({ role: 'user', content: '请基于以上调查结果，直接给出最终结构化结论（中文），不要再调用工具。' });
-      const r2 = await callLLMStream(Object.assign({}, ctx.llm, { messages, tools: [] })).catch((e) => ({ content: '', reasoning: '', toolCalls: null, error: String(e.message || e) }));
-      content = r2.content || r2.reasoning || (r2.error ? '（子代理总结失败：' + r2.error + '）' : '');
+      let r2;
+      try {
+        r2 = await callLLMStream(Object.assign({}, ctx.llm, { messages, tools: [], signal: ctx.signal || null }));
+      } catch (e) {
+        return finishSubagent({ ok: false, summary: '子代理总结失败：' + String(e.message || e), error: { code: 'subagent_llm_error', message: String(e.message || e), retryable: true } });
+      }
+      if (r2 && r2.error && !r2.content && !r2.reasoning) {
+        return finishSubagent({ ok: false, summary: '子代理总结失败：' + String(r2.error), error: { code: 'subagent_llm_error', message: String(r2.error), retryable: true } });
+      }
+      content = r2.content || r2.reasoning || '';
       steps = maxSteps;
       break;
     }
     let r;
     try {
-      r = await callLLMStream(Object.assign({}, ctx.llm, { messages, tools: toolDefs }));
+      r = await callLLMStream(Object.assign({}, ctx.llm, { messages, tools: toolDefs, signal: ctx.signal || null }));
     } catch (e) {
-      const failed = { ok: false, summary: '子代理模型调用失败：' + String(e.message || e), steps, toolsUsed: toolCalls };
-      subagentManager.finish(subId, failed);
-      updateParent('failed', failed);
-      childEmit('subagent_result', { subId, parentRunId: ctx.runId, type, ok: false, summary: failed.summary, steps, toolsUsed: toolCalls });
-      if (ctx.runStore) { try { ctx.runStore.updateAgentRun(subId, { status: 'failed', phase: 'failed', error: failed.summary, finishedAt: Date.now() }); } catch (e) { console.warn('[subagent] updateAgentRun(failed) 失败：', e && e.message ? e.message : e); } }
-      return failed;
+      return finishSubagent({ ok: false, summary: '子代理模型调用失败：' + String(e.message || e), error: { code: 'subagent_llm_error', message: String(e.message || e), retryable: true } });
     }
     steps++;
     if (r.toolCalls && r.toolCalls.length) {
@@ -1311,9 +1365,7 @@ async function runSubagent(cfg, ctx) {
         // 子代理工具执行：继承父级权限策略（v2 权限大改⑤，去掉强制 auto:true——子代理受父级 permCtx 约束）；不污染父 WS
         if (ctx.aborted && ctx.aborted()) {
           subagentManager.cancel(subId, 'parent_cancelled');
-          updateParent('cancelled', { summary: '父任务已取消' });
-          if (ctx.runStore) { try { ctx.runStore.updateAgentRun(subId, { status: 'cancelled', phase: 'cancelled', error: '父任务已取消', finishedAt: Date.now() }); } catch (e) { console.warn('[subagent] updateAgentRun(cancelled) 失败：', e && e.message ? e.message : e); } }
-          return { ok: false, summary: '父任务已取消', steps, toolsUsed: toolCalls };
+          return finishSubagent({ ok: false, summary: '父任务已取消', error: { code: 'parent_cancelled', message: '父任务已取消', retryable: false } }, 'cancelled');
         }
         const result = await runTool(tc.name, args, ctx.cwd, childEmit, subId, true, () => !!(ctx.aborted && ctx.aborted()), {
           allowedTools: child.allowedTools, callId: tc.id, llm: ctx.llm, auto: ctx.permCtx ? (ctx.permCtx.mode !== 'default' && ctx.permCtx.mode !== 'acceptEdits') : true,
@@ -1330,20 +1382,9 @@ async function runSubagent(cfg, ctx) {
   const trimmed = String(content || '').trim();
   // B7（P3）：子代理未产出任何内容 → 判失败（父层不应误信空结果）
   if (!trimmed) {
-    const failed = { ok: false, summary: '子代理未返回内容（可能模型输出异常）', steps, toolsUsed: toolCalls, errorCode: 'subagent_empty_result' };
-    subagentManager.finish(subId, failed);
-    updateParent('failed', failed);
-    childEmit('subagent_result', { subId, parentRunId: ctx.runId, type, ok: false, summary: failed.summary, steps, toolsUsed: toolCalls });
-    if (ctx.runStore) { try { ctx.runStore.updateAgentRun(subId, { status: 'failed', phase: 'failed', error: failed.summary, finishedAt: Date.now() }); } catch (e) { console.warn('[subagent] updateAgentRun(empty) 失败：', e && e.message ? e.message : e); } }
-    return failed;
+    return finishSubagent({ ok: false, summary: '子代理未返回内容（可能模型输出异常）', error: { code: 'subagent_empty_result', message: '子代理未返回内容（可能模型输出异常）', retryable: true } });
   }
-  const summary = trimmed.slice(0, 2500);
-  const result = { ok: true, summary, steps, toolsUsed: toolCalls };
-  subagentManager.finish(subId, result);
-  updateParent('completed', result);
-  childEmit('subagent_result', { subId, parentRunId: ctx.runId, type, ok: true, summary: summary.slice(0, 400), steps, toolsUsed: toolCalls });
-  if (ctx.runStore) { try { ctx.runStore.updateAgentRun(subId, { status: 'completed', phase: 'completed', usage: { steps, toolCalls }, finishedAt: Date.now() }); } catch (e) { console.warn('[subagent] updateAgentRun(completed) 失败：', e && e.message ? e.message : e); } }
-  return result;
+  return finishSubagent(trimmed);
 }
 
 // 发出审批请求并等待前端响应；返回 true=批准 / false=拒绝 / 'timeout'=等待超时。
@@ -1438,9 +1479,9 @@ function recordDenial(opts, action, detail, result) {
 }
 
 // 在 cwd 内执行一条 shell 命令，返回合并后的输出（已截断）
-function execShell(command, cwd) {
+function execShell(command, cwd, signal) {
   return new Promise((resolve) => {
-    exec(command, { cwd, maxBuffer: 8 * 1024 * 1024, timeout: CMD_TIMEOUT }, (err, stdout, stderr) => {
+    exec(command, { cwd, maxBuffer: 8 * 1024 * 1024, timeout: CMD_TIMEOUT, signal: signal || undefined }, (err, stdout, stderr) => {
       let out = '';
       if (stdout) out += stdout;
       if (stderr) out += (out ? '\n[stderr]\n' : '') + stderr;
@@ -1650,6 +1691,31 @@ function persistWS(opts) {
   }
 }
 
+// Checkpoint only stores data, not live child processes. Requeue children that
+// were interrupted so the resumed parent must explicitly schedule them again.
+function recoverSubagentWorkingState(ws) {
+  if (!ws || !Array.isArray(ws.subagents)) return false;
+  let changed = false;
+  ws.subagents = ws.subagents.map((item) => {
+    if (!item || !['queued', 'running'].includes(item.status)) return item;
+    changed = true;
+    return Object.assign({}, item, {
+      status: 'pending',
+      summary: '上次运行在子任务执行期间中断，待重新调度',
+      errorCode: 'checkpoint_recovered',
+      recoveredAt: Date.now(),
+    });
+  });
+  if (changed && ws.subagentSummary && ['queued', 'running'].includes(ws.subagentSummary.status)) {
+    ws.subagentSummary = Object.assign({}, ws.subagentSummary, {
+      status: 'degraded',
+      summary: '上次运行中的子任务已恢复为 pending，需重新调度后才能完成父任务',
+      recoveredAt: Date.now(),
+    });
+  }
+  return changed;
+}
+
 // v1.1.0（M3）：写操作前保存 ChangeSet 快照（旧内容 → file-repo changesets + sqlite 索引，供回滚）
 function snapshotChangeset(opts, relPath, oldContent, runId, meta) {
   if (!opts || !opts.runStore || !opts.runStore.storeArtifact || !opts.runStore.saveChangeset) return;
@@ -1809,7 +1875,8 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
           data: { sessionId, status: 'running', initialOutput: sess.logs.slice(-2000), outputRef: 'session://' + sessionId },
         };
       }
-      const sh = await execShell(command, cwd);
+      const sh = await execShell(command, cwd, opts.signal);
+      if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
       const isVerificationCommand = /(test|lint|typecheck|\btsc\b|node\s+--check|npm\s+run\s+build|pnpm\s+build|yarn\s+build|\bmake\b)/i.test(command);
       if (opts.ws && isVerificationCommand) {
         applyVerificationResult(opts.ws, {
@@ -1875,7 +1942,8 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
         opts.ws.commandsRun.push({ cmd: command.slice(0, 200), rootId, at: Date.now() });
         persistWS(opts);
       }
-      const sh = await execShell(command, cwd);
+      const sh = await execShell(command, cwd, opts.signal);
+      if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
       return { ok: sh.code === 0, summary: sh.text, exitCode: sh.code };
     }
     // v1.1.0（M3）：Git 专用工具（结构化只读，审批沿用 git_command 白名单策略）
@@ -1913,7 +1981,8 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
         opts.ws.commandsRun.push({ cmd: command.slice(0, 200), rootId, at: Date.now() });
         persistWS(opts);
       }
-      const sh = await execShell(command, cwd);
+      const sh = await execShell(command, cwd, opts.signal);
+      if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
       return { ok: sh.code === 0, summary: (label + '：\n' + sh.text), exitCode: sh.code, data: { kind: name } };
     }
     if (name === 'get_repo_map') {
@@ -1957,11 +2026,22 @@ ${map.importantFiles.slice(0, 20).map((f) => f.path + ' (' + f.lines + ' 行)').
         }
       }
       if (!tasks.length) return { ok: false, error: { code: 'bad_request', message: '没有可执行的子代理任务', retryable: false } };
-      const subCtx = { cwd, emit, runId, llm: opts.llm, planMode: !!opts.planMode, permCtx: opts.permCtx, runStore: opts.runStore, parentWs: opts.ws, threadId: opts.threadId, workspaceId: opts.workspaceId, providerRef: opts.providerRef, model: opts.llm.model, depth: Number(opts.depth) || 0, aborted, workspace, rootId, allowedRootIds: opts.allowedRootIds || [] }; // 子任务继承父配置但保持只读
-      const results = await Promise.all(tasks.map((task) => runSubagent(task, subCtx)));
-      const okAll = results.every((r) => r.ok);
-      const summary = '子代理完成：' + results.map((r) => (r.ok ? '✓' : '✗') + ' ' + String(r.summary).slice(0, 80)).join(' | ').slice(0, 1000);
-      return { ok: okAll, summary: truncate(summary), data: { results } };
+      const subCtx = { cwd, emit, runId, rootRunId: opts.rootRunId || runId, llm: opts.llm, signal: opts.signal || null, planMode: !!opts.planMode, permCtx: opts.permCtx, runStore: opts.runStore, parentWs: opts.ws, threadId: opts.threadId, workspaceId: opts.workspaceId, providerRef: opts.providerRef, model: opts.llm.model, depth: Number(opts.depth) || 0, aborted, workspace, rootId, allowedRootIds: opts.allowedRootIds || [] }; // 子任务继承父配置但保持只读
+      const cancelWatch = setInterval(() => { if (aborted()) subagentManager.cancelByParent(runId, 'parent_cancelled'); }, 100);
+      cancelWatch.unref?.();
+      let results;
+      try { results = await Promise.all(tasks.map((task) => runSubagent(task, subCtx))); }
+      finally { clearInterval(cancelWatch); }
+      const aggregate = SubagentContract.aggregate(results);
+      const status = aggregate.status === 'degraded' ? 'degraded' : (aggregate.status === 'failed' ? 'blocked' : 'completed');
+      if (opts.ws) {
+        opts.ws.subagentSummary = { status, summary: aggregate.summary, failed: aggregate.failures.length, completed: aggregate.results.filter((item) => item.ok).length, at: Date.now() };
+        opts.ws.blockedWork = Array.isArray(opts.ws.blockedWork) ? opts.ws.blockedWork.filter((item) => item && item.code !== 'subagent_degraded') : [];
+        if (status !== 'completed') opts.ws.blockedWork.push({ code: 'subagent_degraded', status, summary: aggregate.summary, failures: aggregate.failures.length, at: Date.now() });
+        persistWS(opts);
+      }
+      emit('subagent_summary', { parentRunId: runId, status, aggregate });
+      return { ok: aggregate.ok, summary: truncate(aggregate.summary), data: { results: aggregate.results, aggregate } };
     }
     if (name === 'detect_verification') {
       const profile = await detectVerificationProfile(cwd);
@@ -2017,7 +2097,8 @@ ${map.importantFiles.slice(0, 20).map((f) => f.path + ' (' + f.lines + ' 行)').
           const deniedA = denyWithRecord(opts, okA, '验证命令', name + ' ' + cmd);
           if (deniedA) return deniedA;
         }
-        const sh = await execShell(cmd, cwd);
+        const sh = await execShell(cmd, cwd, opts.signal);
+        if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
         results.push({ command: cmd, ok: sh.code === 0, exitCode: sh.code, output: sh.text.slice(0, 3000) });
         if (sh.code !== 0) allOk = false;
       }
@@ -2690,8 +2771,19 @@ async function walk(dir, cb, limit) {
   await rec(dir);
 }
 
+function linkAbortSignal(controller, signal) {
+  if (!signal) return () => {};
+  const abort = () => {
+    try { controller.abort(signal.reason || new Error('运行已取消')); }
+    catch (_) { try { controller.abort(); } catch (e) {} }
+  };
+  if (signal.aborted) abort();
+  else signal.addEventListener('abort', abort, { once: true });
+  return () => signal.removeEventListener('abort', abort);
+}
+
 // 调用 LLM（OpenAI 兼容，流式），返回 { content, toolCalls: [{id,name,arguments}] }
-async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType, tools, promptCaching }) {
+async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType, tools, promptCaching, signal }) {
   // v4：官方 Responses / Anthropic / Gemini 均走供应商原生流式；自定义中转继续保持 OpenAI Chat 路径。
   const adapter = detectAdapter(model, apiBase);
   const useCaching = promptCaching !== false && cap.promptCachingMode && cap.promptCachingMode(model, apiBase) !== 'off';
@@ -2699,6 +2791,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
     const req = buildRequest(adapter, { apiBase, apiKey, model, messages, tools: tools || TOOLS, stream: true, promptCaching: useCaching });
     // v1.1.0（修复 M4）：连接超时 30s + 流式空闲超时 120s，避免模型假死把整次 run 拖到总步数上限
     const streamController = new AbortController();
+    const unlinkAbort = linkAbortSignal(streamController, signal);
     const connectTimer = setTimeout(() => { try { streamController.abort(new Error('LLM 连接超时（30 秒内未建立响应）')); } catch (_) {} }, 30000);
     let idleTimer = null;
     const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { streamController.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, 120000); };
@@ -2706,12 +2799,12 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
     try {
       res = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: streamController.signal });
     } catch (e) {
-      clearTimeout(connectTimer); if (idleTimer) clearTimeout(idleTimer);
+      clearTimeout(connectTimer); if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
       throw new Error('LLM 请求失败（' + adapter + '）：' + (e && e.message ? e.message : String(e)));
     }
     clearTimeout(connectTimer); resetIdle();
     if (!res.ok) {
-      if (idleTimer) clearTimeout(idleTimer);
+      if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
       const txt = await res.text().catch(() => '');
       throw new Error('LLM 请求失败（' + adapter + ', ' + res.status + '）：' + txt.slice(0, 240));
     }
@@ -2736,18 +2829,22 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
       }
       if (event.usage) adapterUsage = Object.assign(adapterUsage, event.usage);
     };
-    while (true) {
-      const chunk = await reader.read();
-      resetIdle();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
-      for (const line of lines) if (line.trim().startsWith('data:')) consume(line);
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        resetIdle();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        for (const line of lines) if (line.trim().startsWith('data:')) consume(line);
+      }
+      if (buffer.trim()) consume(buffer);
+      return { content, reasoning, toolCalls: Array.from(calls.values()), adapterUsage };
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      unlinkAbort();
     }
-    if (idleTimer) clearTimeout(idleTimer);
-    if (buffer.trim()) consume(buffer);
-    return { content, reasoning, toolCalls: Array.from(calls.values()), adapterUsage };
   }
   const base = String(apiBase || '').replace(/\/+$/, '');
   const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
@@ -2758,6 +2855,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   const sup = thinkType || (cap.thinkSupport(model) || 'none');
   Object.assign(payload, cap.buildThinkParamWithSup(sup, thinkLevel, model));
   const controller = new AbortController();
+  const unlinkAbort = linkAbortSignal(controller, signal);
   // v1.1.0（修复 M4）：连接超时 30s + 流式空闲超时 120s
   const connectTimer = setTimeout(() => { try { controller.abort(new Error('LLM 连接超时（30 秒内未建立响应）')); } catch (_) {} }, 30000);
   let idleTimer = null;
@@ -2771,12 +2869,12 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
       signal: controller.signal,
     });
   } catch (e) {
-    clearTimeout(connectTimer); if (idleTimer) clearTimeout(idleTimer);
+    clearTimeout(connectTimer); if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
     throw new Error('LLM 请求失败：' + (e && e.message ? e.message : String(e)));
   }
   clearTimeout(connectTimer); resetIdle();
   if (!res.ok) {
-    if (idleTimer) clearTimeout(idleTimer);
+    if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
     const txt = await res.text().catch(() => '');
     throw new Error(`LLM 请求失败（${res.status}）：${txt.slice(0, 240)}`);
   }
@@ -2786,37 +2884,41 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   let content = '';
   let reasoning = ''; // 思考通道（reasoning_content）：原生推理模型可能把答案放这里
   const toolCalls = []; // {index,id,name,arguments}
-  while (true) {
-    const { done, value } = await reader.read();
-    resetIdle();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const parts = buf.split('\n');
-    buf = parts.pop();
-    for (const line of parts) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const data = t.slice(5).trim();
-      if (data === '[DONE]') continue;
-      let json;
-      try { json = JSON.parse(data); } catch (e) { continue; }
-      const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
-      if (delta.content) content += delta.content;
-      if (delta.reasoning_content) reasoning += delta.reasoning_content;
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const i = tc.index != null ? tc.index : (toolCalls.length ? toolCalls.length - 1 : 0);
-          if (!toolCalls[i]) toolCalls[i] = { index: i, id: '', name: '', arguments: '' };
-          if (tc.id) toolCalls[i].id = tc.id;
-          if (tc.function && tc.function.name) toolCalls[i].name = tc.function.name;
-          if (tc.function && tc.function.arguments) toolCalls[i].arguments += tc.function.arguments;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      resetIdle();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n');
+      buf = parts.pop();
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t.startsWith('data:')) continue;
+        const data = t.slice(5).trim();
+        if (data === '[DONE]') continue;
+        let json;
+        try { json = JSON.parse(data); } catch (e) { continue; }
+        const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
+        if (delta.content) content += delta.content;
+        if (delta.reasoning_content) reasoning += delta.reasoning_content;
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const i = tc.index != null ? tc.index : (toolCalls.length ? toolCalls.length - 1 : 0);
+            if (!toolCalls[i]) toolCalls[i] = { index: i, id: '', name: '', arguments: '' };
+            if (tc.id) toolCalls[i].id = tc.id;
+            if (tc.function && tc.function.name) toolCalls[i].name = tc.function.name;
+            if (tc.function && tc.function.arguments) toolCalls[i].arguments += tc.function.arguments;
+          }
         }
       }
     }
+    const clean = toolCalls.filter(Boolean).map((t) => ({ id: t.id || ('call_' + t.index), name: t.name, arguments: t.arguments }));
+    return { content, reasoning, toolCalls: clean };
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    unlinkAbort();
   }
-  if (idleTimer) clearTimeout(idleTimer);
-  const clean = toolCalls.filter(Boolean).map((t) => ({ id: t.id || ('call_' + t.index), name: t.name, arguments: t.arguments }));
-  return { content, reasoning, toolCalls: clean };
 }
 
 function handleAgent(req, res, body) {
@@ -2980,7 +3082,7 @@ function handleAgent(req, res, body) {
   });
 
   const emitRaw = (type, data) => {
-    try { res.write('data: ' + JSON.stringify(Object.assign({ type }, data || {})) + '\n\n'); } catch (e) {}
+    try { res.write('data: ' + JSON.stringify(Object.assign({}, data || {}, { type })) + '\n\n'); } catch (e) {}
   };
   // 每个事件同步持久化，并保留真实最大序号供 Summary/Checkpoint 覆盖范围使用。
   let lastEventSeq = 0;
@@ -3085,6 +3187,7 @@ function handleAgent(req, res, body) {
           const ck = runStore.getCheckpoint(sourceRunId);
           if (ck && ck.state) {
             ws = ck.state.workingState || ck.state;
+            recoverSubagentWorkingState(ws);
             resumeFromCheckpoint = true;
           }
         }
@@ -3285,7 +3388,7 @@ function handleAgent(req, res, body) {
       }
       let r;
       try {
-        r = await callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType });
+        r = await callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType, signal: runAbort.signal });
       } catch (e) {
         emit('error', terminalPayload({ message: String(e.message || e) }));
         if (runStore) { try { runStore.updateAgentRun(runId, { status: 'failed', phase: 'failed', usage, error: String(e.message || e).slice(0, 500), finishedAt: Date.now() }); } catch (e2) {} }
@@ -3410,7 +3513,7 @@ function handleAgent(req, res, body) {
             searchApiKey, approveTools, cmdWhitelist, callId: tc.id, todos, planMode: runPlanMode,
             signal: runAbort.signal, // v2（脚本隔离）：透传取消信号，SkillRunner 终止整个进程树
             ws: wsState, usage, runStore, runId, phase: getPhase, setPhase, workspace, // 透传显式状态机供审批暂停/恢复
-            threadId: String(body.threadId || ''), workspaceId: String(body.workspaceId || ''), providerRef: ref, depth: 0, workspaceSnapshot: workspace, workspaceFingerprint: workspace && workspace.fingerprint ? workspace.fingerprint : '', primaryRootId: workspace && workspace.primaryRootId ? workspace.primaryRootId : '', workspace, rootScope, allowedRootIds,
+            threadId: String(body.threadId || ''), workspaceId: String(body.workspaceId || ''), providerRef: ref, depth: 0, rootRunId: resumeRootRunId || runId, workspaceSnapshot: workspace, workspaceFingerprint: workspace && workspace.fingerprint ? workspace.fingerprint : '', primaryRootId: workspace && workspace.primaryRootId ? workspace.primaryRootId : '', workspace, rootScope, allowedRootIds,
             permCtx, // v2（权限大改）：permissionMode + 两层规则
             // v1.1.0（M7）：透传 LLM 配置供 run_subagent 起子循环（父子同模型）
             llm: { apiBase, apiKey, model, thinkLevel, thinkType },

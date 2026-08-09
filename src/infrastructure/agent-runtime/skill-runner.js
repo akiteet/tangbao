@@ -24,11 +24,43 @@ function interpreter(scriptPath, options) {
   throw Object.assign(new Error('不支持的 Skill 脚本类型'), { code: 'unsupported_script' });
 }
 
+function hasExited(child) { return !child || child.exitCode !== null || child.signalCode !== null; }
+
+function waitForExit(child, timeoutMs) {
+  if (hasExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(hasExited(child)), timeoutMs);
+    timer.unref?.();
+    child.once('close', onExit);
+    child.once('exit', onExit);
+    if (hasExited(child)) finish(true);
+  });
+}
+
 async function terminateTree(child) {
-  if (!child || child.killed) return;
+  if (hasExited(child)) return true;
   if (process.platform === 'win32') {
-    await new Promise((resolve) => { const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, shell: false, stdio: 'ignore' }); killer.on('close', resolve); killer.on('error', resolve); });
-  } else { try { process.kill(-child.pid, 'SIGTERM'); } catch (_) { try { child.kill('SIGTERM'); } catch (_) {} } }
+    await new Promise((resolve) => {
+      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, shell: false, stdio: 'ignore' });
+      killer.on('close', resolve);
+      killer.on('error', resolve);
+    });
+    // taskkill may race with a child that is already exiting; use a bounded
+    // direct kill as a fallback for wrappers that do not expose the tree.
+    if (!hasExited(child)) { try { child.kill('SIGKILL'); } catch (_) {} }
+  } else {
+    try { process.kill(-child.pid, 'SIGTERM'); } catch (_) { try { child.kill('SIGTERM'); } catch (_) {} }
+    if (!await waitForExit(child, 500)) { try { process.kill(-child.pid, 'SIGKILL'); } catch (_) { try { child.kill('SIGKILL'); } catch (_) {} } }
+  }
+  return waitForExit(child, 2000);
 }
 
 async function run(input) {
@@ -48,13 +80,13 @@ async function run(input) {
       capture(child.stdout, 'stdout'); capture(child.stderr, 'stderr');
       const timer = setTimeout(async () => {
         timedOut = true;
-        await terminateTree(child);
+        const terminated = await terminateTree(child);
         // B3（P1）：进程树杀不掉时 child 'close' 可能永不触发 → Promise 悬挂、active 永不归还，后续全部命中并发上限。
         // 超时后强制 settle（finish 有 settled 守卫：若 close 先到则此处被忽略）。
         const output = Buffer.concat(chunks.map((item) => item.data)).toString('utf8');
-        finish({ ok: false, error: { code: 'skill_script_timeout', message: 'Skill 脚本运行超时', retryable: true }, output, truncated, isolation: isolationLevel(opts) });
+        finish({ ok: false, error: { code: 'skill_script_timeout', message: 'Skill 脚本运行超时', retryable: true }, output, truncated, terminated, isolation: isolationLevel(opts) });
       }, Math.max(1000, Number(opts.timeoutMs) || DEFAULTS.timeoutMs));
-      const onAbort = async () => { abortRequested = true; await terminateTree(child); finish({ ok: false, error: { code: 'skill_script_aborted', message: 'Skill 脚本已随运行取消', retryable: true }, isolation: isolationLevel(opts) }); };
+      const onAbort = async () => { abortRequested = true; const terminated = await terminateTree(child); finish({ ok: false, error: { code: 'skill_script_aborted', message: 'Skill 脚本已随运行取消', retryable: true }, terminated, isolation: isolationLevel(opts) }); };
       if (opts.signal) { if (opts.signal.aborted) return onAbort(); opts.signal.addEventListener('abort', onAbort, { once: true }); }
       child.on('error', (error) => finish({ ok: false, error: { code: 'skill_script_start_failed', message: error.message, retryable: true }, isolation: isolationLevel(opts) }));
       child.on('close', (code, signal) => {

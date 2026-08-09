@@ -184,6 +184,7 @@ function prepare() {
   stmt.updRun = db.prepare(
     'UPDATE agent_runs SET status=@status, phase=@phase, usage_json=@usage_json, error=@error, finished_at=@finished_at WHERE id=@id');
   stmt.listRuns = db.prepare('SELECT * FROM agent_runs WHERE thread_id=? ORDER BY started_at DESC LIMIT ? OFFSET ?');
+  stmt.listRunsByRoot = db.prepare('SELECT * FROM agent_runs WHERE root_run_id=? OR id=? ORDER BY depth ASC, started_at ASC');
   stmt.getRun = db.prepare('SELECT * FROM agent_runs WHERE id=?');
   stmt.insEvent = db.prepare(
     `INSERT INTO agent_run_events (id,run_id,seq,type,payload_json,created_at)
@@ -549,6 +550,22 @@ function getAgentRun(id) {
   };
 }
 
+function listAgentRunTree(rootRunId) {
+  try {
+    const requested = String(rootRunId || '');
+    const root = getAgentRun(requested);
+    if (!root) return null;
+    const actualRootId = root.rootRunId || root.id;
+    const runs = stmt.listRunsByRoot.all(actualRootId, actualRootId).map((row) => getAgentRun(row.id)).filter(Boolean);
+    const nodes = runs.map((run) => ({ run, events: listAgentEvents(run.id) }));
+    return {
+      rootRunId: actualRootId,
+      root: nodes.find((node) => node.run.id === actualRootId) || null,
+      children: nodes.filter((node) => node.run.id !== actualRootId),
+    };
+  } catch (_) { return null; }
+}
+
 function appendAgentEvent(runId, type, payload, seq) {
   const next = (seq != null) ? Number(seq) : ((stmt.maxEventSeq.get(String(runId || '')) || { m: 0 }).m + 1);
   stmt.insEvent.run({
@@ -713,7 +730,7 @@ const StorageService = {
   getKV, setKV, getAllKV, setKVMulti,
   clearAll, transaction,
   // v1.1.0（M1）：Agent Run 持久化
-  createAgentRun, updateAgentRun, listAgentRuns, getAgentRun,
+  createAgentRun, updateAgentRun, listAgentRuns, getAgentRun, listAgentRunTree,
   appendAgentEvent, listAgentEvents,
   upsertWorkingState, getWorkingState,
   saveAgentCheckpoint, getCheckpoint, listCheckpoints, exportAgentRun, saveContextSummary, getLatestContextSummary,

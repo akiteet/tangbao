@@ -17,10 +17,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      # 不装依赖：node --check / bench --list / 静态 smoke 均不需要 better-sqlite3
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Full test suite
+        run: npm test
+      # npm ci 已安装依赖；这些检查只验证语法、评测清单和静态运行时锚点。
       - name: Syntax check all JS
         run: |
-          find src scripts -name '*.js' 2>/dev/null | xargs -r -n1 node --check
+          find src test scripts -name '*.js' 2>/dev/null | xargs -r -n1 node --check
           node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('pkg JSON OK')"
       - name: Eval task set readable
         run: node scripts/bench.js --list
@@ -45,6 +50,21 @@ jobs:
             if (bad) process.exit(1);
             console.log('smoke OK (' + checks.length + ' anchors)');
           "
+
+  build:
+    name: Electron build check
+    runs-on: ubuntu-latest
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build unpacked Electron app
+        run: npm run dist -- --dir
 
   eval:
     name: Eval smoke (simple-001, skips without secrets)

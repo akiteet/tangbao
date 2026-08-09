@@ -12,3 +12,12 @@ _*.cjs
 _*.py
 __pycache__/
 *.pyc
+
+# Local evaluation output and temporary reports (kept locally, never committed)
+benchmarks/last-eval.json
+benchmarks/first-raw-eval.json
+benchmarks/compare-report.json
+benchmarks/traces/
+outputs/
+*.tmp
+*.report.json

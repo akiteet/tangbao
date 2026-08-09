@@ -114,6 +114,14 @@ test('运行历史顶部目标与统计分行完整显示', () => {
   assert.doesNotMatch(css, /\.wf-hist-goal\s*\{[^}]*text-overflow:\s*ellipsis/);
 });
 
+test('运行历史协作树按 parentRunId 递归嵌套子 Run', () => {
+  const agent = read('src/renderer/views/agent/agent.js');
+  assert.match(agent, /const byParent = new Map\(\)/);
+  assert.match(agent, /node\.run && node\.run\.parentRunId/);
+  assert.match(agent, /const renderNode = \(node\) =>/);
+  assert.match(agent, /agent-hist-tree-children/);
+});
+
 test('Agent Run 分页 offset 贯穿 renderer、preload、main 与 SQLite', () => {
   const service = read('src/application/services/fs.js');
   const preload = read('src/preload/preload.js');

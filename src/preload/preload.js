@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('electron', {
   // v1.1.0（M1）：糖码 Agent Run 历史（运行列表 / 事件轨迹 / 上下文摘要）
   listAgentRuns: (threadId, limit, offset) => ipcRenderer.invoke('agent:listRuns', threadId, limit, offset),
   listAgentEvents: (runId) => ipcRenderer.invoke('agent:runEvents', runId),
+  getAgentRunTree: (rootRunId) => ipcRenderer.invoke('agent:runTree', rootRunId),
   exportAgentRun: (runId) => ipcRenderer.invoke('agent:exportRun', runId),
   listAgentEvalTasks: () => ipcRenderer.invoke('agent:evalTasks'),
   runAgentEval: (payload) => ipcRenderer.invoke('agent:runEval', payload),

@@ -37,7 +37,7 @@ Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop work
 
 ## Installation
 
-- **Install the app**: download `tangbao-1.1.0-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
+- **Install the app**: download `tangbao-1.1.1-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
 - **Run from source**:
 
 ```bash
@@ -49,9 +49,11 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 > `npm run server` is only for standalone debugging of the Tangma backend; regular use does not need it.
 >
-> **Package**: `npm run dist` → `dist/tangbao-1.1.0-setup.exe`
+> **Package**: `npm run dist` → `dist/tangbao-1.1.1-setup.exe`
 
 ## Configuration
+
+v1.1.1 has six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
 
 Click the gear icon in the bottom-left → **Settings**:
 
@@ -64,7 +66,7 @@ Click the gear icon in the bottom-left → **Settings**:
 Tangma is a built-in local AI coding agent that follows a plan-first, tool-driven interaction paradigm, built for real project development:
 
 - **Plan mode** — explores read-only and produces a task list; asks you proactively when uncertain (question + options + custom input, single/multi-select); prompts a "plan approval" card on the first file write, then switches to execution mode automatically once approved.
-- **Permission system** — 5 permission levels (default / acceptEdits / auto / bypass / sandbox) plus project rules (always allow / always deny / command whitelist), with suggestions when an operation is denied.
+- **Permission system** — 6 permission levels (plan / default / acceptEdits / auto / bypass / sandbox) plus project rules (always allow / always deny / command whitelist), with suggestions when an operation is denied.
 - **Skills** — standard `SKILL.md` mechanism (compatible with `.claude/skills`, `.codex/skills` directories); import, enable/disable, and quarantine skills from the settings panel.
 - **Run history & recovery** — checkpoints every step; interrupted runs can be **precisely resumed** with automatic continuation; the history panel supports paged browsing and search.
 - **Context management** — automatically compacts long conversations while preserving plans, errors, and change records to avoid context overflow.
@@ -106,9 +108,15 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (307 cases covering runtime / storage / permissions / skills / UI contracts)
+- **Tests**: `npm test` (323 cases covering runtime / storage / permissions / skills / UI contracts)
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
+
+## v1.1.1
+
+- Parallel `explore / test / review` subagents support up to 8 tasks and 3 active workers; extra tasks are queued. Subagents are read-only and the parent owns all writes.
+- Results include findings, evidence, checks, duration, and failure reasons. Partial success is marked `degraded`/`blocked` and the collaboration tree is available in run history.
+- Installer: `tangbao-1.1.1-setup.exe`. There are six permission levels: `plan / default / acceptEdits / auto / bypass / sandbox`.
 
 ## License
 

@@ -18,6 +18,34 @@ test('B7：子代理空结果判失败（不误信 ok:true）', () => {
   assert.match(agentSrc, /子代理未返回内容/, '应有明确提示');
 });
 
+test('v1.1.1：子代理结果统一收尾并归入父 Run 协作树', () => {
+  assert.match(agentSrc, /const finishSubagent =/, '失败、取消和成功应共用收尾逻辑');
+  assert.match(agentSrc, /status, result, ok: result\.ok/, '结果事件应带最终状态与完整结果');
+  assert.match(agentSrc, /rootRunId: ctx\.rootRunId \|\| ctx\.runId/, '子 Run 应继承父 Run 根 ID');
+  assert.match(agentSrc, /appendAgentEvent\(subId, eventType, eventPayload\)/, '事件持久化应使用规范化 payload');
+});
+
+test('v1.1.1：run_subagent 工具 schema 允许 parallel-only 调用并限制 8 个任务', () => {
+  const start = agentSrc.indexOf("name: 'run_subagent'");
+  const segment = agentSrc.slice(start, agentSrc.indexOf("name: 'todo_write'", start));
+  assert.equal((segment.match(/required: \['type', 'goal'\]/g) || []).length, 1, '只有 parallel 子项需要 type/goal，顶层应允许 parallel-only');
+  assert.match(segment, /parallel: \{ type: 'array', maxItems: 8/, 'schema 应声明最多 8 个并行任务');
+});
+
+test('v1.1.1：父运行取消信号透传到主/子代理 LLM 与验证工具', () => {
+  assert.match(agentSrc, /signal: runAbort\.signal/);
+  assert.match(agentSrc, /signal: ctx\.signal \|\| null/);
+  assert.match(agentSrc, /linkAbortSignal\(streamController, signal\)/);
+  assert.match(agentSrc, /linkAbortSignal\(controller, signal\)/);
+  assert.match(agentSrc, /execShell\(cmd, cwd, opts\.signal\)/);
+});
+
+test('v1.1.1：Checkpoint 恢复会把中断中的子任务重新置为 pending', () => {
+  assert.match(agentSrc, /function recoverSubagentWorkingState\(ws\)/);
+  assert.match(agentSrc, /status: 'pending'/);
+  assert.match(agentSrc, /recoverSubagentWorkingState\(ws\)/);
+});
+
 test('B7：ZIP 条目按声明大小严格校验（不再 +1 越界容忍）', () => {
   const src = read('src/core/skills/skill-package.js');
   const i = src.indexOf('zip_entry_size_mismatch');

@@ -44,6 +44,9 @@
     listAgentEvents(runId) {
       try { return (window.electron && window.electron.listAgentEvents) ? window.electron.listAgentEvents(runId) : { ok: false, events: [] }; } catch (e) { return { ok: false, events: [] }; }
     },
+    getAgentRunTree(rootRunId) {
+      try { return (window.electron && window.electron.getAgentRunTree) ? window.electron.getAgentRunTree(rootRunId) : { ok: false, tree: null }; } catch (e) { return { ok: false, tree: null }; }
+    },
     exportAgentRun(runId) {
       try { return (window.electron && window.electron.exportAgentRun) ? window.electron.exportAgentRun(runId) : { ok: false }; } catch (e) { return { ok: false }; }
     },

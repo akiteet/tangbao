@@ -2109,6 +2109,19 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .agent-subagent .agent-subagent-goal { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px; word-break: break-word; }
 .agent-subagent.sub-ok { border-left-color: #1e8e3e; }
 .agent-subagent.sub-fail { border-left-color: #c62828; }
+.agent-subagent.sub-queued { border-left-color: #b8860b; }
+.agent-subagent-details { margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
+.agent-subagent-detail-title { font-weight: 600; margin-bottom: 5px; color: var(--text); }
+.agent-subagent-finding, .agent-subagent-check, .agent-subagent-error { margin-top: 5px; padding: 5px 7px; border-radius: 5px; background: var(--bg); overflow-wrap: anywhere; }
+.agent-subagent-finding code { display: inline-block; margin-top: 4px; color: var(--text-tertiary); }
+.agent-subagent-check.passed { color: #1e8e3e; }
+.agent-subagent-check.failed, .agent-subagent-error { color: #c62828; }
+.agent-subagent-check.skipped { color: #b06b00; }
+.agent-hist-tree { margin: 8px 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--hover-bg); }
+.agent-hist-tree-node { margin: 5px 0; padding: 4px 7px; border-left: 2px solid var(--primary); }
+.agent-hist-tree-node summary { cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
+.agent-hist-tree-events { padding: 5px 0 0 8px; }
+.agent-hist-ev.subagent { border-left-color: var(--primary); }
 
 /* ===== v1.1.0：模型/思考选择器移到输入框上方靠右 ===== */
 .agent-composer-tools { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 2px 2px 8px; }

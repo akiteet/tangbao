@@ -596,7 +596,7 @@
           if (res) App.agent.setToolResult(block, res.result, '完成');
           const diff = liveEvents.find(x => x.type === 'tool_diff' && x.id === ev.id);
           if (diff && diff.path) App.agent.applyToolDiff(ev.id, diff.path, []);
-        } else if (ev.type === 'subagent_start') {
+        } else if (ev.type === 'subagent_queued' || ev.type === 'subagent_start') {
           const sb = App.agent.newSubagentBlock(ev);
           ui.subagents.set(ev.subId, sb);
           const res = liveEvents.find(x => x.type === 'subagent_result' && x.subId === ev.subId);
@@ -1743,6 +1743,49 @@
           d.addEventListener('toggle', loadWhenOpen);
           loadWhenOpen();
         });
+        box.querySelectorAll('.wf-hist-detail').forEach((detail) => {
+          const item = detail.closest('.wf-hist-item');
+          const run = item ? list[Number(item.dataset.ri)] : null;
+          if (!run || run.parentRunId) return;
+          const treeButton = document.createElement('button');
+          treeButton.className = 'btn-ghost mini';
+          treeButton.textContent = '协作树';
+          treeButton.type = 'button';
+          const actions = detail.querySelector('.agent-hist-resume');
+          if (actions) actions.insertBefore(treeButton, actions.firstChild);
+          treeButton.addEventListener('click', async () => {
+            let holder = detail.querySelector('.agent-hist-tree');
+            if (!holder) { holder = document.createElement('div'); holder.className = 'agent-hist-tree'; detail.insertBefore(holder, detail.firstChild); }
+            holder.innerHTML = '<div class="wf-step-out">正在加载协作树…</div>';
+            try {
+              const response = await (App.services.storage.getAgentRunTree ? App.services.storage.getAgentRunTree(run.id) : null);
+              const tree = response && response.ok ? response.tree : null;
+              if (!tree) { holder.innerHTML = '<div class="wf-step-out">暂无协作树记录。</div>'; return; }
+              const nodes = [tree.root].concat(tree.children || []).filter(Boolean);
+              const byParent = new Map();
+              nodes.forEach((node) => {
+                const parentId = String(node.run && node.run.parentRunId || '');
+                if (!byParent.has(parentId)) byParent.set(parentId, []);
+                byParent.get(parentId).push(node);
+              });
+              const renderNode = (node) => {
+                const childRun = node.run || {};
+                const status = childRun.status || 'running';
+                const usage = childRun.usage || {};
+                const descendants = (byParent.get(String(childRun.id || '')) || []).map(renderNode).join('');
+                const role = childRun.parentRunId ? ({ explore: 'Explore', test: 'Test', review: 'Review' }[childRun.role] || 'Child') : 'Main';
+                return `<details class="agent-hist-tree-node" ${childRun.id === tree.rootRunId ? 'open' : ''}><summary>${App.escapeHtml(role)} · ${App.escapeHtml(status)} · ${usage.steps || 0} 步 · ${App.escapeHtml(childRun.userGoal || '')}</summary><div class="agent-hist-tree-events">${App.agent.renderRunEvents(node.events || [])}</div>${descendants ? `<div class="agent-hist-tree-children">${descendants}</div>` : ''}</details>`;
+              };
+              const rootId = String(tree.rootRunId || '');
+              const roots = nodes.filter((node) => {
+                const id = String(node.run && node.run.id || '');
+                const parentId = String(node.run && node.run.parentRunId || '');
+                return id === rootId || !parentId || !nodes.some((candidate) => String(candidate.run && candidate.run.id || '') === parentId);
+              });
+              holder.innerHTML = roots.map(renderNode).join('');
+            } catch (_) { holder.innerHTML = '<div class="wf-step-out">协作树加载失败。</div>'; }
+          });
+        });
         box.querySelectorAll('[data-export-run]').forEach((b) => {
           b.addEventListener('click', async () => {
             const r = await App.services.storage.exportAgentRun(b.dataset.exportRun || '');
@@ -1913,6 +1956,13 @@
           parts.push(`<div class="agent-hist-ev tool-diff">[Diff] ${esc(pl.path || '')}<div class="agent-diff">${diff}</div></div>`);
         } else if (ev.type === 'require_approval') {
           parts.push(`<div class="agent-hist-ev approve"><span class="agent-hist-label">[审批]</span> ${longText(pl.description || pl.command || '', 200, 'approval-text')}</div>`);
+        } else if (ev.type === 'subagent_queued' || ev.type === 'subagent_start' || ev.type === 'subagent_result' || ev.type === 'subagent_summary') {
+          const role = pl.role || pl.subagentType || pl.type || 'explore';
+          const result = pl.result && typeof pl.result === 'object' ? pl.result : pl;
+          const evidence = (result.findings || []).flatMap((f) => (f.evidence || []).map((e) => `${e.path || ''}:${e.startLine || 0}-${e.endLine || 0}`));
+          const checks = (result.checks || []).map((c) => `${c.status || 'skipped'} · ${c.name || ''}`).join('；');
+          const state = ev.type === 'subagent_queued' ? '排队中' : (ev.type === 'subagent_start' ? '运行中' : (result.ok ? '完成' : (pl.status === 'cancelled' ? '已取消' : '失败')));
+          parts.push(`<div class="agent-hist-ev subagent ${result.ok ? 'ok' : (state === '运行中' || state === '排队中' ? 'warn' : 'err')}"><b>[子代理 ${esc(role)} · ${state}]</b> ${esc(pl.goal || result.summary || '')}${result.summary && pl.goal ? '<br>' + longText(result.summary, 500, 'subagent-summary') : ''}${evidence.length ? '<br>证据：' + esc(evidence.join('、')) : ''}${checks ? '<br>检查：' + esc(checks) : ''}${result.error ? '<br>错误：' + esc(result.error.message || result.error.code || result.error) : ''}</div>`);
         } else if (ev.type === 'message') {
           parts.push(`<div class="agent-hist-ev msg">${esc(pl.text || '')}</div>`);
         } else if (ev.type === 'todo_update') {
@@ -1936,7 +1986,8 @@
       const block = document.createElement('div');
       block.className = 'agent-tool agent-subagent type-' + App.escapeHtml(ev.type || 'explore');
       block.dataset.subid = ev.subId;
-      const typeLabel = ev.type === 'test' ? '测试子代理' : (ev.type === 'review' ? '审查子代理' : '探索子代理');
+      const role = ev.role || ev.subagentType || ev.type;
+      const typeLabel = role === 'test' ? '测试子代理' : (role === 'review' ? '审查子代理' : '探索子代理');
       block.innerHTML = `
         <div class="agent-tool-head">
           <span class="agent-tool-ico">◈</span>
@@ -1969,6 +2020,57 @@
       const ico = block.querySelector('.agent-tool-ico');
       if (ico) ico.textContent = ev.ok ? '✓' : '✗';
       block.classList.add(ev.ok ? 'sub-ok' : 'sub-fail');
+    },
+
+    // v1.1.1：协作卡支持排队、结构化 findings/checks 与证据详情。
+    newSubagentBlock(ev) {
+      const thread = document.getElementById('agentThread');
+      const existing = thread && Array.from(thread.querySelectorAll('.agent-subagent')).find((b) => b.dataset.subid === ev.subId);
+      if (existing) {
+        const status = existing.querySelector('.agent-tool-status');
+        if (status && ev.type === 'subagent_start') status.textContent = '⏳ 运行中…';
+        existing.classList.remove('sub-queued');
+        return existing;
+      }
+      if (!thread) return null;
+      const block = document.createElement('div');
+      const queued = ev.type === 'subagent_queued' || ev.status === 'queued';
+      const role = ev.role || ev.subagentType || ev.type;
+      block.className = 'agent-tool agent-subagent type-' + App.escapeHtml(role || 'explore') + (queued ? ' sub-queued' : '');
+      block.dataset.subid = ev.subId;
+      const typeLabel = role === 'test' ? '测试子代理' : (role === 'review' ? '审查子代理' : '探索子代理');
+      block.innerHTML = `<div class="agent-tool-head"><span class="agent-tool-ico">◈</span><span class="agent-tool-name">${typeLabel} ${App.escapeHtml(ev.subId || '')}</span><span class="agent-tool-status">${queued ? '⏱ 排队中…' : '⏳ 运行中…'}</span><button class="agent-tool-toggle">▾</button></div><div class="agent-tool-body"><div class="agent-subagent-goal">${App.escapeHtml(ev.goal || '')}</div><pre class="agent-tool-out">${queued ? '等待并发槽位…' : '等待结果…'}</pre><div class="agent-subagent-details"></div></div>`;
+      thread.appendChild(block);
+      thread.scrollTop = thread.scrollHeight;
+      block.querySelector('.agent-tool-toggle').addEventListener('click', () => block.classList.toggle('collapsed'));
+      block._startTime = ev.startedAt || (queued ? null : Date.now());
+      return block;
+    },
+    setSubagentResult(subId, ev) {
+      const thread = document.getElementById('agentThread');
+      const block = thread && Array.from(thread.querySelectorAll('.agent-subagent')).find((b) => b.dataset.subid === subId);
+      if (!block) return;
+      const result = ev.result && typeof ev.result === 'object' ? ev.result : ev;
+      const out = block.querySelector('.agent-tool-out');
+      if (out) out.textContent = result.summary || (result.ok ? '完成' : '失败');
+      const status = result.ok ? '完成' : (ev.status === 'cancelled' ? '已取消' : '失败');
+      const st = block.querySelector('.agent-tool-status');
+      if (st) {
+        const elapsed = result.durationMs ? ((Number(result.durationMs) || 0) / 1000).toFixed(1) + 's' : (block._startTime ? ((Date.now() - block._startTime) / 1000).toFixed(1) + 's' : '');
+        st.textContent = status + (result.steps ? ' · ' + result.steps + ' 步' : '') + (result.toolsUsed ? ' · ' + result.toolsUsed + ' 次工具' : '') + (elapsed ? ' (' + elapsed + ')' : '');
+      }
+      const ico = block.querySelector('.agent-tool-ico');
+      if (ico) ico.textContent = result.ok ? '✓' : (ev.status === 'cancelled' ? '!' : '✗');
+      const detail = block.querySelector('.agent-subagent-details');
+      if (detail) {
+        const findings = Array.isArray(result.findings) ? result.findings : [];
+        const checks = Array.isArray(result.checks) ? result.checks : [];
+        const findingHtml = findings.map((f) => `<div class="agent-subagent-finding"><b>${App.escapeHtml(f.severity || 'info')} · ${App.escapeHtml(f.title || '发现')}</b><div>${App.escapeHtml(f.detail || '')}</div>${(f.evidence || []).map((e) => `<code>${App.escapeHtml(e.path || '')}:${e.startLine || 0}-${e.endLine || 0}</code>`).join(' ')}</div>`).join('');
+        const checkHtml = checks.map((c) => `<div class="agent-subagent-check ${App.escapeHtml(c.status || 'skipped')}">${App.escapeHtml(c.status || 'skipped')} · ${App.escapeHtml(c.name || '')}${c.detail ? ' · ' + App.escapeHtml(c.detail) : ''}</div>`).join('');
+        detail.innerHTML = (findingHtml || checkHtml || result.error ? `<div class="agent-subagent-detail-title">协作详情</div>${findingHtml}${checkHtml}${result.error ? `<div class="agent-subagent-error">${App.escapeHtml(result.error.message || result.error.code || result.error)}</div>` : ''}` : '');
+      }
+      block.classList.add(result.ok ? 'sub-ok' : 'sub-fail');
+      block.classList.remove('sub-queued');
     },
 
     // v15（单状态卡）：不再创建独立接力条；「继续任务」统一并入状态卡（data-status-resume → resumeRun）
@@ -2558,7 +2660,7 @@
             // v1.1.0（修复）：实时事件记录（节流持久化）——tool_call/result/thinking/message 等
             const live = thread._liveEvents;
             if (ev.type === 'thinking' || ev.type === 'tool_call' || ev.type === 'tool_result' || ev.type === 'tool_diff'
-              || ev.type === 'todo_update' || ev.type === 'subagent_start' || ev.type === 'subagent_result' || ev.type === 'done') {
+              || ev.type === 'todo_update' || ev.type === 'subagent_queued' || ev.type === 'subagent_start' || ev.type === 'subagent_result' || ev.type === 'subagent_summary' || ev.type === 'done') {
               const slim = {};
               if (ev.type === 'tool_result') {
                 const rp = ev.result;
@@ -2571,8 +2673,10 @@
               } else if (ev.type === 'thinking') { slim.text = String(ev.text || '').slice(0, 500); }
               else if (ev.type === 'todo_update') { slim.todos = (ev.todos || []).map(t => ({ content: t.content, status: t.status })); }
               else if (ev.type === 'tool_diff') { slim.id = ev.id; slim.path = ev.path; }
+              else if (ev.type === 'subagent_queued') { slim.subId = ev.subId; slim.type = ev.type; slim.goal = String(ev.goal || '').slice(0, 200); }
               else if (ev.type === 'subagent_start') { slim.subId = ev.subId; slim.type = ev.type; slim.goal = String(ev.goal || '').slice(0, 200); }
-              else if (ev.type === 'subagent_result') { slim.subId = ev.subId; slim.ok = ev.ok; slim.summary = String(ev.summary || '').slice(0, 300); }
+              else if (ev.type === 'subagent_result') { slim.subId = ev.subId; slim.ok = ev.ok; slim.summary = String(ev.summary || '').slice(0, 300); slim.result = ev.result || null; }
+              else if (ev.type === 'subagent_summary') { slim.status = ev.status; slim.aggregate = ev.aggregate || null; }
               else { Object.assign(slim, ev); }
               live.push(Object.assign({ type: ev.type, at: Date.now() }, slim));
               if (live.length > 200) live.splice(0, live.length - 200); // MAX_LIVE_EVENTS=200 裁剪
@@ -2597,6 +2701,13 @@
               }
             }
             // v1.1.0（M7）：子代理事件
+            else if (ev.type === 'subagent_queued') {
+              if (isActive()) {
+                const sb = App.agent.newSubagentBlock(ev);
+                const ui = App.agent._liveUI;
+                if (ui) ui.subagents.set(ev.subId, sb);
+              }
+            }
             else if (ev.type === 'subagent_start') {
               if (isActive()) {
                 const sb = App.agent.newSubagentBlock(ev);
@@ -2606,6 +2717,9 @@
             }
             else if (ev.type === 'subagent_result') {
               if (isActive()) App.agent.setSubagentResult(ev.subId, ev);
+            }
+            else if (ev.type === 'subagent_summary') {
+              if (isActive() && ev.status && ev.status !== 'completed') App.ui.toast('子代理协作：' + ev.status + '，请查看汇总结果');
             }
             else if (ev.type === 'require_approval') {
               // v1.1.0（M3+）：全局弹窗兜底（工具块内嵌审批框照旧，双保险保证用户一定能看到）
