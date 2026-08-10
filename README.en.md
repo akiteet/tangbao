@@ -37,7 +37,7 @@ Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop work
 
 ## Installation
 
-- **Install the app**: download `tangbao-1.1.1-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
+- **Install the app**: download `tangbao-1.1.2-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
 - **Run from source**:
 
 ```bash
@@ -49,11 +49,11 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 > `npm run server` is only for standalone debugging of the Tangma backend; regular use does not need it.
 >
-> **Package**: `npm run dist` → `dist/tangbao-1.1.1-setup.exe`
+> **Package**: `npm run dist` → `dist/tangbao-1.1.2-setup.exe`
 
 ## Configuration
 
-v1.1.1 has six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
+v1.1.2 keeps six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
 
 Click the gear icon in the bottom-left → **Settings**:
 
@@ -108,11 +108,17 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (323 cases covering runtime / storage / permissions / skills / UI contracts)
+- **Tests**: `npm test` (355 cases covering runtime / storage / permissions / skills / UI contracts)
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.1
+## v1.1.2
+
+- Agent Engineering foundation: Tool Registry, Role Registry, budgets, abort propagation, unified errors, and Usage/Cache telemetry.
+- Read-only Trace Inspector, offline Benchmark Suite, Schema v16 run version tracking, and model-call metrics.
+- After a data-location migration, the app can automatically recover the legacy Windows secret context when the ciphertext matches, so API keys do not need to be re-entered.
+
+## v1.1.1 (historical)
 
 - Parallel `explore / test / review` subagents support up to 8 tasks and 3 active workers; extra tasks are queued. Subagents are read-only and the parent owns all writes.
 - Results include findings, evidence, checks, duration, and failure reasons. Partial success is marked `degraded`/`blocked` and the collaboration tree is available in run history.

@@ -1,7 +1,7 @@
 # 糖包数据模型（Data Model）
 
-> 本文档描述糖包 **v1.1.0** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
-> 配套阅读：[跨模块成果 · v1.0.6 安全改造 + v1.1.0 演进](./CROSS_MODULE.md)。
+> 本文档描述糖包 **v1.1.2** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
+> 配套阅读：[v1.1.2 发布说明](./CHANGELOG-v1.1.2.md)与[跨模块历史成果](./CROSS_MODULE.md)。
 
 ---
 
@@ -17,12 +17,12 @@
 | 密钥库 | `src/infrastructure/secrets/kvstore.js`（数据落 `userData` 内） | API Key 等敏感值，`safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret） |
 | localStorage | 渲染进程 | **已废弃**（v1.0.6 之前的主存储；v1.0.7 起不再作为数据源） |
 
-- 数据库 Schema 版本：**`SCHEMA_VERSION = 15`**（`src/core/schemas/db-schema.js`），通过 SQLite `PRAGMA user_version` 顺序执行迁移（见第 5 节）。
+- 数据库 Schema 版本：**`SCHEMA_VERSION = 16`**（`src/core/schemas/db-schema.js`），通过 SQLite `PRAGMA user_version` 顺序执行迁移（见第 5 节）。
 - 任何位置都不存 API Key 明文。
 
 ---
 
-## 2. 表清单（21 张）
+## 2. 表清单（23 张）
 
 ### 2.1 核心业务表（14 张，migration0 建表）
 
@@ -53,12 +53,19 @@
 
 | 表 | 关键列 | 职责 |
 |---|---|---|
-| `agent_runs` | id, thread_id, workspace_id, cwd, workspace_snapshot_json, workspace_fingerprint, primary_root_id, user_goal, status, phase, model_id, provider_ref, plan_mode, limits_json, usage_json, error, started_at, finished_at, working_state_id, latest_checkpoint_id, parent_run_id, role, depth, read_only, budget_json, continued_from_run_id, root_run_id, continuation_index, root_scope_json | 糖码每次运行（主 Run / 子 Agent Run / 续段谱系均在此，`role`/`parent_run_id`/`continued_from_run_id` 表达关系） |
+| `agent_runs` | id, thread_id, workspace_id, cwd, workspace_snapshot_json, workspace_fingerprint, primary_root_id, user_goal, status, phase, model_id, provider_ref, plan_mode, limits_json, usage_json, error, started_at, finished_at, working_state_id, latest_checkpoint_id, parent_run_id, role, depth, read_only, budget_json, continued_from_run_id, root_run_id, continuation_index, root_scope_json, prompt_version, toolset_version, runtime_version | 糖码每次运行（主 Run / 子 Agent Run / 续段谱系均在此，`role`/`parent_run_id`/`continued_from_run_id` 表达关系） |
 | `agent_run_events` | id, run_id, seq, type, payload_json, created_at | 运行事件流（按 run + seq 有序回放） |
 | `agent_working_states` | run_id, goal, plan_json, completed_json, pending_json, blocked_json, files_read_json, files_changed_json, commands_json, checks_json, decisions_json, unresolved_errors_json, verification_skips_json, pending_decisions_json, subagents_json, skill_context_json, assumptions_json, user_confirmations_json, updated_at | 运行中工作状态快照（恢复/续段/审批依赖它） |
 | `agent_checkpoints` | id, run_id, seq, reason, state_json, events_to_seq, created_at | 断点检查点（精确恢复） |
 | `agent_context_summaries` | id, run_id, thread_id, covered_from_seq, covered_to_seq, summary, version, summary_json, source_hashes_json, validity, created_at | 上下文压缩摘要（结构化 + 来源哈希 + 有效性） |
 | `agent_changesets` | id, run_id, root_id, path, old_hash, content_ref, operation, new_hash, target_path, before_exists, status, created_at | 运行级文件变更快照（整 Run 回滚 / Diff 恢复） |
+
+### 2.4 运行与模型指标（2 张，migration15 / Schema v16；刻意不进 `TABLES`）
+
+| 表 | 关键列 | 职责 |
+|---|---|---|
+| `agent_run_metrics` | run_id, root_run_id, steps, tool_calls, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, queue_wait_ms, recovery_rate, error_breakdown_json | Agent Run 汇总指标、缓存与成本影响 |
+| `model_call_metrics` | id, run_id, root_run_id, scope, call_type, model_id, provider, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, status, error_type | Chat / Agent / Image / Documents / Workflow 的统一模型调用指标 |
 
 ---
 
@@ -74,7 +81,7 @@
 
 ## 4. 迁移机制
 
-- 版本号：`SCHEMA_VERSION = 15`（`src/core/schemas/db-schema.js`）。
+- 版本号：`SCHEMA_VERSION = 16`（`src/core/schemas/db-schema.js`）。
 - 启动时读取 `PRAGMA user_version`，按 `MIGRATIONS[当前..]` 顺序执行，每步在事务内提交并 `user_version + 1`（`src/infrastructure/storage/sqlite-store.js`）。
 - 迁移历史要点：
   - `0 → 1`：建全部核心表（DDL 幂等）
@@ -91,6 +98,7 @@
   - `12 → 13`：Skill 工具权限归因上下文（skill_context_json）
   - `13 → 14`：多根工作区（projects.roots_json / primary_root_id，agent_runs 快照与指纹，changesets.root_id）
   - `14 → 15`：Continuation 谱系（continued_from_run_id / root_run_id / continuation_index / root_scope_json + thread 草稿任务范围）
+  - `15 → 16`：Run 版本追踪（prompt_version / toolset_version / runtime_version）与运行、模型调用指标表
 
 ---
 
@@ -123,7 +131,7 @@
 ## 8. v1.1.0 相对 v1.0.6 的变化点
 
 1. **权威源迁移**：localStorage → SQLite（`tangbao.db`），`state.json` 降级为双写副本。
-2. **Schema 版本化**：引入 `PRAGMA user_version` + `MIGRATIONS`（当前 15 版），替代旧版「字段形态嗅探」迁移。
+2. **Schema 版本化**：引入 `PRAGMA user_version` + `MIGRATIONS`（v1.1.0 时为 15，当前为 16），替代旧版「字段形态嗅探」迁移。
 3. **糖码运行持久化**：新增 agent_runs / events / working_states / checkpoints / context_summaries / changesets 六表（断点恢复、自动续段、上下文压缩、整 Run 回滚）。
 4. **多根工作区**：projects 增加 roots_json / primary_root_id，任务级写入范围。
 5. **架构路径**：`js/`、`server/` 平铺重构为 `src/` 分层（main / preload / renderer / application / core / infrastructure）；密钥库 `server/secrets.js` → `src/infrastructure/secrets/kvstore.js`。

@@ -37,7 +37,7 @@
 
 ## 安装
 
-- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.1-setup.exe`，双击安装即可。
+- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.2-setup.exe`，双击安装即可。
 - **从源码运行**：
 
 ```bash
@@ -49,7 +49,7 @@ npm start          # 启动应用（糖码本地后端随应用自动启动）
 
 > `npm run server` 仅用于独立调试糖码后端；正常使用不需要单独启动。
 >
-> **打包**：`npm run dist` → `dist/tangbao-1.1.1-setup.exe`
+> **打包**：`npm run dist` → `dist/tangbao-1.1.2-setup.exe`
 
 ## 配置
 
@@ -106,11 +106,17 @@ tangbao/
 └── package.json
 ```
 
-- **测试**：`npm test`（全量 323 个用例，覆盖 Runtime / 存储 / 权限 / 技能 / UI 契约）
+- **测试**：`npm test`（全量 355 个用例，覆盖 Runtime / 存储 / 权限 / 技能 / UI 契约）
 - **打包**：`npm run dist`（Electron 31 + electron-builder，产物在 `dist/`）
 - **数据模型**：见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.1
+## v1.1.2
+
+- Agent Engineering 基础能力：Tool Registry、Role Registry、Budget、Abort、统一错误与 Usage/Cache 指标。
+- 新增只读 Trace Inspector、离线 Benchmark Suite，以及 Schema v16 的 Run 版本追踪和模型调用指标。
+- 数据目录迁移后会在条件满足时自动恢复旧 Windows 密钥上下文，不要求重新填写 API Key。
+
+## v1.1.1（历史版本）
 
 - 并行 `explore / test / review` 子代理最多 8 个任务、3 个并发，超出并发进入队列；子代理只读，父代理统一修改。
 - 子代理结果包含 findings、证据、checks、耗时和失败原因；部分成功会标记为 degraded/blocked，并可在运行历史中查看协作树。
