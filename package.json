@@ -9,8 +9,8 @@
     "start": "electron .",
     "server": "node src/infrastructure/agent-runtime/agent-server.js",
     "dist": "electron-builder",
-    "test": "node --test \"test/**/*.test.js\"",
-    "test:runtime": "node --test \"test/**/*.test.js\"",
+    "test": "node scripts/run-tests.js",
+    "test:runtime": "node scripts/run-tests.js",
     "bench": "node scripts/bench.js",
     "eval": "node scripts/bench.js --eval",
     "eval:one": "node scripts/bench.js --eval"

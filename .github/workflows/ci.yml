@@ -34,17 +34,17 @@ jobs:
         run: |
           node -e "
             const fs = require('fs');
-            const srv = fs.readFileSync('src/infrastructure/agent-runtime/agent-server.js','utf8');
+            const runtime = fs.readFileSync('src/infrastructure/agent-runtime/agent-runtime-engine.js','utf8');
             const agent = fs.readFileSync('src/renderer/views/agent/agent.js','utf8');
             const checks = [
-              ['needsApproval 决策链', srv.includes('permCtx && permCtx.mode')],
-              ['readProjectRules', srv.includes('function readProjectRules(cwd)')],
-              ['SAFE_CMD', srv.includes('const SAFE_CMD = [')],
-              ['runAuth 隔离', srv.includes('const runAuthRegistry = new Map()')],
-              ['预算实装', srv.includes('达到费用预算上限')],
-              ['unrelatedFileWrites', srv.includes('function markUnrelatedWrite(opts, relPath)')],
-              ['sandbox 档', srv.includes(\"'sandbox'\") && agent.includes('Sandbox 隔离自动')],
-              ['propose_memory', srv.includes(\"name === 'propose_memory'\")],
+              ['needsApproval 决策链', runtime.includes('permCtx && permCtx.mode')],
+              ['readProjectRules', runtime.includes('function readProjectRules(cwd)')],
+              ['SAFE_CMD', runtime.includes('const SAFE_CMD = [')],
+              ['runAuth 隔离', runtime.includes('const runAuthRegistry = new Map()')],
+              ['预算实装', runtime.includes('达到费用预算上限')],
+              ['unrelatedFileWrites', runtime.includes('function markUnrelatedWrite(opts, relPath)')],
+              ['sandbox 档', runtime.includes(\"'sandbox'\") && agent.includes('Sandbox 隔离自动')],
+              ['propose_memory', runtime.includes(\"name === 'propose_memory'\")],
             ];
             let bad = 0;
             for (const [n, c] of checks) { if (!c) { console.error('FAIL: ' + n); bad++; } }
