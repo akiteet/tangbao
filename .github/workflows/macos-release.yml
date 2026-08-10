@@ -1,0 +1,91 @@
+name: macOS release package
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to package
+        required: true
+        default: master
+        type: string
+      release_tag:
+        description: Existing GitHub Release to receive the installers
+        required: true
+        default: v1.1.2
+        type: string
+      upload_release:
+        description: Upload installers to the existing release
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-13
+          - arch: arm64
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Build ${{ matrix.arch }} installers
+        run: npx electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
+
+      - name: Verify installers
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          test -f "dist/tangbao-${VERSION}-${{ matrix.arch }}.dmg"
+          test -f "dist/tangbao-${VERSION}-${{ matrix.arch }}.zip"
+          ls -lh dist/*.dmg dist/*.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tangbao-macos-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Upload macOS installers to release
+    if: ${{ inputs.upload_release }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets/*.dmg release-assets/*.zip
+
+      - name: Upload installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" release-assets/*.dmg release-assets/*.zip --repo "${{ github.repository }}" --clobber

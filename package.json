@@ -49,6 +49,15 @@
       "target": "nsis",
       "artifactName": "tangbao-${version}-setup.${ext}"
     },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/app-icon.png",
+      "artifactName": "tangbao-${version}-${arch}.${ext}",
+      "category": "public.app-category.productivity"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
