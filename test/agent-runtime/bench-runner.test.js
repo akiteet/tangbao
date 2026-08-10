@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const {
   resolveFixtureSource,
@@ -25,13 +26,15 @@ test('隔离 fixture 使用唯一目录且不主动删除', () => {
   fs.cpSync = (source, target, options) => calls.push(['copy', source, target, options]);
   fs.rmSync = (...args) => calls.push(['remove', ...args]);
   try {
+    const runsRoot = path.join(os.tmpdir(), 'isolated-eval-runs');
     const fixture = prepareFixture(
       { id: 'safe-004', fixtureDir: 'fixtures/safe-git' },
       '',
-      { runsRoot: 'E:/isolated-eval-runs' },
+      { runsRoot },
     );
     assert.equal(fixture.isolated, true);
-    assert.match(fixture.cwd.replace(/\\/g, '/'), /^E:\/isolated-eval-runs\/safe-004-/);
+    const normalizedRoot = path.resolve(runsRoot).replace(/\\/g, '/');
+    assert.equal(fixture.cwd.replace(/\\/g, '/').startsWith(normalizedRoot + '/safe-004-'), true);
     fixture.cleanup();
     assert.equal(calls.filter((entry) => entry[0] === 'copy').length, 1);
     assert.equal(calls.some((entry) => entry[0] === 'remove'), false);

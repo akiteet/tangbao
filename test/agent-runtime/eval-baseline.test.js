@@ -74,15 +74,21 @@ test('早停通过但0步的历史结果标记指标不完整且不计入步数�
   assert.equal(report.metrics.averageSteps, 6);
 });
 
-test('真实基线生成器优先使用桌面应用持久化的运行时检测结果', () => {
+test('真实基线生成器优先使用桌面应用持久化的运行时检测结果', (t) => {
   const projectRoot = path.join(__dirname, '../..');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-runtime-readiness-'));
   const readinessFile = path.join(temp, 'readiness.json');
   fs.writeFileSync(readinessFile, JSON.stringify({ at: '2026-08-07T00:00:00.000Z', runtimes: { node: true, python: false } }));
+  const runsRoot = path.join(resolveDefaultDataRoot(), 'eval-runs');
+  if (!fs.existsSync(runsRoot)) {
+    t.skip('桌面应用评测历史不存在，跳过依赖本地数据的基线测试');
+    fs.rmSync(temp, { recursive: true, force: true });
+    return;
+  }
   try {
     const report = buildBaseline({
       tasks: path.join(projectRoot, 'benchmarks', 'tasks.json'),
-      runsRoot: path.join(resolveDefaultDataRoot(), 'eval-runs'),
+      runsRoot,
       readinessFile,
       missingRuntimes: [],
     });
