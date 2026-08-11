@@ -47,6 +47,57 @@ function unpackTelemetry(value) {
   };
 }
 
+// v16 initially created token columns as NOT NULL even though unknown usage is
+// represented by null. Rebuild that table in place for databases created by
+// that release, without changing the public schema version.
+function repairAgentRunMetricTokenColumns(database) {
+  const columns = database.prepare('PRAGMA table_info(agent_run_metrics)').all();
+  const tokenNames = new Set(['input_tokens', 'output_tokens', 'reasoning_tokens']);
+  const existing = new Set(columns.map((column) => column.name));
+  if (!['run_id', 'root_run_id', 'input_tokens', 'output_tokens', 'reasoning_tokens'].every((name) => existing.has(name))) return;
+  if (!columns.some((column) => tokenNames.has(column.name) && Number(column.notnull) === 1)) return;
+
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS agent_run_metrics_v16_repair;
+      CREATE TABLE agent_run_metrics_v16_repair (
+        run_id              TEXT PRIMARY KEY,
+        root_run_id         TEXT NOT NULL DEFAULT '',
+        steps               INTEGER NOT NULL DEFAULT 0,
+        tool_calls          INTEGER NOT NULL DEFAULT 0,
+        input_tokens        INTEGER,
+        output_tokens       INTEGER,
+        reasoning_tokens    INTEGER,
+        cache_json          TEXT,
+        cost_usd            REAL,
+        latency_ms          INTEGER,
+        queue_wait_ms       INTEGER,
+        process_ms          INTEGER,
+        human_interventions INTEGER NOT NULL DEFAULT 0,
+        recovery_rate       REAL,
+        error_breakdown_json TEXT,
+        source              TEXT NOT NULL DEFAULT 'runtime',
+        created_at          INTEGER NOT NULL DEFAULT 0,
+        updated_at          INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO agent_run_metrics_v16_repair (
+        run_id,root_run_id,steps,tool_calls,input_tokens,output_tokens,
+        reasoning_tokens,cache_json,cost_usd,latency_ms,queue_wait_ms,
+        process_ms,human_interventions,recovery_rate,error_breakdown_json,
+        source,created_at,updated_at
+      )
+      SELECT run_id,root_run_id,steps,tool_calls,input_tokens,output_tokens,
+        reasoning_tokens,cache_json,cost_usd,latency_ms,queue_wait_ms,
+        process_ms,human_interventions,recovery_rate,error_breakdown_json,
+        source,created_at,updated_at
+      FROM agent_run_metrics;
+      DROP TABLE agent_run_metrics;
+      ALTER TABLE agent_run_metrics_v16_repair RENAME TO agent_run_metrics;
+      CREATE INDEX IF NOT EXISTS idx_agent_run_metrics_root ON agent_run_metrics(root_run_id, updated_at ASC);
+    `);
+  })();
+}
+
 function metricCost(metric, usage, cache) {
   if (metric && metric.cost) return normalizeCost(metric.cost);
   if (metric && metric.costUsd != null) return normalizeCost({ totalUsd: metric.costUsd, source: metric.costSource || 'estimated', unknownReason: metric.costSource ? null : 'legacy_estimate' });
@@ -83,6 +134,7 @@ function init(dbPath, fileRepoInstance) {
       if (!m) break;
       opened.transaction(() => { m(opened); opened.pragma('user_version = ' + (i + 1)); })();
     }
+    repairAgentRunMetricTokenColumns(opened);
     fileRepo = fileRepoInstance || null;
     db = opened;
     prepare();
@@ -999,12 +1051,13 @@ function searchLocal(query, options) {
   const limit = Math.min(Math.max(Number(opts.limit) || 30, 1), 100);
   const offset = Math.max(Number(opts.cursor) || 0, 0);
   const like = '%' + text.replace(/[\\%_]/g, '\\$&') + '%';
-  const redact = (value) => String(value || '').replace(/(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{16,}|(?:api[_-]?key|authorization|bearer)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]');
+  const redact = (value) => String(value || '').replace(/(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{16,}|(?:api[_-]?key|authorization|bearer)\s*[:=]\s*)[^\s,;]+/gi, (match, prefix) => /^(?:sk-|AIza)/i.test(prefix) ? '[redacted]' : prefix + '[redacted]');
   const fragments = [];
   const params = [];
   const add = (scope, sql, values) => {
     if (!allowed.has(scope)) return;
-    fragments.push(sql.replace(/^SELECT /, 'SELECT ' + JSON.stringify(scope) + ' AS scope, '));
+    const scopeLiteral = "'" + String(scope).replace(/'/g, "''") + "'";
+    fragments.push(sql.replace(/^SELECT /, 'SELECT ' + scopeLiteral + ' AS scope, '));
     params.push(...values);
   };
   try {

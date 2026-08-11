@@ -46,13 +46,15 @@ function normalizeCacheMetrics(input) {
   const cacheReadTokens = numberOrNull(source.cacheReadTokens != null ? source.cacheReadTokens : usage.cacheReadTokens);
   const cacheWriteTokens = numberOrNull(source.cacheWriteTokens != null ? source.cacheWriteTokens : usage.cacheWriteTokens);
   const eligibleTokens = numberOrNull(source.eligibleTokens);
+  const explicitHitRate = numberOrNull(source.hitRate);
+  const explicitSavedTokens = numberOrNull(source.savedTokens);
   const hasProviderFields = cacheReadTokens != null || cacheWriteTokens != null;
   // Token fields alone are not proof of a live provider response. Offline
   // benchmark adapters intentionally provide deterministic simulated values.
   const simulated = source.dataOrigin === 'offline-mock' || source.source === 'estimated';
   const providerReported = !simulated && (source.source === 'provider' || source.dataOrigin === 'provider_usage' || source.providerReported === true || hasProviderFields);
-  const hitRate = eligibleTokens != null && eligibleTokens > 0 && cacheReadTokens != null ? Math.min(1, cacheReadTokens / eligibleTokens) : UNKNOWN;
-  const savedTokens = cacheReadTokens != null ? cacheReadTokens : UNKNOWN;
+  const hitRate = eligibleTokens != null && eligibleTokens > 0 && cacheReadTokens != null ? Math.min(1, cacheReadTokens / eligibleTokens) : explicitHitRate;
+  const savedTokens = cacheReadTokens != null ? cacheReadTokens : explicitSavedTokens;
   const estimatedCostUsd = source.costUsd != null ? numberOrNull(source.costUsd) : costForTokens({ inputTokens, outputTokens: source.outputTokens != null ? source.outputTokens : usage.outputTokens }, source.prices);
   const estimatedSavedCostUsd = savedTokens != null ? costForTokens({ inputTokens: savedTokens, outputTokens: 0 }, source.prices) : UNKNOWN;
   const unknownReason = source.unknownReason != null ? String(source.unknownReason) : (
@@ -100,6 +102,10 @@ function mergeCacheMetrics(list) {
     || (item.eligibleTokens != null && item.cacheReadTokens == null));
   const fingerprints = [...new Set(items.map((item) => item.prefixFingerprint).filter(Boolean))];
   const dataOrigins = new Set(items.map((item) => item.dataOrigin));
+  const explicitHitRates = items.map((item) => item.hitRate).filter((value) => value != null && Number.isFinite(Number(value)));
+  const fallbackHitRate = !hitUnknown && explicitHitRates.length === items.length && explicitHitRates.length
+    ? explicitHitRates.reduce((total, value) => total + Number(value), 0) / explicitHitRates.length
+    : UNKNOWN;
   const source = dataOrigins.has('offline-mock') ? 'estimated'
     : (items.some((item) => item.source === 'unknown') ? 'unknown' : (items.some((item) => item.source === 'estimated') ? 'estimated' : 'provider'));
   return {
@@ -108,7 +114,7 @@ function mergeCacheMetrics(list) {
     inputTokens: sumKnown('inputTokens'),
     cacheReadTokens,
     cacheWriteTokens,
-    hitRate: !hitUnknown && hitEligible > 0 ? hitRead / hitEligible : UNKNOWN,
+    hitRate: !hitUnknown && hitEligible > 0 ? hitRead / hitEligible : fallbackHitRate,
     savedTokens: cacheReadTokens,
     estimatedCostUsd: sumKnown('estimatedCostUsd'),
     estimatedSavedCostUsd: sumKnown('estimatedSavedCostUsd'),
