@@ -20,13 +20,13 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { judgeTask } = require('../src/core/agent-runtime/eval-judge');
-const { runBenchmarkSuite } = require('../src/core/agent-runtime/benchmark-harness');
+const { runBenchmarkSuite, runBenchmarkSuiteAsync } = require('../src/core/agent-runtime/benchmark-harness');
 
 const ROOT = path.join(__dirname, '..');
 const TASKS_FILE = path.join(__dirname, '..', 'benchmarks', 'tasks.json');
 
 function parseArgs() {
-  const out = { db: '', list: false, eval: undefined, suite: '', mode: '', seed: 1337, out: '', trace: '' };
+  const out = { db: '', list: false, eval: undefined, suite: '', mode: '', seed: 1337, out: '', trace: '', format: 'json' };
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--db' && argv[i + 1]) out.db = argv[i + 1];
@@ -37,6 +37,7 @@ function parseArgs() {
     else if (argv[i] === '--seed' && argv[i + 1]) out.seed = Number(argv[++i]) || 1337;
     else if ((argv[i] === '--out' || argv[i] === '--report') && argv[i + 1]) out.out = path.resolve(argv[++i]);
     else if ((argv[i] === '--trace' || argv[i] === '--input') && argv[i + 1]) out.trace = path.resolve(argv[++i]);
+    else if (argv[i] === '--format' && argv[i + 1]) out.format = String(argv[++i]).toLowerCase();
   }
   return out;
 }
@@ -278,11 +279,34 @@ async function mainEval(onlyId) {
 function main() {
   const args = parseArgs();
   if (args.suite || args.mode) {
-    const report = runBenchmarkSuite({ suite: args.suite || 'multi-agent', mode: args.mode || 'offline', seed: args.seed, replayFile: args.trace, model: process.env.EVAL_MODEL || '' });
-    const output = args.out || path.join(ROOT, 'benchmarks', 'reports', report.suite + '-' + report.mode + '.json');
-    fs.mkdirSync(path.dirname(output), { recursive: true });
-    fs.writeFileSync(output, JSON.stringify(report, null, 2), 'utf8');
-    console.log(JSON.stringify({ suite: report.suite, mode: report.mode, seed: report.seed, summary: report.summary, output }, null, 2));
+    const input = { suite: args.suite || 'multi-agent', mode: args.mode || 'offline', seed: args.seed, replayFile: args.trace, model: process.env.EVAL_MODEL || '' };
+    const execution = input.mode === 'replay' ? Promise.resolve(runBenchmarkSuite(input)) : runBenchmarkSuiteAsync(input);
+    execution.then((report) => {
+      const extension = args.format === 'markdown' || args.format === 'md' ? '.md' : args.format === 'jsonl' ? '.jsonl' : '.json';
+      const output = args.out || path.join(ROOT, 'benchmarks', 'reports', report.suite + '-' + report.mode + extension);
+      fs.mkdirSync(path.dirname(output), { recursive: true });
+      if (args.format === 'markdown' || args.format === 'md') {
+        const s = report.summary || {};
+        fs.writeFileSync(output, '# Benchmark ' + report.suite + '\n\n' +
+          '- reportVersion: ' + report.reportVersion + '\n' +
+          '- harness: ' + report.harness + '\n' +
+          '- successRate: ' + s.successRate + '\n' +
+          '- latency p50/p95: ' + s.latencyP50 + ' / ' + s.latencyP95 + ' ms\n' +
+          '- input/output tokens: ' + s.inputTokens + ' / ' + s.outputTokens + '\n' +
+          '- cost: ' + (s.costUsd == null ? 'unknown' : s.costUsd) + '\n' +
+          '- cost sources: ' + JSON.stringify(s.costSources || {}) + '\n' +
+          '- cache hit/read/saved: ' + (s.cache && s.cache.hitRate == null ? 'unknown' : (s.cache && s.cache.hitRate)) + ' / ' + (s.cache && s.cache.cacheReadTokens == null ? 'unknown' : s.cache && s.cache.cacheReadTokens) + ' / ' + (s.cache && s.cache.savedTokens == null ? 'unknown' : s.cache && s.cache.savedTokens) + '\n' +
+          '- unknown metrics: ' + (s.unknownMetricsCount == null ? 'unknown' : s.unknownMetricsCount) + '\n', 'utf8');
+      } else if (args.format === 'jsonl') {
+        fs.writeFileSync(output, (report.results || []).map((row) => JSON.stringify(row)).concat(JSON.stringify({ recordType: 'summary', summary: report.summary, reportVersion: report.reportVersion })).join('\n') + '\n', 'utf8');
+      } else {
+        fs.writeFileSync(output, JSON.stringify(report, null, 2), 'utf8');
+      }
+      console.log(JSON.stringify({ suite: report.suite, mode: report.mode, seed: report.seed, reportVersion: report.reportVersion, harness: report.harness, summary: report.summary, output }, null, 2));
+    }).catch((error) => {
+      console.error('Benchmark failed: ' + (error && error.stack || error));
+      process.exitCode = 1;
+    });
     return;
   }
   if (args.list) {

@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   runBenchmarkSuite,
+  runBenchmarkSuiteAsync,
   compareBenchmarkReports,
   replayEvents,
 } = require('../../src/core/agent-runtime/benchmark-harness');
@@ -40,4 +41,15 @@ test('Trace replay 从标准事件中恢复模型、工具和缓存指标', () =
   assert.equal(result.toolCalls, 1);
   assert.equal(result.inputTokens, 10);
   assert.equal(result.cache.hitRate, 0.5);
+});
+
+test('Runtime Benchmark v2 passes through the real Runtime and stays reproducible offline', async () => {
+  const first = await runBenchmarkSuiteAsync({ suite: 'stability', mode: 'offline', seed: 11 });
+  const second = await runBenchmarkSuiteAsync({ suite: 'stability', mode: 'offline', seed: 11 });
+  assert.equal(first.reportVersion, 2);
+  assert.equal(first.harness, 'run-agent-runtime');
+  assert.equal(first.results.length, 6);
+  assert.deepEqual(first.results, second.results);
+  assert.ok(first.results.some((row) => row.status === 'failed'));
+  assert.ok(first.results.every((row) => Array.isArray(row.trace)));
 });

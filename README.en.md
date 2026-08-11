@@ -37,7 +37,7 @@ Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop work
 
 ## Installation
 
-- **Install the app**: download `tangbao-1.1.2-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
+- **Install the app**: download `tangbao-1.1.3-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
 - **Run from source**:
 
 ```bash
@@ -49,11 +49,11 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 > `npm run server` is only for standalone debugging of the Tangma backend; regular use does not need it.
 >
-> **Package**: `npm run dist` → `dist/tangbao-1.1.2-setup.exe`
+> **Package**: `npm run dist` → `dist/tangbao-1.1.3-setup.exe`
 
 ## Configuration
 
-v1.1.2 keeps six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
+v1.1.3 keeps six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
 
 Click the gear icon in the bottom-left → **Settings**:
 
@@ -112,11 +112,13 @@ tangbao/
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.2
+## v1.1.3
 
-- Agent Engineering foundation: Tool Registry, Role Registry, budgets, abort propagation, unified errors, and Usage/Cache telemetry.
-- Read-only Trace Inspector, offline Benchmark Suite, Schema v16 run version tracking, and model-call metrics.
-- After a data-location migration, the app can automatically recover the legacy Windows secret context when the ciphertext matches, so API keys do not need to be re-entered.
+- Stability loop: migration state, staged copy verification, rollback, recovery center, SQLite/state audits, backups, and quarantine cleanup previews.
+- Model and Cache management: Provider Health, model profiles, unified model-call metrics, and a user-triggered real Cache Probe. Missing provider Usage remains unknown.
+- Productivity: `Ctrl/Cmd + K` command palette, paginated local search, notifications, and consistent loading/failure/cancelled states.
+- Agent engineering: read-only Trace Inspector, collaboration tree, normalized Budget/Abort/Error handling, redacted exports, and reproducible Runtime Offline Benchmarks.
+- After a data-location migration, the app can automatically recover the legacy Windows secret context when the ciphertext matches. API keys never enter ordinary backups, diagnostics, or Trace exports.
 
 ## v1.1.1 (historical)
 

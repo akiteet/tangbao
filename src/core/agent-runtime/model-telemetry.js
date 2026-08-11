@@ -47,11 +47,19 @@ function normalizeCacheMetrics(input) {
   const cacheWriteTokens = numberOrNull(source.cacheWriteTokens != null ? source.cacheWriteTokens : usage.cacheWriteTokens);
   const eligibleTokens = numberOrNull(source.eligibleTokens);
   const hasProviderFields = cacheReadTokens != null || cacheWriteTokens != null;
-  const providerReported = source.source === 'provider' || hasProviderFields;
+  // Token fields alone are not proof of a live provider response. Offline
+  // benchmark adapters intentionally provide deterministic simulated values.
+  const simulated = source.dataOrigin === 'offline-mock' || source.source === 'estimated';
+  const providerReported = !simulated && (source.source === 'provider' || source.dataOrigin === 'provider_usage' || source.providerReported === true || hasProviderFields);
   const hitRate = eligibleTokens != null && eligibleTokens > 0 && cacheReadTokens != null ? Math.min(1, cacheReadTokens / eligibleTokens) : UNKNOWN;
   const savedTokens = cacheReadTokens != null ? cacheReadTokens : UNKNOWN;
   const estimatedCostUsd = source.costUsd != null ? numberOrNull(source.costUsd) : costForTokens({ inputTokens, outputTokens: source.outputTokens != null ? source.outputTokens : usage.outputTokens }, source.prices);
   const estimatedSavedCostUsd = savedTokens != null ? costForTokens({ inputTokens: savedTokens, outputTokens: 0 }, source.prices) : UNKNOWN;
+  const unknownReason = source.unknownReason != null ? String(source.unknownReason) : (
+    providerReported
+      ? (cacheReadTokens == null && cacheWriteTokens == null ? 'provider_cache_usage_unavailable' : (cacheReadTokens == null ? 'provider_cache_read_unavailable' : ''))
+      : (source.source === 'unknown' || source.dataOrigin === 'unknown' ? 'provider_usage_unavailable' : '')
+  );
   return {
     mode: String(source.mode || 'unknown'),
     eligibleTokens,
@@ -62,7 +70,11 @@ function normalizeCacheMetrics(input) {
     savedTokens,
     estimatedCostUsd,
     estimatedSavedCostUsd,
-    source: providerReported ? 'provider' : (source.source || 'unknown'),
+    // Offline values remain visibly simulated even when an adapter-shaped
+    // fixture happens to carry source: provider.
+    source: simulated && source.dataOrigin === 'offline-mock' ? 'estimated' : (providerReported ? 'provider' : (source.source || 'unknown')),
+    unknownReason: unknownReason || null,
+    dataOrigin: String(source.dataOrigin || (simulated ? 'offline-mock' : (providerReported ? 'provider_usage' : 'unknown'))),
     prefixFingerprint: String(source.prefixFingerprint || ''),
   };
 }
@@ -70,22 +82,41 @@ function normalizeCacheMetrics(input) {
 function mergeCacheMetrics(list) {
   const items = (Array.isArray(list) ? list : []).map(normalizeCacheMetrics);
   if (!items.length) return normalizeCacheMetrics({});
-  const sum = (key) => items.some((item) => item[key] == null) ? UNKNOWN : items.reduce((total, item) => total + item[key], 0);
-  const eligibleTokens = sum('eligibleTokens');
-  const cacheReadTokens = sum('cacheReadTokens');
-  const cacheWriteTokens = sum('cacheWriteTokens');
+  // Keep known values usable without turning an unknown call into zero. Cache
+  // hit rate is stricter: only real provider usage (or explicit offline-mock)
+  // contributes to the denominator.
+  const sumKnown = (key) => {
+    const values = items.map((item) => item[key]).filter((value) => value != null && Number.isFinite(Number(value)));
+    return values.length ? values.reduce((total, value) => total + Number(value), 0) : UNKNOWN;
+  };
+  const eligibleTokens = sumKnown('eligibleTokens');
+  const cacheReadTokens = sumKnown('cacheReadTokens');
+  const cacheWriteTokens = sumKnown('cacheWriteTokens');
+  const hitItems = items.filter((item) => item.eligibleTokens != null && item.cacheReadTokens != null
+    && ((item.source === 'provider' && item.dataOrigin === 'provider_usage') || item.dataOrigin === 'offline-mock'));
+  const hitEligible = hitItems.reduce((total, item) => total + Number(item.eligibleTokens), 0);
+  const hitRead = hitItems.reduce((total, item) => total + Number(item.cacheReadTokens), 0);
+  const hitUnknown = items.some((item) => item.source === 'unknown' || item.dataOrigin === 'unknown'
+    || (item.eligibleTokens != null && item.cacheReadTokens == null));
+  const fingerprints = [...new Set(items.map((item) => item.prefixFingerprint).filter(Boolean))];
+  const dataOrigins = new Set(items.map((item) => item.dataOrigin));
+  const source = dataOrigins.has('offline-mock') ? 'estimated'
+    : (items.some((item) => item.source === 'unknown') ? 'unknown' : (items.some((item) => item.source === 'estimated') ? 'estimated' : 'provider'));
   return {
     mode: items.some((item) => item.mode === 'unknown') ? 'unknown' : items[items.length - 1].mode,
     eligibleTokens,
-    inputTokens: sum('inputTokens'),
+    inputTokens: sumKnown('inputTokens'),
     cacheReadTokens,
     cacheWriteTokens,
-    hitRate: eligibleTokens != null && eligibleTokens > 0 && cacheReadTokens != null ? cacheReadTokens / eligibleTokens : UNKNOWN,
+    hitRate: !hitUnknown && hitEligible > 0 ? hitRead / hitEligible : UNKNOWN,
     savedTokens: cacheReadTokens,
-    estimatedCostUsd: sum('estimatedCostUsd'),
-    estimatedSavedCostUsd: sum('estimatedSavedCostUsd'),
-    source: items.some((item) => item.source === 'unknown') ? 'unknown' : (items.some((item) => item.source === 'estimated') ? 'estimated' : 'provider'),
-    prefixFingerprint: items[items.length - 1].prefixFingerprint || '',
+    estimatedCostUsd: sumKnown('estimatedCostUsd'),
+    estimatedSavedCostUsd: sumKnown('estimatedSavedCostUsd'),
+    source,
+    unknownReason: items.map((item) => item.unknownReason).filter(Boolean)[0]
+      || (fingerprints.length > 1 ? 'prefix_fingerprint_mixed' : null),
+    dataOrigin: dataOrigins.has('unknown') ? 'unknown' : (dataOrigins.has('offline-mock') ? 'offline-mock' : 'provider_usage'),
+    prefixFingerprint: fingerprints.length === 1 ? fingerprints[0] : '',
   };
 }
 

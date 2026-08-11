@@ -277,6 +277,162 @@
       App.ui._toastTimer = setTimeout(() => { t.classList.remove('show'); t.hidden = true; App.ui._toastTimer = null; }, 2400);
     },
 
+    notify(title, detail) {
+      App.ui._notifications = Array.isArray(App.ui._notifications) ? App.ui._notifications : [];
+      App.ui._notifications.unshift({ title: String(title || '通知'), detail: String(detail || ''), at: Date.now() });
+      App.ui._notifications = App.ui._notifications.slice(0, 40);
+      App.ui.renderNotifications();
+    },
+
+    renderNotifications() {
+      const list = $('notificationList');
+      const dot = $('notificationDot');
+      if (!list) return;
+      const items = Array.isArray(App.ui._notifications) ? App.ui._notifications : [];
+      if (dot) dot.hidden = !items.length;
+      list.innerHTML = items.length ? items.map((item) => `<div class="notification-item"><b>${App.escapeHtml(item.title)}</b><span>${App.escapeHtml(item.detail)}</span><time>${new Date(item.at).toLocaleTimeString()}</time></div>`).join('') : '<div class="notification-empty">暂无通知</div>';
+    },
+
+    selectSettingsPanel(panel) {
+      const target = String(panel || 'api');
+      document.querySelectorAll('.set-nav-item').forEach((item) => item.classList.toggle('active', item.dataset.panel === target));
+      document.querySelectorAll('.settings-panel').forEach((item) => item.classList.toggle('active', item.dataset.panel === target));
+      const modal = $('settingsModal');
+      if (modal) modal.dataset.activePanel = target;
+      if (target === 'data') App.ui.refreshStorageLocation();
+    },
+
+    openCommandPalette() {
+      const mask = $('commandPalette');
+      const input = $('commandPaletteInput');
+      if (!mask || !input) return;
+      mask.hidden = false;
+      input.value = '';
+      App.ui.renderCommandPalette('');
+      setTimeout(() => input.focus(), 0);
+    },
+
+    closeCommandPalette() {
+      const mask = $('commandPalette');
+      if (mask) mask.hidden = true;
+    },
+
+    async renderCommandPalette(query) {
+      const box = $('commandPaletteResults');
+      if (!box) return;
+      const q = String(query || '').trim().toLowerCase();
+      const commands = [
+        { id: 'chat', title: '打开聊天', detail: '切换到糖包聊天' },
+        { id: 'agent', title: '打开糖码', detail: '切换到 Agent 工作区' },
+        { id: 'doc', title: '打开糖读', detail: '切换到文档模块' },
+        { id: 'image', title: '打开图片', detail: '切换到图片模块' },
+        { id: 'workflow', title: '打开 Workflow', detail: '切换到工作流模块' },
+        { id: 'settings', title: '打开设置', detail: '账户、提示词和外观' },
+        { id: 'data', title: '打开存储审计', detail: '迁移、备份、恢复和诊断' },
+        { id: 'cache', title: '触发真实 Cache Probe', detail: '会发送两次 Provider 请求' },
+      ].filter((item) => !q || (item.title + ' ' + item.detail).toLowerCase().includes(q));
+      const local = [];
+      const addLocal = (scope, id, title, detail) => {
+        if (!title || (q && !(title + ' ' + detail).toLowerCase().includes(q))) return;
+        local.push({ id: 'local:' + scope + ':' + id, title, detail });
+      };
+      for (const item of App.state.conversations || []) addLocal('conversation', item.id, item.title || '未命名会话', '会话');
+      for (const item of App.state.settings.docs || []) addLocal('document', item.id, item.name, '文档');
+      for (const item of App.state.projects || []) addLocal('project', item.id, item.name, '糖码项目');
+      for (const item of App.state.agentThreads || []) addLocal('run', item.id, item.title, '糖码会话');
+      const items = commands.concat(local).slice(0, 30);
+      box.innerHTML = items.length ? items.map((item, index) => `<button class="command-item${index === 0 ? ' active' : ''}" data-command="${App.escapeHtml(item.id)}"><span>${App.escapeHtml(item.title)}</span><small>${App.escapeHtml(item.detail || '')}</small></button>`).join('') : '<div class="command-empty">没有匹配项</div>';
+      App.ui._commandItems = items;
+    },
+
+    runCommand(id) {
+      const value = String(id || '');
+      App.ui.closeCommandPalette();
+      if (value.startsWith('local:conversation:')) {
+        App.chat.activate(value.slice('local:conversation:'.length));
+        return;
+      }
+      if (value === 'settings' || value === 'data') {
+        App.ui.openSettings();
+        if (value !== 'settings') App.ui.selectSettingsPanel(value);
+        return;
+      }
+      if (value === 'cache') {
+        App.ui.openCacheProbe();
+        return;
+      }
+      if (['chat', 'agent', 'doc', 'image', 'workflow'].includes(value)) {
+        App.router.go(value === 'workflow' ? 'create' : value);
+        return;
+      }
+    },
+
+    // Cache Probe 直接使用紧凑弹窗，不增加设置子页面，也不保存探测正文。
+    openCacheProbe() {
+      const provider = App.getProvider('chat') || {};
+      const modal = document.createElement('div');
+      modal.className = 'modal-mask';
+      modal.id = 'cacheProbeMask';
+      const ready = !!(provider.ref && provider.model && provider.hasKey);
+      const reason = !provider.ref ? '尚未选择账户' : !provider.model ? '尚未选择模型' : !provider.hasKey ? '当前账户未配置 API Key' : '';
+      modal.innerHTML = `
+        <div class="modal cache-probe-modal" role="dialog" aria-modal="true" aria-labelledby="cacheProbeTitle">
+          <div class="modal-header"><span id="cacheProbeTitle">真实 Cache Probe</span>
+            <button class="icon-btn" type="button" data-cache-close aria-label="关闭">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p class="cache-probe-notice">将向当前聊天 Provider 发送两次最小化请求，可能消耗额度。不保存探测 Prompt、响应正文或 API Key。</p>
+            <div class="cache-probe-context"><span>账户</span><b>${App.escapeHtml(provider.ref || '未配置')}</b><span>模型</span><b>${App.escapeHtml(provider.model || '未配置')}</b></div>
+            <div class="cache-probe-status" data-cache-status>${ready ? '准备就绪' : '无法探测：' + App.escapeHtml(reason)}</div>
+            <div class="cache-probe-result" data-cache-result></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-ghost" type="button" data-cache-close>关闭</button>
+            <button class="btn-primary" type="button" data-cache-run${ready ? '' : ' disabled'}>开始探测</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      const status = modal.querySelector('[data-cache-status]');
+      const result = modal.querySelector('[data-cache-result]');
+      const run = modal.querySelector('[data-cache-run]');
+      const close = () => modal.remove();
+      modal.querySelectorAll('[data-cache-close]').forEach((button) => button.addEventListener('click', close));
+      modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
+      modal.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
+      const fmtTokens = (value) => value == null ? '未知' : String(Math.round(Number(value)));
+      const fmtRate = (value) => value == null ? '未知' : Math.round(Number(value) * 1000) / 10 + '%';
+      const renderSample = (label, sample) => {
+        const cache = sample || {};
+        return `<div class="cache-probe-sample"><b>${label}</b><span>命中率 ${fmtRate(cache.hitRate)}</span><span>命中 Token ${fmtTokens(cache.cacheReadTokens)}</span><span>写入 Token ${fmtTokens(cache.cacheWriteTokens)}</span><span>来源 ${App.escapeHtml(cache.dataOrigin || cache.source || 'unknown')}</span>${cache.unknownReason ? `<small>${App.escapeHtml(cache.unknownReason)}</small>` : ''}</div>`;
+      };
+      if (run) run.addEventListener('click', async () => {
+        run.disabled = true;
+        run.textContent = '探测中...';
+        status.textContent = '正在执行冷请求和热请求...';
+        result.innerHTML = '';
+        try {
+          const response = await (App.services.gateway && App.services.gateway.probeCache
+            ? App.services.gateway.probeCache({ ref: provider.ref, model: provider.model, kind: 'chat' })
+            : null);
+          if (!response || response.ok === false) throw new Error(response && (response.error || response.message) || 'Cache Probe 不可用');
+          const cache = response.cache || {};
+          result.innerHTML = renderSample('冷请求', response.cold) + renderSample('热请求', response.warm)
+            + `<div class="cache-probe-summary">最终命中率 <b>${fmtRate(cache.hitRate)}</b> · 节省 Token <b>${fmtTokens(cache.savedTokens)}</b> · 数据来源 <b>${App.escapeHtml(cache.dataOrigin || cache.source || 'unknown')}</b>${cache.unknownReason ? ` · ${App.escapeHtml(cache.unknownReason)}` : ''}</div>`;
+          status.textContent = '探测完成';
+          App.ui.toast('Cache Probe 已完成');
+        } catch (error) {
+          status.textContent = '探测失败：' + String(error && error.message ? error.message : error);
+          App.ui.toast('Cache Probe 失败');
+        } finally {
+          run.disabled = false;
+          run.textContent = '再次探测';
+        }
+      });
+      setTimeout(() => { (run && !run.disabled ? run : modal.querySelector('[data-cache-close]')).focus(); }, 0);
+    },
+
     // 自定义输入弹窗（替代原生 prompt，兼容打包版沙箱）。返回 Promise<字符串|null>：确认返回 trim 后的值，取消/Esc/点遮罩返回 null。
     promptModal(opts) {
       const o = Object.assign(
@@ -379,10 +535,9 @@
 
     openSettings() {
       // v2（UX）：每次打开设置默认回归「配置」面板（不记忆上次停留的标签页）
-      document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === 'api'));
-      document.querySelectorAll('.set-nav-item').forEach(t => t.classList.toggle('active', t.dataset.panel === 'api'));
       const settingsModal = $('settingsModal');
       if (settingsModal) settingsModal.dataset.activePanel = 'api';
+      App.ui.selectSettingsPanel('api');
       App.ui.refreshSettingsUI();
       settingsModal.hidden = false;
     },
@@ -411,12 +566,137 @@
       if (!info || !info.ok) {
         mode.textContent = '当前环境无法读取数据目录';
         target.textContent = '';
+        const audit = $('storageAuditParts');
+        if (audit) audit.innerHTML = '<div class="storage-audit-empty">存储审计暂不可用</div>';
         return;
       }
       mode.textContent = info.mode === 'custom' ? '当前使用自定义数据目录（不占用默认 C 盘记录目录）' : '当前使用系统默认数据目录';
       target.textContent = info.recordsRoot || info.activeRoot || '';
+      const migrationStatus = $('storageMigrationStatus');
+      if (migrationStatus) {
+        const migration = info.migration || {};
+        const failed = !!info.startupMigration || migration.status === 'failed';
+        migrationStatus.hidden = !failed;
+        migrationStatus.textContent = failed
+          ? '迁移失败，需要验证或恢复；当前仍使用旧数据，未自动删除原目录。'
+          : (migration.status ? '迁移状态：' + migration.status : '');
+      }
       const open = $('openStorageLocation');
       if (open) open.disabled = !info.activeRoot;
+      App.ui.renderStorageAudit(info);
+    },
+
+    formatBytes(bytes) {
+      const value = Number(bytes);
+      if (!Number.isFinite(value) || value < 0) return '未知';
+      if (value < 1024) return value + ' B';
+      const units = ['KB', 'MB', 'GB', 'TB'];
+      let n = value;
+      let unit = 'B';
+      for (const next of units) { n /= 1024; unit = next; if (n < 1024) break; }
+      return n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2) + ' ' + unit;
+    },
+
+    renderStorageAudit(info) {
+      const box = $('storageAuditParts');
+      const status = $('storageMigrationStatus');
+      if (!box) return;
+      const parts = Array.isArray(info.parts) ? info.parts : [];
+      box.innerHTML = parts.map((part) => `
+        <div class="storage-audit-item">
+          <b>${App.escapeHtml(part.label || part.key || '存储')}</b>
+          <span>${App.ui.formatBytes(part.bytes)} · ${Number(part.files) || 0} 个文件</span>
+          <code>${App.escapeHtml(part.location || '')}</code>
+        </div>`).join('') || '<div class="storage-audit-empty">暂无存储分区记录</div>';
+      if (status) {
+        const migration = info.migration || {};
+        const startup = info.startupMigration;
+        const consistency = info.audit && info.audit.stateConsistency;
+        const warnings = [];
+        if (info.database && info.database.available === false) warnings.push('SQLite 当前不可用，已明确使用 state.json 保存；原因：' + (info.database.reason || 'unknown'));
+        if (startup) warnings.push('上次迁移失败：' + (startup.error || startup.code || '未知错误') + '；当前仍使用旧数据');
+        if (migration.status === 'failed') warnings.push('迁移记录为失败，可先验证源目录和目标目录后再处理');
+        if (consistency && consistency.status === 'inconsistent') warnings.push('state.json 与 SQLite 计数不一致，请先导出备份并检查');
+        if (consistency && consistency.status === 'unknown') warnings.push('state.json 与 SQLite 一致性：无法确认（' + (consistency.reason || '未知原因') + '）');
+        const trace = info.audit && info.audit.trace;
+        if (trace && (trace.orphanEvents || []).length + (trace.invalidEvents || []).length) warnings.push('Trace 审计发现 ' + ((trace.orphanEvents || []).length + (trace.invalidEvents || []).length) + ' 个异常事件');
+        status.classList.toggle('warn', warnings.length > 0);
+        status.textContent = warnings.length
+          ? warnings.join('；')
+          : '迁移状态：' + (migration.status || (info.mode === 'custom' ? 'active' : 'default')) + '；SQLite：' + (info.database && info.database.integrity ? '完整性通过' : '未确认') + '；state/SQLite：' + (consistency && consistency.status || '未知');
+      }
+    },
+
+    async verifyStorageMigration() {
+      const button = $('verifyStorageMigration');
+      if (!button || !App.services.fs || !App.services.fs.verifyStorageMigration) return;
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = '验证中...';
+      try {
+        const result = await App.services.fs.verifyStorageMigration();
+        if (result && result.ok) App.ui.toast('迁移验证通过：' + (result.files || []).length + ' 个文件');
+        else App.ui.toast('迁移验证失败：' + ((result && (result.error || result.code)) || '请查看存储状态'));
+        await App.ui.refreshStorageLocation();
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    },
+
+    async previewStorageCleanup() {
+      const box = $('storageCleanupPreview');
+      const cleanButton = $('cleanupStorageLegacy');
+      if (!box || !App.services.fs || !App.services.fs.cleanupPreview) return;
+      const result = await App.services.fs.cleanupPreview();
+      if (!result || !result.ok) {
+        box.hidden = false;
+        box.textContent = '清理预览失败：' + ((result && result.error) || '未知错误');
+        if (cleanButton) cleanButton.hidden = true;
+        return;
+      }
+      App.ui._cleanupPreviewId = result.previewId || '';
+      const items = Array.isArray(result.items) ? result.items : [];
+      box.hidden = false;
+      box.innerHTML = items.length
+        ? '<strong>将移动到时间戳隔离目录，不会永久删除：</strong>' + items.map((item) => `<div>${App.escapeHtml(item.name)} · ${App.ui.formatBytes(item.bytes)}<code>${App.escapeHtml(item.location || '')}</code></div>`).join('')
+        : '<strong>没有可清理的旧目录内容。</strong>';
+      if (cleanButton) cleanButton.hidden = !items.length;
+    },
+
+    async cleanupStorageLegacy() {
+      const previewId = App.ui._cleanupPreviewId || '';
+      if (!previewId || !window.confirm('确认把预览中的旧目录内容移动到隔离目录？不会永久删除。')) return;
+      const result = await App.services.fs.cleanupLegacy({ previewId });
+      if (result && result.ok) App.ui.toast('已隔离 ' + (result.cleaned || []).length + ' 项；位置：' + result.quarantine);
+      else App.ui.toast('隔离失败：' + ((result && result.error) || '未知错误'));
+      App.ui._cleanupPreviewId = '';
+      const cleanButton = $('cleanupStorageLegacy');
+      if (cleanButton) cleanButton.hidden = true;
+      await App.ui.refreshStorageLocation();
+    },
+
+    async backupStorage() {
+      const result = await (App.services.fs && App.services.fs.backupStorage ? App.services.fs.backupStorage({}) : null);
+      if (result && result.ok) App.ui.toast('脱敏备份已导出：' + result.filePath);
+      else if (!(result && result.canceled)) App.ui.toast('备份失败：' + ((result && result.error) || '未知错误'));
+    },
+
+    async restoreStorage() {
+      if (!window.confirm('恢复会覆盖当前 state.json，并保留恢复前备份。确认继续吗？')) return;
+      const result = await (App.services.fs && App.services.fs.restoreStorage ? App.services.fs.restoreStorage({}) : null);
+      if (!result || !result.ok) {
+        if (!(result && result.canceled)) App.ui.toast('恢复失败：' + ((result && result.error) || '未知错误'));
+        return;
+      }
+      App.ui.toast('恢复完成，应用即将重启以加载数据');
+      if (App.services.fs.relaunchApp) await App.services.fs.relaunchApp();
+    },
+
+    async exportStorageDiagnostics() {
+      const result = await (App.services.fs && App.services.fs.exportDiagnostics ? App.services.fs.exportDiagnostics() : null);
+      if (result && result.ok) App.ui.toast('脱敏诊断包已导出：' + result.filePath);
+      else if (!(result && result.canceled)) App.ui.toast('诊断包导出失败：' + ((result && result.error) || '未知错误'));
     },
 
     refreshSecretStoreStatus() {
@@ -457,6 +737,121 @@
         return;
       }
       el.textContent = '正在读取本机系统密钥库...';
+    },
+
+    async diagnoseSecretStore() {
+      const box = $('secretDiagnostics');
+      if (!box || !App.services.secrets || !App.services.secrets.diagnose) return;
+      box.hidden = false;
+      box.textContent = '正在诊断...';
+      const result = await App.services.secrets.diagnose();
+      box.textContent = JSON.stringify(result || { ok: false }, null, 2);
+    },
+
+    async recoverLegacySecrets() {
+      if (!window.confirm('将尝试使用旧数据目录中的密钥上下文恢复当前密钥库，并在覆盖前备份 Local State。继续吗？')) return;
+      const result = await (App.services.secrets && App.services.secrets.recoverLegacy ? App.services.secrets.recoverLegacy() : null);
+      if (result && result.ok) {
+        if (App.rt && App.rt.refreshSecrets) await App.rt.refreshSecrets();
+        App.ui.refreshSecretStoreStatus();
+        App.ui.toast(result.recovered ? '旧密钥上下文恢复成功' : '未发现可恢复的旧密钥上下文');
+      } else {
+        App.ui.toast('密钥恢复失败：' + ((result && result.error) || '原密钥未覆盖'));
+      }
+      await App.ui.diagnoseSecretStore();
+    },
+
+    modelProviderFor(moduleId) {
+      try {
+        const module = String(moduleId || 'chat');
+        const provider = App.getProvider(module) || { ref: '', model: '', apiBase: '' };
+        if (!provider.accountId && String(provider.ref || '').startsWith('acc:')) provider.accountId = String(provider.ref).slice(4);
+        return provider;
+      } catch (_) { return { ref: '', model: '', apiBase: '' }; }
+    },
+
+    renderModelProfiles() {
+      const box = $('modelProfileList');
+      if (!box) return;
+      const modules = [
+        ['chat', '聊天'], ['agent', '糖码'], ['doc', '糖读'], ['image', '图片'], ['create', '糖创'],
+      ];
+      box.innerHTML = modules.map(([id, label]) => {
+        const provider = App.ui.modelProviderFor(id);
+        const account = (App.state.settings.accounts || []).find((item) => item.id === provider.accountId);
+        const profile = provider.profile || {};
+        const caps = profile.caps || 'auto';
+        const profileText = [
+          (Number(profile.contextWindow) || 128000).toLocaleString() + ' ctx',
+          profile.maxOutput ? Number(profile.maxOutput).toLocaleString() + ' out' : '输出默认',
+          caps === 'auto' ? '能力自动' : caps,
+          (Number(profile.timeoutMs) || 120000) + ' ms 超时',
+          '≤' + (Number(profile.budgetMaxSteps) || 96) + ' 步',
+        ].join(' · ');
+        const edit = account ? `<button type="button" class="mini" data-model-profile-edit="${App.escapeHtml(account.id)}">编辑</button>` : '';
+        return `<div class="model-profile-row"><b>${label}</b><span>${App.escapeHtml((account && account.name) || provider.ref || '未配置账户')}</span><code>${App.escapeHtml(provider.model || '未配置模型')}</code><em>${App.escapeHtml(profileText)}${provider.apiBase ? ' · 已配置地址' : ' · 未配置地址'}</em>${edit}</div>`;
+      }).join('');
+    },
+
+    async runModelHealth() {
+      const module = ($('modelHealthModule') && $('modelHealthModule').value) || 'chat';
+      const resultBox = $('modelHealthResult');
+      const provider = App.ui.modelProviderFor(module);
+      if (!resultBox) return;
+      if (!provider.ref || !provider.model) {
+        resultBox.textContent = '请先在配置/账户中选择账户和模型。';
+        return;
+      }
+      resultBox.textContent = '检查中...';
+      const result = await App.services.gateway.modelHealth({ ref: provider.ref, model: provider.model, kind: module === 'image' ? 'images' : 'chat' });
+      if (!result || result.ok === false) {
+        const error = result && result.error;
+        resultBox.textContent = '检查失败：' + ((error && (error.message || error.code)) || result.error || '未知错误');
+        App.ui.notify('Provider 健康检查失败', module + ' / ' + provider.model);
+        return;
+      }
+      const caps = Object.entries(result.capabilities || {}).filter(([, value]) => value !== undefined).map(([key, value]) => key + '=' + (typeof value === 'object' ? JSON.stringify(value) : value)).join(' · ');
+      const cache = result.cacheSupport || (result.capabilities && result.capabilities.cache);
+      const cacheText = cache && cache.supported === true ? 'Cache 可探测' : cache && cache.supported === false ? 'Cache 不支持/未知' : 'Cache 未知';
+      resultBox.textContent = '连通：' + (result.apiReachable ? '是' : '否') + ' · Key：' + (result.keyConfigured ? '已配置' : '未配置') + ' · 模型：' + (result.modelExists === false ? '未找到' : result.modelExists === true ? '存在' : '未知') + ' · 首字节：' + (result.firstByteLatencyMs == null ? '未知' : result.firstByteLatencyMs + ' ms') + ' · 完整响应：' + (result.responseLatencyMs == null ? (result.latencyMs == null ? '未知' : result.latencyMs + ' ms') : result.responseLatencyMs + ' ms') + ' · ' + cacheText + (caps ? ' · ' + caps : '');
+    },
+
+    async runCacheProbe() {
+      const module = ($('modelHealthModule') && $('modelHealthModule').value) || 'chat';
+      const provider = App.ui.modelProviderFor(module);
+      const resultBox = $('cacheProbeResult');
+      if (!resultBox) return;
+      if (!provider.ref || !provider.model) { resultBox.textContent = '请先选择可用账户和模型。'; return; }
+      if (!window.confirm('真实 Cache Probe 会执行两次 Provider 请求，可能消耗额度。继续吗？')) return;
+      resultBox.textContent = '正在执行冷/热请求...';
+      const result = await App.services.gateway.probeCache({ ref: provider.ref, model: provider.model, kind: 'chat' });
+      if (!result || result.ok === false) {
+        resultBox.textContent = '探测失败：' + ((result && (result.error || result.code)) || '未知错误');
+        App.ui.notify('Cache Probe 失败', provider.model);
+        return;
+      }
+      const cache = result.cache || {};
+      const pct = cache.hitRate == null ? '未知' : (cache.hitRate * 100).toFixed(1) + '%';
+      resultBox.textContent = 'Cache：' + (cache.source || 'unknown') + ' · 命中率：' + pct + ' · 命中 Token：' + (cache.savedTokens == null ? '未知' : cache.savedTokens) + ' · 节省成本：' + (cache.estimatedSavedCostUsd == null ? '未知' : '$' + cache.estimatedSavedCostUsd) + (cache.unknownReason ? ' · 原因：' + cache.unknownReason : '');
+      App.ui.notify('Cache Probe 完成', provider.model + ' · 命中率 ' + pct);
+      await App.ui.refreshModelMetrics();
+    },
+
+    async refreshModelMetrics() {
+      const box = $('modelMetricsList');
+      if (!box || !App.services.gateway || !App.services.gateway.modelMetrics) return;
+      box.innerHTML = '<div class="model-metrics-empty">读取中...</div>';
+      const result = await App.services.gateway.modelMetrics({ limit: 20 });
+      const items = result && Array.isArray(result.items) ? result.items : [];
+      if (!items.length) { box.innerHTML = '<div class="model-metrics-empty">暂无模型调用指标</div>'; return; }
+      box.innerHTML = items.map((item) => {
+        const cache = item.cache || {};
+        const cacheText = cache.hitRate == null ? 'Cache 未知' : 'Cache ' + (cache.hitRate * 100).toFixed(1) + '%';
+        const tokens = item.inputTokens == null && item.outputTokens == null ? 'Token 未知' : (item.inputTokens == null ? '?' : item.inputTokens) + '/' + (item.outputTokens == null ? '?' : item.outputTokens) + ' tok';
+        const cost = item.costUsd == null ? '成本未知' : '$' + item.costUsd;
+        const latency = item.firstByteLatencyMs == null && item.responseLatencyMs == null ? (item.latencyMs == null ? '延迟未知' : item.latencyMs + ' ms') : '首字节 ' + (item.firstByteLatencyMs == null ? '未知' : item.firstByteLatencyMs + ' ms') + ' · 完整 ' + (item.responseLatencyMs == null ? '未知' : item.responseLatencyMs + ' ms');
+        return `<div class="model-metric-row"><b>${App.escapeHtml(item.callType || item.scope || 'model')}</b><span>${App.escapeHtml(item.modelId || '未知模型')} · ${App.escapeHtml(item.status || 'unknown')}</span><em>${tokens} · ${cacheText} · ${cost} · ${latency}</em></div>`;
+      }).join('');
     },
 
     async resetSecretStore() {
@@ -546,6 +941,8 @@
       App.ui.renderModulesPanel();
       App.ui.refreshStorageLocation();
       App.ui.refreshSecretStoreStatus();
+      App.ui.renderModelProfiles();
+      App.ui.refreshModelMetrics();
       const pr = App.state.settings.prompts || {};
       const DP = App.DEFAULT_PROMPTS;
       if ($('pChat')) { $('pChat').value = pr.chat || ''; $('pChat').placeholder = DP.chat; }
@@ -578,10 +975,9 @@
       if ($('radiusRange')) $('radiusRange').value = ap.radius ? parseInt(ap.radius, 10) : 14;
       if ($('radiusVal')) $('radiusVal').textContent = (ap.radius ? ap.radius : 14) + 'px';
       App.ui.markThemeSeg();
-      // 导航高亮
-      document.querySelectorAll('.set-nav-item').forEach(t => t.classList.remove('active'));
-      const activeNav = document.querySelector('.set-nav-item.active') || document.querySelector('.set-nav-item[data-panel="api"]');
-      if (activeNav) activeNav.classList.add('active');
+      // 保留命令面板或用户刚刚选择的设置子面板。
+      const activePanel = ($('settingsModal') && $('settingsModal').dataset.activePanel) || 'api';
+      App.ui.selectSettingsPanel(activePanel);
       App.ui.renderAccentSwatches();
       // v4（技能面板）：异步加载技能列表（成功后填充，不阻塞其它面板）
       App.ui.renderSkillsPanel();
@@ -605,20 +1001,53 @@
       box.innerHTML = '<div class="skill-state"><span class="skill-spinner"></span><span>正在读取本机技能…</span></div>';
       const proj = App.agent && App.agent.activeProject ? App.agent.activeProject() : null;
       let wid = (proj && proj.workspaceId) || '';
+      const registerProjectWorkspace = async () => {
+        if (!proj || !App.services.shell || !App.services.shell.registerWorkspace) return false;
+        const primary = Array.isArray(proj.roots) && proj.roots.length
+          ? proj.roots.find((root) => root.rootId === proj.primaryRootId) || proj.roots[0]
+          : null;
+        const cwd = proj.cwd || (primary && primary.path) || '';
+        if (!cwd) return false;
+        try {
+          const registered = await App.services.shell.registerWorkspace(cwd, proj.name);
+          if (!registered || !registered.ok || !registered.workspaceId) return false;
+          wid = registered.workspaceId;
+          proj.workspaceId = wid;
+          if (typeof registered.cwd === 'string' && registered.cwd) proj.cwd = registered.cwd;
+          if (Array.isArray(registered.roots) && registered.roots.length) proj.roots = registered.roots;
+          if (registered.primaryRootId) proj.primaryRootId = registered.primaryRootId;
+          App.persist();
+          return true;
+        } catch (_) {
+          return false;
+        }
+      };
+      const isInvalidWorkspace = (value) => {
+        const text = String(value && (value.code || value.error || value.message) || value || '').toLowerCase();
+        return text === 'unknown_workspace' || text === 'invalid_workspace'
+          || /invalid.?workspace|unknown.?workspace|无效的工作区|工作区.*(失效|无效)/i.test(text);
+      };
       // v2（UX 修复）：老项目缺 workspaceId 时惰性登记，否则主进程只扫到用户级+内置，项目级技能“名存实亡”
       if (!wid && proj && proj.cwd) {
-        try {
-          const r = await App.services.shell.registerWorkspace(proj.cwd, proj.name);
-          if (r && r.ok) { wid = r.workspaceId; proj.workspaceId = wid; App.persist(); }
-        } catch (_) {}
+        await registerProjectWorkspace();
       }
+      const listSkills = async () => (App.services.skills && App.services.skills.listSkills
+        ? App.services.skills.listSkills(wid)
+        : { ok: false, error: '当前环境不支持技能管理', skills: [] });
       let result;
       try {
-        result = App.services.skills && App.services.skills.listSkills
-          ? await App.services.skills.listSkills(wid)
-          : { ok: false, error: '当前环境不支持技能管理', skills: [] };
+        result = await listSkills();
       } catch (e) {
         result = { ok: false, error: String(e && e.message ? e.message : e), skills: [] };
+      }
+      if ((!result || !result.ok) && isInvalidWorkspace(result)) {
+        wid = '';
+        if (proj) proj.workspaceId = '';
+        if (await registerProjectWorkspace()) {
+          try { result = await listSkills(); } catch (e) {
+            result = { ok: false, error: String(e && e.message ? e.message : e), skills: [] };
+          }
+        }
       }
       if (!result || !result.ok) {
         box.innerHTML = '<div class="skill-state skill-state-error"><b>技能列表读取失败</b><span>' + App.escapeHtml((result && result.error) || '未知错误') + '</span><button type="button" class="btn-ghost mini" data-skill-retry>重试</button></div>';
@@ -1072,6 +1501,7 @@
       handle.className = 'drag-handle'; handle.textContent = '⠿'; handle.title = '拖拽排序';
       const name = (v && typeof v === 'object') ? v.name : (v || '');
       const cw = (v && typeof v === 'object' && v.contextWindow) ? v.contextWindow : '';
+      const maxOutput = (v && typeof v === 'object' && v.maxOutput) ? v.maxOutput : '';
       const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
       const caps = (v && typeof v === 'object' && v.caps) ? v.caps : '';
       const input = document.createElement('input');
@@ -1083,6 +1513,11 @@
       cwInput.placeholder = '128000'; cwInput.min = '4000'; cwInput.step = '1000';
       cwInput.title = '上下文窗口（token）';
       cwInput.value = cw;
+      const outputInput = document.createElement('input');
+      outputInput.type = 'number'; outputInput.className = 'accModelOutput';
+      outputInput.placeholder = '默认'; outputInput.min = '256'; outputInput.step = '256';
+      outputInput.title = '最大输出 token（留空使用供应商默认）';
+      outputInput.value = maxOutput;
       const ttSel = document.createElement('select');
       ttSel.className = 'accModelThink';
       ttSel.title = '深度思考参数类型：按模型厂商选，不确定选「自动」';
@@ -1098,7 +1533,7 @@
       capsSel.value = caps;
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'model-row-del'; btn.dataset.rm = '1'; btn.textContent = '×'; btn.title = '删除该模型';
-      row.appendChild(handle); row.appendChild(input); row.appendChild(cwInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
+      row.appendChild(handle); row.appendChild(input); row.appendChild(cwInput); row.appendChild(outputInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
       return row;
     },
 
@@ -1145,6 +1580,7 @@
 
     async saveAccount() {
       const id = $('accountForm').dataset.edit || '';
+      const previousAccount = id ? App.state.settings.accounts.find((item) => item.id === id) : null;
       const name = $('accName').value.trim();
       const apiBase = $('accBase').value.trim();
       const apiKey = $('accKey').value.trim();
@@ -1152,15 +1588,26 @@
       document.querySelectorAll('#accModels .model-row').forEach(row => {
         const nameInput = row.querySelector('.accModelRow');
         const ctxInput = row.querySelector('.accModelCtx');
+        const outputInput = row.querySelector('.accModelOutput');
         const ttSel = row.querySelector('.accModelThink');
         const capsSel = row.querySelector('.accModelCaps');
         const n = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
         if (!n) return;
         const cw = (ctxInput && ctxInput.value) ? parseInt(ctxInput.value, 10) : 128000;
+        const maxOutput = (outputInput && outputInput.value) ? parseInt(outputInput.value, 10) : 0;
         const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
         const caps = (capsSel && capsSel.value) ? capsSel.value : '';
+        const previous = previousAccount && Array.isArray(previousAccount.models)
+          ? previousAccount.models.find((item) => (typeof item === 'string' ? item : item && item.name) === n)
+          : null;
         const m = { name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt };
         if (caps) m.caps = caps; // M6：能力预设
+        if (maxOutput > 0) m.maxOutput = maxOutput;
+        if (previous && typeof previous === 'object') {
+          if (previous.timeoutMs > 0) m.timeoutMs = previous.timeoutMs;
+          if (previous.budgetMaxSteps > 0) m.budgetMaxSteps = previous.budgetMaxSteps;
+          if (previous.budgetMaxCostUsd >= 0) m.budgetMaxCostUsd = previous.budgetMaxCostUsd;
+        }
         models.push(m);
       });
       // 编辑已有账户时 Key 允许留空，表示沿用密钥库里已保存的那把
@@ -1528,7 +1975,25 @@
       const impFull = $('importFull'); if (impFull) impFull.addEventListener('click', () => App.config.importFull());
       const chooseStorage = $('chooseStorageLocation'); if (chooseStorage) chooseStorage.addEventListener('click', () => App.ui.chooseStorageLocation());
       const openStorage = $('openStorageLocation'); if (openStorage) openStorage.addEventListener('click', () => App.ui.openStorageLocation());
+      const verifyStorage = $('verifyStorageMigration'); if (verifyStorage) verifyStorage.addEventListener('click', () => App.ui.verifyStorageMigration());
+      const previewStorage = $('previewStorageCleanup'); if (previewStorage) previewStorage.addEventListener('click', () => App.ui.previewStorageCleanup());
+      const cleanupStorage = $('cleanupStorageLegacy'); if (cleanupStorage) cleanupStorage.addEventListener('click', () => App.ui.cleanupStorageLegacy());
+      const backupStorage = $('backupStorage'); if (backupStorage) backupStorage.addEventListener('click', () => App.ui.backupStorage());
+      const restoreStorage = $('restoreStorage'); if (restoreStorage) restoreStorage.addEventListener('click', () => App.ui.restoreStorage());
+      const diagnostics = $('exportStorageDiagnostics'); if (diagnostics) diagnostics.addEventListener('click', () => App.ui.exportStorageDiagnostics());
+      const diagnoseSecrets = $('diagnoseSecretStore'); if (diagnoseSecrets) diagnoseSecrets.addEventListener('click', () => App.ui.diagnoseSecretStore());
+      const recoverSecrets = $('recoverLegacySecrets'); if (recoverSecrets) recoverSecrets.addEventListener('click', () => App.ui.recoverLegacySecrets());
       const resetSecretStore = $('resetSecretStore'); if (resetSecretStore) resetSecretStore.addEventListener('click', () => App.ui.resetSecretStore());
+      const modelHealth = $('runModelHealth'); if (modelHealth) modelHealth.addEventListener('click', () => App.ui.runModelHealth());
+      const cacheProbe = $('runCacheProbe'); if (cacheProbe) cacheProbe.addEventListener('click', () => App.ui.runCacheProbe());
+      const metrics = $('refreshModelMetrics'); if (metrics) metrics.addEventListener('click', () => App.ui.refreshModelMetrics());
+      const modelProfiles = $('modelProfileList');
+      if (modelProfiles) modelProfiles.addEventListener('click', (e) => {
+        const edit = e.target.closest('[data-model-profile-edit]');
+        if (!edit) return;
+        e.stopPropagation();
+        App.ui.openAccountForm(edit.dataset.modelProfileEdit);
+      });
 
       const addBtn = $('addCustomModule');
       if (addBtn) addBtn.addEventListener('click', () => App.ui.openModuleEditor());
@@ -1621,6 +2086,55 @@
       $('expandBtn').addEventListener('click', () => $('app').classList.remove('collapsed'));
       $('themeBtn').addEventListener('click', () => App.ui.toggleTheme());
       $('settingsBtn').addEventListener('click', () => App.ui.openSettings());
+
+      const notificationBtn = $('notificationBtn');
+      const notificationPopover = $('notificationPopover');
+      if (notificationBtn && notificationPopover) {
+        notificationBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          notificationPopover.hidden = !notificationPopover.hidden;
+        });
+        notificationPopover.addEventListener('click', (e) => e.stopPropagation());
+      }
+      const clearNotifications = $('clearNotifications');
+      if (clearNotifications) clearNotifications.addEventListener('click', () => { App.ui._notifications = []; App.ui.renderNotifications(); });
+      document.addEventListener('click', () => { if (notificationPopover) notificationPopover.hidden = true; });
+
+      const commandMask = $('commandPalette');
+      const commandInput = $('commandPaletteInput');
+      const commandResults = $('commandPaletteResults');
+      if (commandMask && commandInput && commandResults) {
+        commandInput.addEventListener('input', () => App.ui.renderCommandPalette(commandInput.value));
+        commandResults.addEventListener('click', (e) => {
+          const item = e.target.closest('[data-command]');
+          if (item) App.ui.runCommand(item.dataset.command);
+        });
+        commandMask.addEventListener('click', (e) => { if (e.target === commandMask) App.ui.closeCommandPalette(); });
+        commandInput.addEventListener('keydown', (e) => {
+          const items = Array.from(commandResults.querySelectorAll('.command-item'));
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const active = commandResults.querySelector('.command-item.active') || items[0];
+            if (active) App.ui.runCommand(active.dataset.command);
+          } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (!items.length) return;
+            const current = Math.max(0, items.indexOf(commandResults.querySelector('.command-item.active')));
+            const next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+            items.forEach((item, index) => item.classList.toggle('active', index === next));
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            App.ui.closeCommandPalette();
+          }
+        });
+      }
+      document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k') {
+          e.preventDefault();
+          App.ui.openCommandPalette();
+        }
+        if (e.key === 'Escape' && $('commandPalette') && !$('commandPalette').hidden) App.ui.closeCommandPalette();
+      });
 
       // nav
       $('mainNav').addEventListener('click', (e) => {
@@ -1727,8 +2241,7 @@
         const item = e.target.closest('.set-nav-item');
         if (!item) return;
         const target = item.dataset.panel;
-        document.querySelectorAll('.set-nav-item').forEach(t => t.classList.toggle('active', t === item));
-        document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
+        App.ui.selectSettingsPanel(target);
         $('settingsModal').dataset.activePanel = target;
       });
       const apiModuleSel = $('apiModuleSel');

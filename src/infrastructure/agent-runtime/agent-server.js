@@ -14,6 +14,7 @@ module.exports = {
   configureAgentServer: runtime.configureAgentServer,
   flushActiveAgentRuns: runtime.flushActiveAgentRuns,
   hasActiveAgentRuns: runtime.hasActiveAgentRuns,
+  runAgent: runtime.runAgent,
   scanSkills: runtime.scanSkills,
   loadSkillGuides: runtime.loadSkillGuides,
   findEnabledSkill: runtime.findEnabledSkill,

@@ -171,6 +171,51 @@ function getStatus() {
   };
 }
 
+function diagnose() {
+  const candidates = candidatePaths().map((candidate) => {
+    let exists = false;
+    let size = 0;
+    try { exists = fs.existsSync(candidate); if (exists) size = fs.statSync(candidate).size; } catch (_) {}
+    return {
+      path: candidate,
+      exists,
+      size,
+      source: candidate === filePath ? 'active' : 'legacy',
+    };
+  });
+  return {
+    ok: true,
+    status: getStatus(),
+    filePath,
+    readPath,
+    candidates,
+    canDecrypt: loadState === 'ready',
+    recoveryAvailable: candidates.some((item) => item.exists && item.source === 'legacy'),
+  };
+}
+
+/**
+ * Explicitly import a legacy ciphertext after the caller has restored/adopted
+ * the correct OS key context. Plaintext never leaves this module.
+ */
+function recoverLegacy() {
+  if (!loaded || loadState === 'unavailable') return { ok: false, code: loadCode || 'secret_store_unavailable', error: '当前密钥上下文无法读取密钥库' };
+  const legacy = candidatePaths().find((candidate) => candidate !== filePath && fs.existsSync(candidate));
+  if (!legacy) return { ok: true, recovered: false, reason: 'legacy_secret_missing', count: Object.keys(store).length };
+  try {
+    const raw = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+    const json = decode(raw);
+    const obj = JSON.parse(json);
+    if (!obj || typeof obj !== 'object') throw new Error('旧密钥库内容无效');
+    const previous = Object.assign({}, store);
+    for (const [key, value] of Object.entries(obj)) if (typeof value === 'string' && value) store[key] = value;
+    if (!save()) { store = Object.assign(Object.create(null), previous); return { ok: false, code: 'secret_recovery_write_failed', error: '恢复后写入当前密钥库失败，原密钥未覆盖' }; }
+    return { ok: true, recovered: true, source: legacy, count: Object.keys(store).length, encrypted };
+  } catch (error) {
+    return { ok: false, code: error && error.code || 'secret_recovery_failed', error: '旧密钥上下文仍无法解密，原密钥未覆盖' };
+  }
+}
+
 function unreadableBackupPath(sourcePath) {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17);
   const base = sourcePath + '.unreadable-' + stamp + '.bak';
@@ -322,5 +367,5 @@ function isEncrypted() {
 
 module.exports = {
   init, getSecret, setSecret, deleteSecret, deleteByPrefix,
-  hasSecret, listRefs, isEncrypted, getStatus, resetUnreadableStore,
+  hasSecret, listRefs, isEncrypted, getStatus, diagnose, recoverLegacy, resetUnreadableStore,
 };

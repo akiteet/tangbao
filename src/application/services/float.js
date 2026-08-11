@@ -12,6 +12,9 @@
     sync(s) {
       try { if (window.electron && window.electron.floatSync) window.electron.floatSync(s); } catch (e) { /* ignore */ }
     },
+    pushState(payload) {
+      try { if (window.electron && window.electron.pushFloatState) window.electron.pushFloatState(payload); } catch (e) { /* ignore */ }
+    },
     refresh() {
       try { return (window.electron && window.electron.floatRefresh) ? window.electron.floatRefresh() : null; } catch (e) { return null; }
     },
@@ -20,6 +23,9 @@
     },
     onApply(cb) {
       try { if (window.electron && window.electron.onFloatApply) window.electron.onFloatApply(cb); } catch (e) { /* ignore */ }
+    },
+    onState(cb) {
+      try { if (window.electron && window.electron.onFloatState) window.electron.onFloatState(cb); } catch (e) { /* ignore */ }
     },
     onRefresh(cb) {
       try { if (window.electron && window.electron.onFloatRefresh) window.electron.onFloatRefresh(cb); } catch (e) { /* ignore */ }

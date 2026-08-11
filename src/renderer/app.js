@@ -2,6 +2,39 @@
 (function () {
   window.App = window.App || {};
 
+  function mergeFloatConversations(current, incoming) {
+    const existing = Array.isArray(current) ? current : [];
+    const updates = Array.isArray(incoming) ? incoming : [];
+    const byId = new Map(existing.filter((item) => item && item.id).map((item) => [item.id, item]));
+    const order = existing.map((item) => item && item.id).filter(Boolean);
+    const isNewer = (next, previous) => {
+      if (!previous) return true;
+      const nextAt = Number(next && next.updatedAt) || 0;
+      const previousAt = Number(previous && previous.updatedAt) || 0;
+      if (nextAt !== previousAt) return nextAt > previousAt;
+      const nextCount = Array.isArray(next && next.messages) ? next.messages.length : 0;
+      const previousCount = Array.isArray(previous && previous.messages) ? previous.messages.length : 0;
+      return nextCount >= previousCount;
+    };
+    for (const next of updates) {
+      if (!next || !next.id) continue;
+      const previous = byId.get(next.id);
+      if (isNewer(next, previous)) byId.set(next.id, next);
+      if (!previous) order.push(next.id);
+    }
+    return order.map((id) => byId.get(id)).filter(Boolean);
+  }
+
+  function applyFloatStateSnapshot(payload) {
+    const state = payload && payload.state && typeof payload.state === 'object' ? payload.state : payload;
+    if (!state || typeof state !== 'object') return false;
+    const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(state), { persist: false }) : { ok: false };
+    if (!result || !result.ok) return false;
+    if (App.chat && App.chat.onShow) App.chat.onShow();
+    if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
+    return true;
+  }
+
   async function boot() {
     try {
       // 0) 先取本地服务端口与启动令牌：端口由系统随机分配，任何本地请求都依赖它
@@ -46,25 +79,30 @@
             App.services.float.toggleMaximize();
           });
         }
-        // 浮窗不写本机 state.json，只把变更单向同步给主窗；且初始化完成前不发送，避免用空状态覆盖主窗。
+        // 浮窗不写本机 state.json，只把会话增量单向同步给主窗；账户设置永不回传。
         App.persist = function () {
           if (App.__floatReady) {
             App.services.float.sync({
+              type: 'patch',
               conversations: App.state.conversations,
               activeId: App.state.activeId,
-              view: App.state.view,
-              settings: App.state.settings,
               web: App.state.web,
               thinkLevel: App.state.thinkLevel,
             });
           }
         };
+        if (App.services.float.onState) {
+          App.services.float.onState((payload) => {
+            if (!App.__floatReady) return;
+            applyFloatStateSnapshot(payload);
+          });
+        }
         if (App.rt && App.rt.onFloatInit) {
           App.rt.onFloatInit((raw) => {
             try {
-              // 复用 loadState 的迁移逻辑：先写回 localStorage 再 loadState
-              localStorage.setItem('tangbao_web_state_v1', raw);
-              App.loadState();
+              if (!App.loadStateFromRaw || !App.loadStateFromRaw(raw, { persist: false }).ok) {
+                throw new Error('invalid_float_state');
+              }
             } catch (e) { console.error('浮窗初始化状态失败：', e); }
             App.__floatReady = true;
             App.router.go('chat');
@@ -75,6 +113,10 @@
             if (inp) setTimeout(() => inp.focus(), 0);
           });
         }
+        // 浮窗自身的刷新只重绘本地内容，避免在刚发送 patch 后读到旧 state.json。
+        App.services.float.refresh = function () {
+          if (App.chat && App.chat.onShow) App.chat.onShow();
+        };
         App.services.float.onRefresh(() => {
           if (App.chat && App.chat.onShow) App.chat.onShow();
         });
@@ -111,6 +153,22 @@
       App.ui.applyAppearance();
       // 3) 绑定全局 UI 事件（侧边栏 / 顶栏 / 设置弹窗）
       App.ui.init();
+      if (App.__stateRecovery) {
+        const recovery = App.__stateRecovery;
+        App.ui.notify(recovery.code === 'partial_state' ? '数据恢复不完整' : '已恢复账户配置', recovery.needsUserReview ? '部分状态缺失，请检查账户和数据目录' : '已从本地回退快照恢复缺失的账户配置');
+      }
+      if (App.__persistence && App.__persistence.status === 'failed') {
+        App.ui.notify('数据保存失败', '当前内容仍保留在浏览器回退存储，请检查数据目录后重试');
+      }
+      // A failed migration must be visible after restart; never silently fall back.
+      try {
+        const storageInfo = App.services.fs && App.services.fs.getStorageInfo ? await App.services.fs.getStorageInfo() : null;
+        if (storageInfo && storageInfo.startupMigration) {
+          const detail = storageInfo.startupMigration.error || storageInfo.startupMigration.code || '请打开设置中的存储审计';
+          App.ui.notify('数据迁移失败', detail);
+          App.ui.toast('数据迁移失败，当前仍使用旧数据；请打开设置查看恢复选项');
+        }
+      } catch (_) {}
       // 4) 绑定聊天视图事件并渲染欢迎区 / 建议
       App.chat.init();
       // 5) 进入模块视图：每次启动默认回到「糖包」聊天界面（v2 UX 决策：不记忆上次停留的模块）
@@ -123,13 +181,12 @@
       if (!floatMode) {
         App.services.float.onApply((s) => {
           if (!s) return;
+          const conversations = mergeFloatConversations(App.state.conversations, s.conversations);
           Object.assign(App.state, {
-            conversations: s.conversations,
-            activeId: s.activeId,
-            view: s.view,
-            settings: s.settings,
-            web: s.web,
-            thinkLevel: s.thinkLevel,
+            conversations,
+            activeId: conversations.some((item) => item && item.id === s.activeId) ? s.activeId : App.state.activeId,
+            web: typeof s.web === 'boolean' ? s.web : App.state.web,
+            thinkLevel: ['off', 'low', 'medium', 'high'].includes(s.thinkLevel) ? s.thinkLevel : App.state.thinkLevel,
           });
           App.persist();
           if (App.chat && App.chat.onShow) App.chat.onShow();

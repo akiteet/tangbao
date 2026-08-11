@@ -33,6 +33,8 @@
     _ctrl: null,
     _engineStripData: { threadId: '', run: null, metrics: null },
     _engineStripRequest: 0,
+    _sidebarCompactMode: false,
+    _compactSidebarOpen: null,
 
     onShow() { App.agent.render(); },
 
@@ -235,15 +237,20 @@
         p.roots = Array.isArray(result.roots) ? result.roots.map((root) => ({ rootId: root.rootId, name: root.name, path: root.path })) : p.roots;
         rootsBox.innerHTML = (p.roots || []).map((root) => `<div class="agent-cwd-row" data-root-id="${App.escapeHtml(root.rootId || '')}"><input type="text" value="${App.escapeHtml(root.name || root.path)}" readonly /><span class="hint-inline" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${App.escapeHtml(root.path)}">${App.escapeHtml(root.path)}</span><button class="btn-ghost mini" data-root-primary>${root.rootId === p.primaryRootId ? '主文件夹' : '设为主文件夹'}</button><button class="btn-ghost mini" data-root-rename>重命名</button><button class="btn-ghost mini" data-root-remove>移除</button></div>`).join('');
       };
-      if (p.workspaceId && App.services.shell.getWorkspace) {
-        App.services.shell.getWorkspace(p.workspaceId).then((result) => { if (result && result.ok) refreshRoots(result); else showRootError(result, '读取项目文件夹失败，请重新打开项目设置。'); }).catch((error) => showRootError({ ok: false, code: 'ipc_failed', error: error && error.message }, '读取项目文件夹失败，请重新打开项目设置。'));
+      if ((p.workspaceId || p.cwd) && App.services.workspace) {
+        App.services.workspace.ensureProject(p).then((result) => {
+          if (result && result.ok) refreshRoots(result.result || result);
+          else showRootError(result, '读取项目文件夹失败，请重新选择项目文件夹。');
+        }).catch((error) => showRootError({ ok: false, code: 'ipc_failed', error: error && error.message }, '读取项目文件夹失败，请重新选择项目文件夹。'));
       }
       const browse = modal.querySelector('#projBrowse');
       if (browse) browse.onclick = async () => {
         browse.disabled = true;
         showRootError({ ok: true });
         try {
-          const result = p.workspaceId ? await App.services.shell.addWorkspaceRoot(p.workspaceId) : await App.services.shell.showDirDialog();
+          const result = p.workspaceId
+            ? await App.services.workspace.run(p, (workspaceId) => App.services.shell.addWorkspaceRoot(workspaceId))
+            : await App.services.shell.showDirDialog();
           if (result && result.ok) {
             if (result.cwd) p.cwd = result.cwd;
             p.workspaceId = result.workspaceId || p.workspaceId || '';
@@ -263,9 +270,9 @@
         const row = event.target.closest('[data-root-id]'); if (!row || !p.workspaceId) return;
         const rootId = row.dataset.rootId;
         let result = null;
-        if (event.target.closest('[data-root-primary]')) result = await App.services.shell.setPrimaryWorkspaceRoot(p.workspaceId, rootId);
-        else if (event.target.closest('[data-root-rename]')) { const name = window.prompt('文件夹显示名称', (p.roots.find((root) => root.rootId === rootId) || {}).name || ''); if (name) result = await App.services.shell.renameWorkspaceRoot(p.workspaceId, rootId, name); }
-        else if (event.target.closest('[data-root-remove]')) { if (!window.confirm('移除该文件夹？正在运行的任务可能因此无法恢复。')) return; result = await App.services.shell.removeWorkspaceRoot(p.workspaceId, rootId); }
+        if (event.target.closest('[data-root-primary]')) result = await App.services.workspace.run(p, (workspaceId) => App.services.shell.setPrimaryWorkspaceRoot(workspaceId, rootId));
+        else if (event.target.closest('[data-root-rename]')) { const name = window.prompt('文件夹显示名称', (p.roots.find((root) => root.rootId === rootId) || {}).name || ''); if (name) result = await App.services.workspace.run(p, (workspaceId) => App.services.shell.renameWorkspaceRoot(workspaceId, rootId, name)); }
+        else if (event.target.closest('[data-root-remove]')) { if (!window.confirm('移除该文件夹？正在运行的任务可能因此无法恢复。')) return; result = await App.services.workspace.run(p, (workspaceId) => App.services.shell.removeWorkspaceRoot(workspaceId, rootId)); }
         if (result && result.ok) refreshRoots(result);
         else if (!(result && result.canceled)) {
           showRootError(result, '项目文件夹操作失败，请重试。');
@@ -309,11 +316,12 @@
         const maxStepsEl = modal.querySelector('#projMaxSteps');
         p.maxSteps = Math.min(Math.max(Number(maxStepsEl ? maxStepsEl.value : 0) || 48, 1), 200);
         // 多根工作区：已有 workspaceId 时保留其完整根列表；仅旧单根/新建项目走兼容登记。
-        if (!p.workspaceId && p.cwd) {
-          try {
-            const r = await App.services.shell.registerWorkspace(p.cwd, p.name);
-            if (r && r.ok) { p.workspaceId = r.workspaceId; p.cwd = r.cwd || p.cwd; p.primaryRootId = r.primaryRootId || p.primaryRootId; p.roots = r.roots || p.roots; } else p.workspaceId = '';
-          } catch (e) { p.workspaceId = ''; }
+        if ((p.cwd || (p.roots && p.roots.length)) && App.services.workspace) {
+          const ensured = await App.services.workspace.ensureProject(p);
+          if (!ensured.ok) {
+            showRootError(ensured, '项目文件夹不可用，请重新选择项目文件夹。');
+            return;
+          }
         }
         const primary = (p.roots || []).find((root) => root.rootId === p.primaryRootId) || (p.roots || [])[0];
         if (primary) p.cwd = primary.path;
@@ -385,12 +393,20 @@
       const rootDisp = roots.length > 1 ? (roots.find((root) => root.rootId === proj.primaryRootId) || roots[0]).name + ' + ' + (roots.length - 1) + ' 个文件夹' : cwdDisp;
       const autoLabel = proj.auto ? '自动执行' : '每步确认';
       const cwdFull = proj.name + '  ·  ' + (roots.length > 1 ? roots.map((root) => root.name + ': ' + root.path).join('\n') : cwdDisp);
-      // v1.1.0（回退）：恢复两栏折叠状态（旧字段）
-      const projCollapsed = !!App.state.agentProjectsCollapsed;
-      const sessCollapsed = !!App.state.agentSessionsCollapsed;
+      const compactSidebar = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+      if (this._sidebarCompactMode !== compactSidebar) {
+        this._sidebarCompactMode = compactSidebar;
+        if (!compactSidebar) this._compactSidebarOpen = null;
+      }
+      const compactOpen = compactSidebar && (this._compactSidebarOpen === 'projects' || this._compactSidebarOpen === 'sessions')
+        ? this._compactSidebarOpen
+        : '';
+      // 窄窗只使用不持久化的浮层状态，避免覆盖桌面宽度下的折叠偏好。
+      const projCollapsed = compactSidebar ? compactOpen !== 'projects' : !!App.state.agentProjectsCollapsed;
+      const sessCollapsed = compactSidebar ? compactOpen !== 'sessions' : !!App.state.agentSessionsCollapsed;
 
       wrap.innerHTML = `
-        <div class="agent-layout">
+        <div class="agent-layout${compactSidebar ? ' agent-layout-compact' : ''}" data-sidebar-mode="${compactSidebar ? 'compact' : 'wide'}"${compactOpen ? ` data-compact-open="${compactOpen}"` : ''}>
           ${(projCollapsed && sessCollapsed) ? `
           <div class="agent-tabs-row" id="agentTabsRow">
             <div class="agent-expand-tab proj-tab" id="agentExpandProjects" title="展开项目栏"><span>项目</span></div>
@@ -943,15 +959,31 @@
         const badge = document.getElementById('agentPlanBadge');
         if (badge) { badge.textContent = 'Plan ' + (proj.planMode ? '只读探索' : '可执行'); badge.className = 'agent-status plan-badge ' + (proj.planMode ? 'on' : 'off'); }
       });
-      // v1.1.0（回退）：两栏折叠/展开（横排 tab 各展开对应栏）
+      // 宽窗持久化两栏折叠；窄窗只更新临时浮层状态。
       const cp = document.getElementById('agentCollapseProjects');
-      if (cp) cp.addEventListener('click', () => { App.state.agentProjectsCollapsed = true; App.persist(); App.agent.render(); });
+      if (cp) cp.addEventListener('click', () => {
+        if (App.agent._sidebarCompactMode) App.agent._compactSidebarOpen = null;
+        else { App.state.agentProjectsCollapsed = true; App.persist(); }
+        App.agent.render();
+      });
       const ep = document.getElementById('agentExpandProjects');
-      if (ep) ep.addEventListener('click', () => { App.state.agentProjectsCollapsed = false; App.persist(); App.agent.render(); });
+      if (ep) ep.addEventListener('click', () => {
+        if (App.agent._sidebarCompactMode) App.agent._compactSidebarOpen = 'projects';
+        else { App.state.agentProjectsCollapsed = false; App.persist(); }
+        App.agent.render();
+      });
       const cs = document.getElementById('agentCollapseSessions');
-      if (cs) cs.addEventListener('click', () => { App.state.agentSessionsCollapsed = true; App.persist(); App.agent.render(); });
+      if (cs) cs.addEventListener('click', () => {
+        if (App.agent._sidebarCompactMode) App.agent._compactSidebarOpen = null;
+        else { App.state.agentSessionsCollapsed = true; App.persist(); }
+        App.agent.render();
+      });
       const es = document.getElementById('agentExpandSessions');
-      if (es) es.addEventListener('click', () => { App.state.agentSessionsCollapsed = false; App.persist(); App.agent.render(); });
+      if (es) es.addEventListener('click', () => {
+        if (App.agent._sidebarCompactMode) App.agent._compactSidebarOpen = 'sessions';
+        else { App.state.agentSessionsCollapsed = false; App.persist(); }
+        App.agent.render();
+      });
       // 项目列表事件委托
       const plist = document.getElementById('agentProjectList');
       if (plist) plist.addEventListener('click', (e) => {
@@ -1693,6 +1725,26 @@
       const renderList = (list) => {
         box.innerHTML = list.map((run, ri) => {
           const u = run.usage || {};
+          const metric = run.metrics || {};
+          const cache = metric.cache || {};
+          const cost = metric.cost || {};
+          const numberOrNull = (value) => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+          const formatTokens = (value) => { const n = numberOrNull(value); return n == null ? '未知' : Math.round(n / 1000 * 10) / 10 + 'k'; };
+          const formatCost = (value) => { const n = numberOrNull(value); return n == null ? '未知' : '$' + n.toFixed(4); };
+          const formatDuration = (value) => { const n = numberOrNull(value); return n == null ? '未知' : (n < 1000 ? Math.round(n) + 'ms' : (n / 1000).toFixed(1) + 's'); };
+          const steps = numberOrNull(metric.steps != null ? metric.steps : u.steps);
+          const toolCalls = numberOrNull(metric.toolCalls != null ? metric.toolCalls : u.toolCalls);
+          const failures = metric.errorBreakdown
+            ? Object.values(metric.errorBreakdown).reduce((sum, value) => sum + (Number(value) || 0), 0)
+            : numberOrNull(u.failures);
+          const metricCost = cost.totalUsd != null ? cost.totalUsd : metric.costUsd;
+          const cacheRate = numberOrNull(cache.hitRate);
+          const cacheLabel = cacheRate == null
+            ? 'cache unknown'
+            : 'cache ' + Math.round(cacheRate * 1000) / 10 + '%';
+          const costLabel = 'cost ' + formatCost(metricCost)
+            + (cost.source && cost.source !== 'unknown' ? ' (' + cost.source + ')' : '')
+            + (cost.unknownReason ? ' · ' + cost.unknownReason : '');
           const badge = (run.status === 'completed' || run.status === 'done') ? '<span class="ok">完成</span>'
             : run.status === 'failed' ? '<span class="error">失败</span>'
             : run.status === 'stopped' ? '<span class="warn">已停止</span>'
@@ -1702,6 +1754,17 @@
           const phaseTag = run.phase ? ` <span class="wf-hist-phase">${App.escapeHtml(run.phase)}</span>` : '';
           const roleLabel = run.parentRunId ? ({ explore: 'Explore', test: 'Test', review: 'Review' }[run.role] || 'Child') : 'Main';
           const roleTag = ` <span class="wf-hist-phase">${roleLabel}${run.parentRunId ? ' · 只读' : ''}</span>`;
+          const metricMeta = [
+            fmtTime(run.startedAt),
+            steps == null ? 'steps unknown' : steps + ' steps',
+            toolCalls == null ? 'tools unknown' : toolCalls + ' tools',
+            fmtDur(run.startedAt, run.finishedAt) || 'duration unknown',
+            formatTokens(metric.inputTokens != null ? metric.inputTokens : u.inputTokens) + ' in / ' + formatTokens(metric.outputTokens != null ? metric.outputTokens : u.outputTokens) + ' out',
+            cacheLabel,
+            costLabel,
+            metric.queueWaitMs == null ? 'queue unknown' : 'queue ' + formatDuration(metric.queueWaitMs),
+            failures ? failures + ' failures' : '',
+          ].filter(Boolean).join(' · ');
           const meta = fmtTime(run.startedAt)
             + ` · ${u.steps || 0} 步 · ${fmtDur(run.startedAt, run.finishedAt)}`
             + (u.tokens ? ` · ${Math.round(u.tokens / 1000)}k tok` : '')
@@ -1715,7 +1778,7 @@
           return `<details class="wf-hist-item" data-ri="${ri}"${ri === 0 ? ' open' : ''}>
           <summary>
             <span class="wf-hist-main"><span class="wf-hist-badge">${badge}${phaseTag}${roleTag}</span><span class="wf-hist-goal">${App.escapeHtml(run.userGoal || '（未记录任务目标）')}</span></span>
-            <span class="wf-hist-meta">${meta}</span>
+            <span class="wf-hist-meta">${App.escapeHtml(metricMeta)}</span>
           </summary>
           <div class="wf-hist-detail"><div class="agent-hist-events" data-run="${App.escapeHtml(run.id)}"><div class="wf-step-out">加载中…</div></div>
             <div class="agent-hist-resume">
@@ -1861,7 +1924,11 @@
             const hitRate = cache.hitRate == null ? '未知' : Math.round(Number(cache.hitRate) * 1000) / 10 + '%';
             metricsBox.innerHTML = `<div class="agent-trace-metric"><b>Steps</b><span>${formatMetric(metrics.steps)}</span></div><div class="agent-trace-metric"><b>Tool</b><span>${formatMetric(metrics.toolCalls)}</span></div><div class="agent-trace-metric"><b>Tokens</b><span>${formatMetric(metrics.inputTokens)} / ${formatMetric(metrics.outputTokens)}</span></div><div class="agent-trace-metric"><b>Cache</b><span>${hitRate} · 节省 ${formatMetric(cache.savedTokens)} tok</span></div><div class="agent-trace-metric"><b>Cost</b><span>${metrics.costUsd == null ? '未知' : '$' + metrics.costUsd} · 节省 ${cache.estimatedSavedCostUsd == null ? '未知' : '$' + cache.estimatedSavedCostUsd}</span></div><div class="agent-trace-metric"><b>Latency</b><span>${formatMetric(metrics.latencyMs, ' ms')} · Queue ${formatMetric(metrics.queueWaitMs, ' ms')}</span></div><div class="agent-trace-metric wide"><b>Errors</b><span>${errors}</span></div>`;
           };
-          const renderTree = (tree) => {
+           const metricCost = metrics.cost || {};
+           const costSource = metricCost.source || (metrics.costUsd == null ? 'unknown' : 'legacy');
+           const costReason = metricCost.unknownReason ? ' · ' + metricCost.unknownReason : '';
+           metricsBox.insertAdjacentHTML('beforeend', `<div class="agent-trace-metric wide"><b>Cost source</b><span>${App.escapeHtml(costSource)}${App.escapeHtml(costReason)}</span></div>`);
+           const renderTree = (tree) => {
             if (!tree || !tree.root) { treeBox.innerHTML = '<div class="wf-step-out">暂无协作树</div>'; return; }
             const nodes = [tree.root].concat(tree.children || []).filter(Boolean);
             const byParent = new Map();
@@ -1991,14 +2058,29 @@
               try { const r = await App.services.storage.listAgentEvents(rid); return (r && r.ok) ? (r.events || []) : []; } catch (_) { return []; }
             };
             const [curEvents, prevEvents] = await Promise.all([fetchEvents(runId), fetchEvents(prev.id)]);
-            const stat = (run, events) => ({
-              status: run.status || 'running', phase: run.phase || '-',
-              steps: (run.usage && run.usage.steps) || 0,
-              tools: events.filter((e) => e.type === 'tool_call').length,
-              fails: (run.usage && run.usage.failures) || events.filter((e) => e.type === 'tool_result' && e.payload && e.payload.result && e.payload.result.ok === false).length,
-              approvals: (run.usage && run.usage.approvals) || 0,
-              dur: (run.startedAt && run.finishedAt && run.finishedAt >= run.startedAt) ? (((run.finishedAt - run.startedAt) / 1000).toFixed(1) + 's') : '-',
-            });
+            const stat = (run, events) => {
+              const metric = run.metrics || {};
+              const usage = run.usage || {};
+              const cache = metric.cache || {};
+              const cost = metric.cost || {};
+              const token = (value) => value == null ? 'unknown' : String(value);
+              const money = (value) => value == null ? 'unknown' : '$' + Number(value).toFixed(4);
+              return {
+                status: run.status || 'running', phase: run.phase || '-',
+                steps: metric.steps != null ? metric.steps : (usage.steps || 0),
+                tools: metric.toolCalls != null ? metric.toolCalls : events.filter((e) => e.type === 'tool_call').length,
+                fails: usage.failures != null ? usage.failures : (metric.errorBreakdown ? Object.values(metric.errorBreakdown).reduce((sum, value) => sum + Number(value || 0), 0) : events.filter((e) => e.type === 'tool_result' && e.payload && e.payload.result && e.payload.result.ok === false).length),
+                approvals: (usage.approvals) || 0,
+                inputTokens: token(metric.inputTokens != null ? metric.inputTokens : usage.inputTokens),
+                outputTokens: token(metric.outputTokens != null ? metric.outputTokens : usage.outputTokens),
+                cache: cache.hitRate == null ? 'unknown' : Math.round(Number(cache.hitRate) * 1000) / 10 + '%',
+                cacheSaved: token(cache.savedTokens),
+                cost: money(cost.totalUsd != null ? cost.totalUsd : metric.costUsd),
+                queue: metric.queueWaitMs == null ? 'unknown' : metric.queueWaitMs + 'ms',
+                latency: metric.latencyMs == null ? ((run.startedAt && run.finishedAt && run.finishedAt >= run.startedAt) ? (((run.finishedAt - run.startedAt) / 1000).toFixed(1) + 's') : '-') : metric.latencyMs + 'ms',
+                dur: (run.startedAt && run.finishedAt && run.finishedAt >= run.startedAt) ? (((run.finishedAt - run.startedAt) / 1000).toFixed(1) + 's') : '-',
+              };
+            };
             const cur = stat(list[idx], curEvents);
             const pv = stat(prev, prevEvents);
             const row = (label, va, vb) => '<div class="agent-hist-compare-row"><span>' + label + '</span><b>' + App.escapeHtml(va) + '</b><b>' + App.escapeHtml(vb) + '</b></div>';
@@ -2011,6 +2093,13 @@
               + row('失败', cur.fails, pv.fails)
               + row('审批', cur.approvals, pv.approvals)
               + row('耗时', cur.dur, pv.dur)
+              + row('Input tokens', cur.inputTokens, pv.inputTokens)
+              + row('Output tokens', cur.outputTokens, pv.outputTokens)
+              + row('Cache hit', cur.cache, pv.cache)
+              + row('Cache saved', cur.cacheSaved, pv.cacheSaved)
+              + row('Cost', cur.cost, pv.cost)
+              + row('Queue wait', cur.queue, pv.queue)
+              + row('Latency', cur.latency, pv.latency)
               + '</div>';
             const oldBox = detailEl.querySelector('.agent-hist-compare');
             if (oldBox) oldBox.outerHTML = html;
@@ -2354,11 +2443,15 @@
     async loadSkills() {
       try {
         const proj = App.agent.activeProject();
-        const wid = (proj && proj.workspaceId) || '';
-        const url = App.rt.agentBase() + '/api/skills' + (wid ? '?workspaceId=' + encodeURIComponent(wid) : '');
-        const res = await fetch(url, { headers: authHeaders({ 'Content-Type': 'application/json' }) });
-        if (!res.ok) throw new Error('bad status');
-        const j = await res.json();
+        const result = await App.services.workspace.run(proj, async (wid) => {
+          const url = App.rt.agentBase() + '/api/skills' + (wid ? '?workspaceId=' + encodeURIComponent(wid) : '');
+          const res = await fetch(url, { headers: authHeaders({ 'Content-Type': 'application/json' }) });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) return Object.assign({ ok: false }, j, { code: j.code || 'skills_request_failed' });
+          return j;
+        });
+        if (!result || result.ok === false) throw new Error((result && (result.error || result.code)) || '技能列表读取失败');
+        const j = result;
         App.agent._skills = (j && Array.isArray(j.skills)) ? j.skills : [];
         // 首次加载完成后立即刷新当前菜单，不要求用户再次输入。
         const input = document.getElementById('agentInput');
@@ -2572,9 +2665,9 @@
       const cost = firstNumber(metrics && metrics.costUsd, usage.estimatedCost);
       const latency = firstNumber(metrics && metrics.latencyMs, live ? Date.now() - (live.startedAt || Date.now()) : null, run && run.finishedAt && run.startedAt ? run.finishedAt - run.startedAt : null);
       const queueWait = firstNumber(metrics && metrics.queueWaitMs);
-      const runtimeVersion = formatVersion(run && run.runtimeVersion, 'v1.1.2');
+      const runtimeVersion = formatVersion(run && run.runtimeVersion, 'v1.1.3');
       const rawToolset = String((run && run.toolsetVersion) || '');
-      const toolsetVersion = formatVersion(rawToolset.split(':')[0], 'v1.1.2');
+      const toolsetVersion = formatVersion(rawToolset.split(':')[0], 'v1.1.3');
       const role = (run && run.role) || 'main';
       const promptVersion = formatVersion(run && run.promptVersion, 'legacy');
       const runDetail = live
@@ -2712,13 +2805,13 @@
       }
       const cwd = proj.cwd || '';
       // M7（#253）：优先用不透明 workspaceId；缺失但有 cwd 时惰性登记并持久化，使旧项目自动迁移
-      let workspaceId = proj.workspaceId || '';
-      if (!workspaceId && cwd) {
-        try {
-          const r = await App.services.shell.registerWorkspace(cwd, proj.name);
-          if (r && r.ok) { workspaceId = r.workspaceId; proj.workspaceId = workspaceId; App.persist(); }
-        } catch (_) {}
+      const workspace = App.services.workspace && await App.services.workspace.ensureProject(proj);
+      if (!workspace || !workspace.ok) {
+        App.agent.renderStatusSummary('error', { message: (workspace && workspace.error) || '项目工作区已失效，请重新选择项目文件夹。' });
+        App.ui.toast((workspace && workspace.error) || '项目工作区已失效，请重新选择项目文件夹。');
+        return;
       }
+      const workspaceId = workspace.workspaceId;
       const auto = !!proj.auto;
       const planMode = !!proj.planMode;
       const approveTools = proj.approveTools || [];
@@ -3534,20 +3627,25 @@
       const cwd = proj.cwd || '';
       if (!cwd) { App.ui.toast('请先在项目设置中指定工作目录'); return; }
       // M7（#253）：优先用不透明 workspaceId；缺失时惰性登记，与 send() 行为一致
-      let workspaceId = proj.workspaceId || '';
-      if (!workspaceId) {
-        try {
-          const r = await App.services.shell.registerWorkspace(cwd, proj.name);
-          if (r && r.ok) { workspaceId = r.workspaceId; proj.workspaceId = workspaceId; App.persist(); }
-        } catch (_) {}
+      const workspace = App.services.workspace && await App.services.workspace.ensureProject(proj);
+      if (!workspace || !workspace.ok) {
+        App.ui.toast((workspace && workspace.error) || '项目工作区已失效，请重新选择项目文件夹。');
+        return;
       }
+      const workspaceId = workspace.workspaceId;
       const file = '糖码记忆.md';
       let content = '';
       try {
-        const r = await fetch(agentBase() + '/api/memory?cwd=' + encodeURIComponent(cwd) + '&workspaceId=' + encodeURIComponent(workspaceId) + '&file=' + encodeURIComponent(file), { cache: 'no-store', headers: authHeaders() });
-        const j = await r.json().catch(() => ({}));
-        content = (j && j.ok) ? (j.content || '') : '';
-      } catch (e) { content = ''; }
+        const j = await App.services.workspace.run(proj, async (id) => {
+          const r = await fetch(agentBase() + '/api/memory?cwd=' + encodeURIComponent(cwd) + '&workspaceId=' + encodeURIComponent(id) + '&file=' + encodeURIComponent(file), { cache: 'no-store', headers: authHeaders() });
+          return Object.assign({ ok: r.ok }, await r.json().catch(() => ({})));
+        });
+        if (j && j.ok) content = j.content || '';
+        else throw new Error((j && (j.error || j.code)) || '读取项目记忆失败');
+      } catch (e) {
+        App.ui.toast('读取项目记忆失败：' + (e && e.message ? e.message : e));
+        return;
+      }
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.innerHTML = `
@@ -3572,12 +3670,14 @@
         const txt = modal.querySelector('#memContent').value;
         const btn = modal.querySelector('#memSave'); btn.disabled = true; btn.textContent = '保存中…';
         try {
-          const r = await fetch(agentBase() + '/api/memory', {
-            method: 'PUT',
-            headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ cwd, workspaceId, file, content: txt }),
+          const j = await App.services.workspace.run(proj, async (id) => {
+            const r = await fetch(agentBase() + '/api/memory', {
+              method: 'PUT',
+              headers: authHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ cwd, workspaceId: id, file, content: txt }),
+            });
+            return Object.assign({ ok: r.ok }, await r.json().catch(() => ({})));
           });
-          const j = await r.json().catch(() => ({}));
           if (j && j.ok) App.ui.toast('项目记忆已保存');
           else App.ui.toast('保存失败：' + ((j && j.error) || '未知错误'));
         } catch (e) { App.ui.toast('保存失败：' + (e.message || e)); }
@@ -3592,7 +3692,16 @@
   });
   // v2（补全）：窗口缩放时审批条/接力条位置跟随（不在 bind() 内，避免每 render 重复堆叠）
   window.addEventListener('resize', () => {
-    try { if (window.App && App.agent && App.agent.updateApprovalBarPosition) App.agent.updateApprovalBarPosition(); } catch (_) {}
+    try {
+      if (window.App && App.agent && App.agent.updateApprovalBarPosition) App.agent.updateApprovalBarPosition();
+      if (!window.App || !App.agent || !window.matchMedia) return;
+      const compact = window.matchMedia('(max-width: 900px)').matches;
+      if (App.agent._sidebarCompactMode === compact) return;
+      App.agent._sidebarCompactMode = compact;
+      App.agent._compactSidebarOpen = null;
+      const section = document.querySelector('[data-view="agent"]');
+      if (section && !section.hidden) App.agent.render();
+    } catch (_) {}
   });
   // v1.1.0：顶栏运行状态药丸点击跳回（一次性绑定，agentView 外的常驻元素）
   try {

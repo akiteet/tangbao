@@ -30,6 +30,14 @@ test('用户级 Skill 纳入 ~/.workbuddy/skills 且项目操作绑定作用域�
   assert.match(ui, /scope: inp\.dataset\.skillScope/);
 });
 
+test('Skill panel repairs a stale workspace id before retrying enumeration', () => {
+  const ui = read('src/renderer/components/ui.js');
+  assert.match(ui, /const registerProjectWorkspace = async/);
+  assert.match(ui, /const isInvalidWorkspace =/);
+  assert.match(ui, /proj\.workspaceId = ''/);
+  assert.match(ui, /if \(await registerProjectWorkspace\(\)\)/);
+});
+
 test('Skill 管理只允许已知根下的直接单个目录并重新枚举精确匹配', () => {
   const main = read('src/main/main.js');
   assert.match(main, /fs\.realpathSync\.native\(resolved\)/);
