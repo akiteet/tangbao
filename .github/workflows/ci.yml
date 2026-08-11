@@ -67,6 +67,10 @@ jobs:
     name: Electron real UI and native ABI smoke
     runs-on: ubuntu-latest
     needs: smoke
+    env:
+      # GitHub's Linux runner does not preserve Electron's SUID sandbox mode.
+      # This job is a local smoke test, so disable it explicitly for headless CI.
+      ELECTRON_DISABLE_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
