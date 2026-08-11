@@ -1,0 +1,181 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+
+const root = path.resolve(__dirname, '../..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+
+test('state loading rejects malformed snapshots and recovers missing account fields from a fallback', () => {
+  const state = read('src/renderer/state/state.js');
+  assert.match(state, /function parseStateCandidate\(raw, oldFormat\)/);
+  assert.match(state, /function stateNeedsRecovery\(value\)/);
+  assert.match(state, /function mergeMissingState\(primary, fallback\)/);
+  assert.match(state, /if \(primary\.oldFormat \|\| recovered\) App\.persist\(\)/);
+  assert.match(state, /App\.state = ns;\s*if \(opts\.persist === true\) App\.persist\(\)/);
+});
+
+test('float sync is a conversation patch and cannot overwrite main-window settings', () => {
+  const app = read('src/renderer/app.js');
+  const main = read('src/main/main.js');
+  assert.match(app, /type: 'patch'/);
+  assert.match(app, /function mergeFloatConversations\(current, incoming\)/);
+  assert.match(app, /Number\(next && next\.updatedAt\)/);
+  assert.doesNotMatch(app, /settings: App\.state\.settings/);
+  assert.match(main, /safeOn\('float:pushState'/);
+  assert.match(main, /safeOn\('float:sync'/);
+  assert.match(main, /Array\.isArray\(s\.conversations\)/);
+});
+
+test('state writes are atomic and stale revisions are ignored', () => {
+  const main = read('src/main/main.js');
+  const preload = read('src/preload/preload.js');
+  assert.match(main, /function acceptStateRevision\(payload, explicitRevision\)/);
+  assert.match(main, /function writeStateFileAtomic\(file, content\)/);
+  assert.match(main, /reason: 'stale_state_revision'/);
+  assert.match(main, /writeStateFileAtomic\(file, jsonStr \|\| ''\)/);
+  assert.match(preload, /saveStateJSON: \(jsonStr, revision\)/);
+  assert.match(preload, /syncStorage: \(json, revision\)/);
+  assert.match(preload, /flushStorageSync: \(json, revision\)/);
+});
+
+test('account model rows keep a visible model name column and scroll instead of collapsing', () => {
+  const html = read('index.html');
+  const styles = read('styles.css');
+  assert.match(html, /class="h-output">/);
+  assert.match(styles, /\.model-row, \.model-row-head \{[^}]*display:\s*grid/);
+  assert.match(styles, /grid-template-columns:\s*16px minmax\(190px, 1fr\) 88px 88px 124px 110px 30px/);
+  assert.match(styles, /\.model-row \.accModelRow \{[^}]*min-width:\s*150px/);
+  assert.match(styles, /\.model-row \.accModelOutput \{[^}]*width:\s*88px[^}]*flex:\s*none/);
+  assert.match(styles, /#accountModal \.account-form \{[^}]*overflow-x:\s*auto/);
+  assert.match(styles, /#accountModal \.modal \{\s*width:\s*820px;\s*max-width:\s*96vw/);
+});
+
+test('incomplete disk state keeps accounts from the complete SQLite fallback', async () => {
+  const source = read('src/renderer/state/state.js');
+  const saved = [];
+  const storage = new Map();
+  const context = {
+    console,
+    setTimeout,
+    clearTimeout,
+    localStorage: {
+      getItem: (key) => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, String(value)),
+      removeItem: (key) => storage.delete(key),
+    },
+    App: {
+      services: {
+        fs: {
+          loadStateJSON: async () => ({ ok: true, data: JSON.stringify({ conversations: [], settings: { profile: { name: 'partial' } } }) }),
+          loadStorage: async () => ({ ok: true, state: {
+            conversations: [],
+            settings: {
+              accounts: [{ id: 'acc-preserved', name: 'Preserved', apiBase: 'https://example.test', models: ['demo'] }],
+              providers: { default: { accountId: 'acc-preserved', apiBase: '', model: 'demo' } },
+            },
+          } }),
+          saveStateJSON: (json) => { saved.push(JSON.parse(json)); return { ok: true }; },
+        },
+      },
+      rt: { syncEndpoints: () => {} },
+    },
+    window: null,
+    addEventListener: () => {},
+  };
+  context.window = context;
+  vm.runInNewContext(source, context, { filename: 'state.js' });
+  const result = await context.App.loadState();
+  assert.equal(result.ok, true);
+  assert.equal(context.App.state.settings.accounts[0].id, 'acc-preserved');
+  assert.ok(saved.some((snapshot) => snapshot.settings.accounts.some((account) => account.id === 'acc-preserved')));
+});
+
+test('persistence failures remain observable instead of being reported as saved', async () => {
+  const state = read('src/renderer/state/state.js');
+  const notifications = [];
+  const context = {
+    console,
+    setTimeout,
+    clearTimeout,
+    localStorage: {
+      setItem: () => {},
+      getItem: () => null,
+      removeItem: () => {},
+    },
+    App: {
+      services: {
+        fs: {
+          saveStateJSON: () => Promise.resolve({ ok: false, code: 'state_file_write_failed' }),
+        },
+      },
+      ui: { notify: (title, detail) => notifications.push({ title, detail }) },
+      rt: {},
+    },
+    window: null,
+    addEventListener: () => {},
+  };
+  context.window = context;
+  vm.runInNewContext(state, context, { filename: 'state.js' });
+  const result = context.App.persist();
+  assert.equal(result.ok, true);
+  await context.App.__persistencePromise;
+  assert.equal(context.App.__persistence.status, 'failed');
+  assert.equal(context.App.__persistence.code, 'state_file_write_failed');
+  assert.equal(notifications.length, 1);
+});
+
+test('account recovery snapshots restore metadata and streaming output survives reload normalization', async () => {
+  const state = read('src/renderer/state/state.js');
+  const recovery = {
+    conversations: [],
+    settings: {
+      accounts: [{ id: 'acc-recovered', name: 'Recovered', apiBase: 'https://example.test', models: ['demo'] }],
+      defaultAccountId: 'acc-recovered',
+      providers: { agent: { accountId: 'acc-recovered', model: 'demo' } },
+    },
+  };
+  const disk = {
+    conversations: [],
+    settings: {
+      accounts: [],
+      defaultAccountId: 'acc-recovered',
+      providers: { agent: { accountId: 'acc-recovered', model: 'demo' } },
+    },
+    agentThreads: [{ id: 'thread-live', title: 'Live', history: [], _liveAnswer: 'partial answer', _liveEvents: [{ type: 'thinking', text: 'working' }], _pendingUser: { content: 'continue', skills: [] }, _running: true }],
+  };
+  const values = new Map([['tangbao_account_recovery_v1', JSON.stringify(recovery)]]);
+  const context = {
+    console,
+    setTimeout,
+    clearTimeout,
+    localStorage: {
+      getItem: (key) => values.get(key) || null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: (key) => values.delete(key),
+    },
+    App: {
+      services: {
+        fs: {
+          loadStateJSON: async () => ({ ok: true, data: JSON.stringify(disk) }),
+          loadStorage: async () => ({ ok: false }),
+          saveStateJSON: () => ({ ok: true }),
+        },
+      },
+      rt: {},
+    },
+    window: null,
+    addEventListener: () => {},
+  };
+  context.window = context;
+  vm.runInNewContext(state, context, { filename: 'state.js' });
+  const result = await context.App.loadState();
+  assert.equal(result.ok, true);
+  assert.equal(context.App.state.settings.accounts[0].id, 'acc-recovered');
+  assert.equal(context.App.state.agentThreads[0]._liveAnswer, 'partial answer');
+  assert.equal(context.App.state.agentThreads[0]._liveEvents[0].type, 'thinking');
+  assert.equal(context.App.state.agentThreads[0]._pendingUser.content, 'continue');
+});

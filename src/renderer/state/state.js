@@ -2,10 +2,173 @@
 (function () {
   const STORAGE_KEY = 'tangbao_web_state_v1';
   const OLD_KEY = 'doubao_web_state_v1';
+  const ACCOUNT_RECOVERY_KEY = 'tangbao_account_recovery_v1';
 
   // M4 写穿节流：App.persist 高频触发时防抖 800ms 再同步 SQLite；_lastSyncedJson 用于跳过未变化
   let _syncTimer = null;
   let _lastSyncedJson = null;
+  let _lastPersistedStateJson = null;
+  let _pendingSnapshot = null;
+  let _stateRevision = 0;
+  let _lastPersistenceNotice = '';
+
+  const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
+  function persistedRevision(value) {
+    const meta = value && typeof value === 'object' && value._persistence;
+    const revision = meta && Number(meta.revision);
+    return Number.isSafeInteger(revision) && revision > 0 ? revision : 0;
+  }
+
+  function parseStateCandidate(raw, oldFormat) {
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    try {
+      const value = JSON.parse(raw);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      const settings = value.settings;
+      if (settings != null && (typeof settings !== 'object' || Array.isArray(settings))) return null;
+      if (hasOwn(value, 'conversations') && !Array.isArray(value.conversations)) return null;
+      if (hasOwn(value, 'agentThreads') && !Array.isArray(value.agentThreads)) return null;
+      if (hasOwn(value, 'projects') && !Array.isArray(value.projects)) return null;
+      if (settings && hasOwn(settings, 'accounts') && !Array.isArray(settings.accounts)) return null;
+      if (settings && hasOwn(settings, 'providers') && (typeof settings.providers !== 'object' || Array.isArray(settings.providers))) return null;
+      if (!(hasOwn(value, 'conversations') || hasOwn(value, 'settings') || hasOwn(value, 'agentThreads') || hasOwn(value, 'projects') || hasOwn(value, 'activeId'))) return null;
+      return { value, oldFormat: !!oldFormat, raw };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // A valid JSON file can still be an interrupted/old partial snapshot. Missing
+  // fields are filled only from a backup candidate; explicit empty arrays win.
+  function hasConfiguredAccountReference(value) {
+    const settings = value && value.settings;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+    if (typeof settings.defaultAccountId === 'string' && settings.defaultAccountId.trim()) return true;
+    const providers = settings.providers && typeof settings.providers === 'object' ? settings.providers : {};
+    return Object.values(providers).some((provider) => {
+      const accountId = provider && provider.accountId;
+      return typeof accountId === 'string' && accountId.trim() && !['__default__', '__custom__'].includes(accountId);
+    });
+  }
+
+  function stateNeedsRecovery(value) {
+    const settings = value && value.settings;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true;
+    if (!hasOwn(value, 'conversations') || !hasOwn(settings, 'accounts') || !hasOwn(settings, 'providers')) return true;
+    return Array.isArray(settings.accounts) && settings.accounts.length === 0 && hasConfiguredAccountReference(value);
+  }
+
+  function mergeMissingState(primary, fallback) {
+    const p = primary && typeof primary === 'object' ? primary : {};
+    const f = fallback && typeof fallback === 'object' ? fallback : {};
+    const merged = Object.assign({}, f, p);
+    if (p.settings || f.settings) {
+      const ps = p.settings && typeof p.settings === 'object' ? p.settings : {};
+      const fs = f.settings && typeof f.settings === 'object' ? f.settings : {};
+      merged.settings = Object.assign({}, fs, ps);
+      if (Array.isArray(ps.accounts) && ps.accounts.length === 0 && Array.isArray(fs.accounts) && fs.accounts.length > 0 && hasConfiguredAccountReference(p)) {
+        merged.settings.accounts = fs.accounts;
+        if (!ps.defaultAccountId && fs.defaultAccountId) merged.settings.defaultAccountId = fs.defaultAccountId;
+      }
+      if (ps.providers || fs.providers) {
+        const pp = ps.providers && typeof ps.providers === 'object' ? ps.providers : {};
+        const fp = fs.providers && typeof fs.providers === 'object' ? fs.providers : {};
+        merged.settings.providers = Object.assign({}, fp, pp);
+      }
+    }
+    return merged;
+  }
+
+  function sanitizeFloatState(value) {
+    let copy;
+    try { copy = JSON.parse(JSON.stringify(value || {})); } catch (_) { return {}; }
+    if (copy.settings && typeof copy.settings === 'object') {
+      if (copy.settings.search && typeof copy.settings.search === 'object') copy.settings.search = {};
+      if (Array.isArray(copy.settings.accounts)) {
+        copy.settings.accounts = copy.settings.accounts.map((account) => {
+          const next = Object.assign({}, account);
+          delete next.apiKey;
+          return next;
+        });
+      }
+      if (copy.settings.providers && typeof copy.settings.providers === 'object') {
+        copy.settings.providers = Object.fromEntries(Object.entries(copy.settings.providers).map(([key, provider]) => {
+          const next = Object.assign({}, provider || {});
+          delete next.apiKey;
+          return [key, next];
+        }));
+      }
+    }
+    return copy;
+  }
+
+  function createPersistedSnapshot() {
+    let content;
+    try { content = JSON.stringify(App.state); } catch (_) { return null; }
+    if (_pendingSnapshot && content === _lastPersistedStateJson) return _pendingSnapshot;
+    _stateRevision = Math.max(_stateRevision, Date.now());
+    const revision = _stateRevision + 1;
+    _stateRevision = revision;
+    const persisted = Object.assign({}, App.state, {
+      _persistence: { revision, savedAt: Date.now(), format: 1 },
+    });
+    const json = JSON.stringify(persisted, null, 2);
+    _lastPersistedStateJson = content;
+    _pendingSnapshot = { content, json, revision };
+    return _pendingSnapshot;
+  }
+
+  function accountRecoverySnapshot() {
+    const settings = App.state && App.state.settings;
+    if (!settings || !Array.isArray(settings.accounts) || !settings.accounts.length) return null;
+    const accounts = settings.accounts.map((account) => {
+      const next = Object.assign({}, account);
+      delete next.apiKey;
+      return next;
+    });
+    const providers = {};
+    const source = settings.providers && typeof settings.providers === 'object' ? settings.providers : {};
+    for (const [key, value] of Object.entries(source)) {
+      providers[key] = Object.assign({}, value || {});
+      delete providers[key].apiKey;
+    }
+    return JSON.stringify({
+      conversations: [],
+      settings: { accounts, defaultAccountId: settings.defaultAccountId || '', providers },
+    });
+  }
+
+  function isThenable(value) {
+    return !!(value && typeof value.then === 'function');
+  }
+
+  function publishPersistenceStatus(status, detail) {
+    const next = Object.assign({ status, at: Date.now() }, detail || {});
+    App.__persistence = Object.assign({}, App.__persistence || {}, next);
+    if (status !== 'failed') return;
+    const fingerprint = String(next.code || next.error || 'persistence_failed');
+    if (_lastPersistenceNotice === fingerprint) return;
+    _lastPersistenceNotice = fingerprint;
+    try {
+      if (App.ui && App.ui.notify) App.ui.notify('数据保存失败', '当前内容仍保留在内存/浏览器回退存储，请检查数据目录后重试');
+      else if (App.ui && App.ui.toast) App.ui.toast('数据保存失败：' + fingerprint);
+    } catch (_) {}
+  }
+
+  function handlePersistenceResult(result, revision, kind) {
+    const response = result && typeof result === 'object' ? result : { ok: false, code: kind + '_no_result' };
+    const current = createPersistedSnapshot();
+    if (current && current.revision !== revision && response.ok === false) return response;
+    if (response.ok === false) {
+      publishPersistenceStatus('failed', { code: response.code || response.reason || kind + '_failed', error: response.error || response.message || '', revision, kind });
+    } else if (kind === 'file') {
+      publishPersistenceStatus('saved', { revision, file: 'saved', sqlite: (App.__persistence && App.__persistence.sqlite) || 'pending' });
+    } else {
+      publishPersistenceStatus('saved', { revision, sqlite: 'saved', file: (App.__persistence && App.__persistence.file) || 'saved' });
+    }
+    return response;
+  }
 
   const defaultState = () => ({
     conversations: [],          // { id, title, messages, updatedAt, agentId?, systemPrompt? }
@@ -101,8 +264,9 @@
         const modelNames = models.map(x => (typeof x === 'string') ? x : (x && x.name ? x.name : '')).filter(Boolean);
         // 优先用 provider.model 中显式选中的；若不在本账户模型列表则回退首个
         const active = (sel.model && modelNames.includes(sel.model)) ? sel.model : (modelNames[0] || '');
+        const activeConfig = models.find((item) => (typeof item === 'string' ? item : item && item.name) === active);
         const ref = 'acc:' + acc.id;
-        return { apiBase: acc.apiBase || '', ref, hasKey: hasKey(ref), model: active, models: modelNames };
+        return { apiBase: acc.apiBase || '', ref, hasKey: hasKey(ref), model: active, models: modelNames, profile: typeof activeConfig === 'object' ? Object.assign({}, activeConfig) : { name: active, contextWindow: 128000 } };
       }
     }
     return { apiBase: '', ref: '', hasKey: false, model: '', models: [] };
@@ -138,10 +302,13 @@
   }
 
   // 从一段 JSON 文本还原并归一化应用状态（含旧版迁移）。oldFormat 表示来源为旧版 OLD_KEY。
-  function applyLoaded(raw, oldFormat) {
+  function applyLoaded(raw, oldFormat, options) {
     const parsed = JSON.parse(raw);
+    const opts = options && typeof options === 'object' ? options : {};
+    _stateRevision = Math.max(_stateRevision, persistedRevision(parsed));
     const ns = defaultState();
     Object.assign(ns, parsed);
+    delete ns._persistence;
     const ps = (parsed.settings && typeof parsed.settings === 'object') ? parsed.settings : {};
     ns.settings = ns.settings || {};
     ns.settings.accounts = (Array.isArray(ps.accounts) ? ps.accounts : []).map(a => Object.assign({}, a, {
@@ -156,6 +323,9 @@
             // 聊天修复 D：maxOutput/thinkType 往返（归一化不再丢弃）
             maxOutput: (typeof m.maxOutput === 'number' && m.maxOutput > 0) ? m.maxOutput : undefined,
             thinkType: (typeof m.thinkType === 'string' && m.thinkType) ? m.thinkType : undefined,
+            timeoutMs: (typeof m.timeoutMs === 'number' && m.timeoutMs > 0) ? m.timeoutMs : undefined,
+            budgetMaxSteps: (typeof m.budgetMaxSteps === 'number' && m.budgetMaxSteps > 0) ? m.budgetMaxSteps : undefined,
+            budgetMaxCostUsd: (typeof m.budgetMaxCostUsd === 'number' && m.budgetMaxCostUsd >= 0) ? m.budgetMaxCostUsd : undefined,
           };
         return null;
       }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
@@ -246,16 +416,25 @@
           projectId: t.projectId || null,   // 归属项目（旧数据无则后续迁移补上）
           title: (typeof t.title === 'string' && t.title.trim()) ? t.title : '新会话',
           updatedAt: Number(t.updatedAt) || Date.now(),
+          pinned: !!t.pinned,
+          archived: !!t.archived,
+          tags: Array.isArray(t.tags) ? t.tags.filter(x => typeof x === 'string').map(x => x.trim()).filter(Boolean).slice(0, 8) : [],
           history: cleanHist(t.history),
           draftText: typeof t.draftText === 'string' ? t.draftText : '',
           draftSkills: cleanSkills(t.draftSkills),
           draftRootScope: (t.draftRootScope && typeof t.draftRootScope === 'object') ? { mode: ['primary', 'single', 'all'].includes(t.draftRootScope.mode) ? t.draftRootScope.mode : 'primary', rootId: t.draftRootScope.mode === 'single' ? String(t.draftRootScope.rootId || '') : '' } : { mode: 'primary', rootId: '' },
+          _liveAnswer: typeof t._liveAnswer === 'string' ? t._liveAnswer : '',
+          _liveEvents: Array.isArray(t._liveEvents) ? t._liveEvents.slice(-240) : [],
+          _pendingUser: typeof t._pendingUser === 'string'
+            ? { content: t._pendingUser, skills: [] }
+            : (t._pendingUser && typeof t._pendingUser === 'object' ? { content: String(t._pendingUser.content || ''), skills: cleanSkills(t._pendingUser.skills) } : null),
+          _running: !!t._running,
         }))
       : [];
     // 旧版单条 agentHistory → 若无线程则包成首个会话
     const oldHist = cleanHist(parsed.agentHistory);
     if (!threads.length && oldHist.length) {
-      threads = [{ id: App.uid(), projectId: null, title: '会话 1', updatedAt: Date.now(), history: oldHist, draftText: '', draftSkills: [], draftRootScope: { mode: 'primary', rootId: '' } }];
+      threads = [{ id: App.uid(), projectId: null, title: '会话 1', updatedAt: Date.now(), pinned: false, archived: false, tags: [], history: oldHist, draftText: '', draftSkills: [], draftRootScope: { mode: 'primary', rootId: '' } }];
     }
     // 糖码项目：归一化 + 旧版迁移（无项目时用旧 agentCwd 创建默认项目）
     let projects = Array.isArray(parsed.projects)
@@ -278,12 +457,17 @@
           // v2（权限大改）：permissionMode 5 档（缺省按旧字段迁移）
           permissionMode: derivePermissionMode(p),
           permissionRules: Array.isArray(p.permissionRules) ? p.permissionRules : [],
+          pinned: !!p.pinned,
+          tags: Array.isArray(p.tags) ? p.tags.filter(x => typeof x === 'string').map(x => x.trim()).filter(Boolean).slice(0, 8) : [],
+          healthStatus: ['healthy', 'degraded', 'offline', 'unknown'].includes(p.healthStatus) ? p.healthStatus : 'unknown',
+          healthCheckedAt: Number(p.healthCheckedAt) || 0,
+          healthRoots: Array.isArray(p.healthRoots) ? p.healthRoots.slice(0, 32) : [],
         }))
       : [];
     if (!projects.length) {
       // 迁移：用旧 agentCwd 创建默认项目，approveTools 留空保持原行为
       projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
-        auto: false, approveTools: [], cmdWhitelist: [], planMode: false, permissionMode: 'default', permissionRules: [], createdAt: Date.now(), lastUsedAt: Date.now() }];
+        auto: false, approveTools: [], cmdWhitelist: [], planMode: false, permissionMode: 'default', permissionRules: [], pinned: false, tags: [], healthStatus: 'unknown', healthCheckedAt: 0, healthRoots: [], createdAt: Date.now(), lastUsedAt: Date.now() }];
     }
     const firstPid = projects[0].id;
     // 把无 projectId 的线程归到首个项目
@@ -330,7 +514,7 @@
       for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create']) ns.settings.providers[m].accountId = '__default__';
     }
     App.state = ns;
-    App.persist();
+    if (opts.persist === true) App.persist();
     if (oldFormat) { try { localStorage.removeItem(OLD_KEY); } catch (e) {} }
   }
 
@@ -338,75 +522,152 @@
   // 关键修复：1.0.6 起静态服务端口改为系统随机分配，而 localStorage 按 origin（含端口）分区，
   // 端口一变 origin 即变，原 localStorage 全读不到 → 升级 / 每次重启都会丢数据。
   // 故优先从与端口无关的磁盘 state.json 读取（App.persist 一直双写它），localStorage 仅作回退。
-  App.loadState = async function () {
-    // 聊天修复 B：权威源改为磁盘 state.json（实时双写、与端口无关、始终最新）；
-    // SQLite 降级为备份（仅 state.json 缺失/损坏时兜底）。此前 SQLite 优先 + synced_at
-    // 判定有漏洞（先前同步把 synced_at 推到 ≥mtime 后，旧 SQLite 被误判 fresh）→ 账户/对话重启回退。
-    // 1) 优先：磁盘 state.json
-    try {
-      if (App.services.fs && App.services.fs.loadStateJSON) {
-        const res = await App.services.fs.loadStateJSON();
-        if (res && res.ok && typeof res.data === 'string' && res.data.trim()) {
-          const parsed = JSON.parse(res.data);
-          if (parsed && typeof parsed === 'object' && (parsed.conversations || parsed.settings || parsed.agentThreads || parsed.projects || parsed.activeId)) {
-            applyLoaded(res.data, false);
-            return;
+  App.loadState = async function (options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const candidates = [];
+    const addCandidate = (candidate, source) => {
+      if (candidate) candidates.push(Object.assign({ source }, candidate));
+    };
+
+    let primary = null;
+    if (typeof opts.raw === 'string') {
+      primary = parseStateCandidate(opts.raw, !!opts.oldFormat);
+      if (primary) primary.source = opts.source || 'provided';
+    } else {
+      try {
+        if (App.services.fs && App.services.fs.loadStateJSON) {
+          const res = await App.services.fs.loadStateJSON();
+          primary = parseStateCandidate(res && res.ok ? res.data : null, false);
+          if (primary) primary.source = 'state.json';
+        }
+      } catch (_) {}
+    }
+
+    // Only consult fallbacks when the primary snapshot is absent or incomplete.
+    // This keeps the newest conversation output authoritative while recovering
+    // account/settings fields from an older complete snapshot when necessary.
+    if (!primary || stateNeedsRecovery(primary.value)) {
+      try {
+        if (App.services.fs && App.services.fs.loadStorage) {
+          const r = await App.services.fs.loadStorage();
+          if (r && r.ok && r.state && typeof r.state === 'object') {
+            addCandidate(parseStateCandidate(JSON.stringify(r.state), false), 'sqlite');
           }
         }
+      } catch (_) {}
+      if (!opts.raw) {
+        try {
+          let raw = localStorage.getItem(STORAGE_KEY);
+          let oldFormat = false;
+          if (!raw) {
+            raw = localStorage.getItem(OLD_KEY);
+            oldFormat = !!raw;
+          }
+          addCandidate(parseStateCandidate(raw, oldFormat), oldFormat ? 'legacy-localStorage' : 'localStorage');
+          addCandidate(parseStateCandidate(localStorage.getItem(ACCOUNT_RECOVERY_KEY), false), 'account-recovery');
+        } catch (_) {}
       }
-    } catch (e) { /* 磁盘读取失败则继续 */ }
+    }
 
-    // 2) 备份：SQLite（state.json 缺失/损坏时）
-    try {
-      if (App.services.fs && App.services.fs.loadStorage) {
-        const r = await App.services.fs.loadStorage();
-        if (r && r.ok && r.state && typeof r.state === 'object') {
-          applyLoaded(JSON.stringify(r.state), false);
-          return;
-        }
-      }
-    } catch (e) { /* SQLite 读取失败则回退 */ }
+    if (!primary) primary = candidates.shift() || null;
+    if (!primary) return { ok: false, code: 'state_unavailable' };
 
-    // 3) 回退：localStorage（兼容开发模式与旧版）
-    try {
-      let raw = localStorage.getItem(STORAGE_KEY);
-      let oldFormat = false;
-      if (!raw) {
-        raw = localStorage.getItem(OLD_KEY);
-        if (raw) oldFormat = true;
+    let value = primary.value;
+    let recovered = false;
+    if (stateNeedsRecovery(value)) {
+      for (const fallback of candidates) {
+        const next = mergeMissingState(value, fallback.value);
+        if (JSON.stringify(next) !== JSON.stringify(value)) recovered = true;
+        value = next;
+        if (!stateNeedsRecovery(value)) break;
       }
-      if (raw) {
-        applyLoaded(raw, oldFormat);
-        return;
-      }
-    } catch (e) { /* ignore */ }
+    }
+
+    const stillIncomplete = stateNeedsRecovery(value);
+    App.__stateRecovery = (recovered || stillIncomplete)
+      ? { code: stillIncomplete ? 'partial_state' : 'state_recovered', source: primary.source, needsUserReview: stillIncomplete }
+      : null;
+    applyLoaded(JSON.stringify(value), primary.oldFormat, { persist: false });
+    if (primary.oldFormat || recovered) App.persist();
+    return { ok: true, source: primary.source, recovered, incomplete: stillIncomplete };
+  };
+
+  App.loadStateFromRaw = function (raw, options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const candidate = parseStateCandidate(raw, !!opts.oldFormat);
+    if (!candidate) return { ok: false, code: 'invalid_state' };
+    applyLoaded(candidate.raw, candidate.oldFormat, { persist: opts.persist === true });
+    return { ok: true };
   };
 
   App.persist = function () {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(App.state)); } catch (e) { /* ignore */ }
-    // 文件双写：同步写入 state.json 到 userData/tangbao-data/（可读文件，便于查看/备份）
-    // 注意：1.0.6 起 apiKey 不再进 state，这个文件里已经没有任何密钥明文。
+    const snapshot = createPersistedSnapshot();
+    if (!snapshot) return { ok: false, error: 'state_serialize_failed' };
+    let localStorageOk = true;
+    try {
+      localStorage.setItem(STORAGE_KEY, snapshot.json);
+      const recovery = accountRecoverySnapshot();
+      if (recovery) localStorage.setItem(ACCOUNT_RECOVERY_KEY, recovery);
+    } catch (e) {
+      localStorageOk = false;
+      publishPersistenceStatus('degraded', { code: 'local_storage_write_failed', error: e && e.message ? e.message : String(e), revision: snapshot.revision });
+    }
+    // 文件双写：state.json 使用 revision，主进程会拒绝过期快照。
+    let diskResult = null;
     try {
       if (App.services.fs && App.services.fs.saveStateJSON) {
-        App.services.fs.saveStateJSON(JSON.stringify(App.state, null, 2));
+        diskResult = App.services.fs.saveStateJSON(snapshot.json, snapshot.revision);
+        if (isThenable(diskResult)) {
+          const pending = Promise.resolve(diskResult)
+            .then((result) => handlePersistenceResult(result, snapshot.revision, 'file'))
+            .catch((error) => handlePersistenceResult({ ok: false, code: 'state_file_write_failed', error: error && error.message ? error.message : String(error) }, snapshot.revision, 'file'));
+          App.__persistencePromise = pending;
+        } else {
+          handlePersistenceResult(diskResult, snapshot.revision, 'file');
+        }
+      } else if (!localStorageOk) {
+        handlePersistenceResult({ ok: false, code: 'no_persistence_backend' }, snapshot.revision, 'file');
+      } else {
+        publishPersistenceStatus('saved', { revision: snapshot.revision, file: 'localStorage', sqlite: 'not_configured' });
       }
-    } catch (e) { /* 写文件失败不影响主流程 */ }
+    } catch (e) {
+      handlePersistenceResult({ ok: false, code: 'state_file_write_failed', error: e && e.message ? e.message : String(e) }, snapshot.revision, 'file');
+    }
+    // 主窗口把脱敏状态推送给浮窗；浮窗从不把 settings 回传覆盖主窗口。
+    try {
+      if (!App.__floatMode && App.services.float && App.services.float.pushState) {
+        App.services.float.pushState({ state: sanitizeFloatState(App.state), revision: snapshot.revision });
+      }
+    } catch (e) { /* ignore */ }
     // 账户/自定义地址可能刚被改过，同步给主进程的模型网关
     try { if (App.rt && App.rt.syncEndpoints) App.rt.syncEndpoints(); } catch (e) { /* ignore */ }
-    // M4 写穿（主数据源）：防抖 800ms 后把整库同步进 SQLite；失败静默（上面 state.json 已兜底）
+    // M4 写穿：防抖后把同一份带 revision 的快照同步进 SQLite。
     try {
       if (_syncTimer) clearTimeout(_syncTimer);
       _syncTimer = setTimeout(() => {
         _syncTimer = null;
         try {
           if (!App.rt || !App.rt.syncStorage) return;
-          const json = JSON.stringify(App.state);
-          if (json === _lastSyncedJson) return;
-          _lastSyncedJson = json;
-          App.rt.syncStorage(json);
-        } catch (e) { /* ignore */ }
+          const current = createPersistedSnapshot();
+          if (!current || current.json === _lastSyncedJson) return;
+          const result = App.rt.syncStorage(current.json, current.revision);
+          const settle = (response) => {
+            if (response && response.ok === false && response.reason !== 'no-sqlite') {
+              handlePersistenceResult(response, current.revision, 'sqlite');
+              return response;
+            }
+            _lastSyncedJson = current.json;
+            publishPersistenceStatus('saved', { revision: current.revision, sqlite: response && response.ok === false ? 'fallback' : 'saved' });
+            return response;
+          };
+          if (isThenable(result)) Promise.resolve(result).then(settle).catch((error) => settle({ ok: false, code: 'sqlite_sync_failed', error: error && error.message ? error.message : String(error) }));
+          else settle(result);
+        } catch (e) {
+          handlePersistenceResult({ ok: false, code: 'sqlite_sync_failed', error: e && e.message ? e.message : String(e) }, snapshot.revision, 'sqlite');
+        }
       }, 800);
     } catch (e) { /* ignore */ }
+    return { ok: true, revision: snapshot.revision, pending: isThenable(diskResult), localStorage: localStorageOk };
   };
 
   // M4 写穿兜底：关闭前若有未落盘的同步立即 flush（聊天修复：改同步 sendSync，杜绝 fire-and-forget 竞态）
@@ -414,13 +675,17 @@
     window.addEventListener('beforeunload', () => {
       try {
         if (_syncTimer) { clearTimeout(_syncTimer); _syncTimer = null; }
-        const json = JSON.stringify(App.state);
-        if (json !== _lastSyncedJson) {
-          _lastSyncedJson = json;
+        const snapshot = createPersistedSnapshot();
+        if (snapshot && snapshot.json !== _lastSyncedJson) {
+          _lastSyncedJson = snapshot.json;
+          try { localStorage.setItem(STORAGE_KEY, snapshot.json); } catch (_) {}
+          try {
+            if (App.services.fs && App.services.fs.saveStateJSON) App.services.fs.saveStateJSON(snapshot.json, snapshot.revision);
+          } catch (_) {}
           if (App.services.fs && App.services.fs.flushStorageSync) {
-            App.services.fs.flushStorageSync(json);
+            App.services.fs.flushStorageSync(snapshot.json, snapshot.revision);
           } else if (App.rt && App.rt.syncStorage) {
-            App.rt.syncStorage(json);
+            App.rt.syncStorage(snapshot.json, snapshot.revision);
           }
         }
       } catch (e) { /* ignore */ }

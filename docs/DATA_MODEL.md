@@ -1,7 +1,7 @@
 # 糖包数据模型（Data Model）
 
-> 本文档描述糖包 **v1.1.2** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
-> 配套阅读：[v1.1.2 发布说明](./CHANGELOG-v1.1.2.md)与[跨模块历史成果](./CROSS_MODULE.md)。
+> 本文档描述糖包 **v1.1.3** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
+> 配套阅读：[v1.1.3 发布说明](./CHANGELOG-v1.1.3.md)与[跨模块历史成果](./CROSS_MODULE.md)。
 
 ---
 
@@ -11,14 +11,20 @@
 
 | 载体 | 路径 | 角色 |
 |---|---|---|
-| SQLite 数据库 | `userData/tangbao.db` | **权威源**：对话、消息、账户、项目、糖码运行等全部结构化数据 |
-| 状态双写副本 | `userData/tangbao-data/state.json` | 便于人工查看/备份的只读副本，由主进程随状态变化刷新 |
-| 工作区注册表 | `userData/workspaces.json` | `workspaceId ↔ { cwd, name }` 映射 |
-| 密钥库 | `src/infrastructure/secrets/kvstore.js`（数据落 `userData` 内） | API Key 等敏感值，`safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret） |
+| SQLite 数据库 | `activeRoot/tangbao-data/tangbao.db` | **权威源**：对话、消息、账户、项目、糖码运行等全部结构化数据 |
+| 状态双写副本 | `activeRoot/tangbao-data/state.json` | 便于人工查看/备份的只读副本，由主进程随状态变化刷新 |
+| 工作区注册表 | `activeRoot/workspaces.json` | `workspaceId ↔ { cwd, name }` 映射 |
+| 密钥库 | `activeRoot/tangbao-data/secrets.json` | API Key 等敏感值，`safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret） |
 | localStorage | 渲染进程 | **已废弃**（v1.0.6 之前的主存储；v1.0.7 起不再作为数据源） |
 
 - 数据库 Schema 版本：**`SCHEMA_VERSION = 16`**（`src/core/schemas/db-schema.js`），通过 SQLite `PRAGMA user_version` 顺序执行迁移（见第 5 节）。
 - 任何位置都不存 API Key 明文。
+
+### 1.1 数据目录布局
+
+`activeRoot` 是当前真正写入的根目录。用户在设置中选择自定义目录后，SQLite、状态副本、密钥库和大文件统一迁移到 `activeRoot/tangbao-data/`；文件仓位于 `activeRoot/tangbao-data/files/{images,documents,thumbnails,exports,logs,changesets}`。默认 Electron `userData` 目录只保留 `tangbao-location.json` 指针、迁移状态和必要备份，不再持续写入新的记录。
+
+迁移使用临时目录和 SHA-256 校验，成功后原子激活；失败会保留旧目录并在恢复中心显示 `failed` 状态，不静默回退。历史记录、Trace、图片和文档不会自动清理，清理操作只会在预览后移动到时间戳隔离目录。
 
 ---
 
@@ -64,8 +70,8 @@
 
 | 表 | 关键列 | 职责 |
 |---|---|---|
-| `agent_run_metrics` | run_id, root_run_id, steps, tool_calls, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, queue_wait_ms, recovery_rate, error_breakdown_json | Agent Run 汇总指标、缓存与成本影响 |
-| `model_call_metrics` | id, run_id, root_run_id, scope, call_type, model_id, provider, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, status, error_type | Chat / Agent / Image / Documents / Workflow 的统一模型调用指标 |
+| `agent_run_metrics` | run_id, root_run_id, steps, tool_calls, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, queue_wait_ms, process_ms, recovery_rate, error_breakdown_json | Agent Run 汇总指标、缓存与成本影响 |
+| `model_call_metrics` | id, run_id, root_run_id, scope, call_type, model_id, provider, request_id, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, queue_wait_ms, status, error_type | Chat / Agent / Image / Documents / Workflow / Cache Probe 的统一模型调用指标 |
 
 ---
 
@@ -123,7 +129,8 @@
 
 ## 7. 备份与升级
 
-- **需要备份的内容**：`userData/tangbao.db`（权威数据）+ `userData/tangbao-data/state.json`（可读副本）+ `userData/workspaces.json`；密钥在系统密钥库中，随系统账户保留。
+- **需要备份的内容**：`activeRoot/tangbao-data/tangbao.db`（权威数据）+ `activeRoot/tangbao-data/state.json`（可读副本）+ `activeRoot/workspaces.json`；密钥在系统密钥库中，随系统账户保留。设置页的脱敏备份默认不包含 API Key。
+- **恢复中心**：可检查 SQLite 完整性、`state.json` 与 SQLite 一致性、孤儿文件和 Trace，并导出脱敏诊断包；诊断包、Trace 和 Benchmark 报告都不包含密钥。
 - v1.1.0 起数据为版本化 SQLite，升级自动迁移、不再丢数据（历史提示：v1.0.5 → v1.0.6 曾因存储迁移清空聊天记录，此后已切换到稳定持久化）。
 
 ---

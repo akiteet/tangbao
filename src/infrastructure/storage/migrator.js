@@ -49,6 +49,14 @@ function insertState(storage, fileRepo, state) {
     profile: JSON.stringify(settings.profile || {}),
     agentUsage: JSON.stringify(settings.agentUsage || {}),
     search: JSON.stringify(settings.search || {}),
+    agentProjectMeta: JSON.stringify((s.projects || []).reduce((out, project) => {
+      if (project && project.id) out[project.id] = { pinned: !!project.pinned, tags: Array.isArray(project.tags) ? project.tags : [], healthStatus: project.healthStatus || 'unknown', healthCheckedAt: project.healthCheckedAt || 0, healthRoots: Array.isArray(project.healthRoots) ? project.healthRoots : [] };
+      return out;
+    }, {})),
+    agentThreadMeta: JSON.stringify((s.agentThreads || []).reduce((out, thread) => {
+      if (thread && thread.id) out[thread.id] = { pinned: !!thread.pinned, archived: !!thread.archived, tags: Array.isArray(thread.tags) ? thread.tags : [] };
+      return out;
+    }, {})),
   };
   storage.setKVMulti(kv);
 
@@ -182,6 +190,8 @@ function readState(storage, fileRepo) {
     settings.profile = parse(pick('profile')) || {};
     settings.agentUsage = parse(pick('agentUsage')) || {};
     settings.search = parse(pick('search')) || {};
+    const projectMeta = parse(pick('agentProjectMeta')) || {};
+    const threadMeta = parse(pick('agentThreadMeta')) || {};
     settings.agentCwd = '';
 
     settings.accounts = storage.listAccounts().map((r) => ({
@@ -228,6 +238,7 @@ function readState(storage, fileRepo) {
       roots: parse(r.roots_json) || [], primaryRootId: r.primary_root_id || '', auto: !!r.auto,
       approveTools: parse(r.approve_tools) || [], cmdWhitelist: parse(r.cmd_whitelist) || [],
       planMode: !!r.plan_mode, createdAt: r.created_at, lastUsedAt: r.last_used_at,
+      ...(projectMeta[r.id] || {}),
     }));
     s.agentThreads = storage.listThreads().map((r) => ({
       id: r.id, projectId: r.project_id, title: r.title, updatedAt: r.updated_at,
@@ -235,6 +246,7 @@ function readState(storage, fileRepo) {
       draftText: r.draft_text || '',
       draftSkills: parse(r.draft_skills) || [],
       draftRootScope: parse(r.draft_root_scope_json) || { mode: 'primary', rootId: '' },
+      ...(threadMeta[r.id] || {}),
     }));
 
     s.conversations = convs.map((r) => ({

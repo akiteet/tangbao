@@ -71,12 +71,15 @@
           <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div class="topbar-title" id="chatTitle">糖包</div>
-        <!-- v1.1.2：糖码任务运行状态药丸（跨模块常驻，点击跳回运行中会话） -->
+        <!-- v1.1.0：糖码任务运行状态药丸（跨模块常驻，点击跳回运行中会话） -->
         <div class="agent-run-pill" id="agentRunPill" hidden title="点击跳回运行中的糖码任务">
           <span class="agent-run-dot"></span>
           <span class="agent-run-text" id="agentRunText">⏳ 运行中</span>
         </div>
         <div class="topbar-actions">
+          <button class="icon-btn local-search-trigger" id="localSearchBtn" type="button" title="本地搜索（Ctrl/Cmd + K）" aria-label="本地搜索">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
           <div class="topbar-menu-wrap">
             <button class="icon-btn" id="chatMenuBtn" aria-label="更多">⋯</button>
             <div class="dropdown" id="chatDropdown" hidden>
@@ -388,11 +391,18 @@
                 <div class="set-card-title">数据存储位置</div>
                 <p class="hint" id="storageLocationMode">正在读取数据目录...</p>
                 <code id="storageLocationPath" class="storage-location-path"></code>
+                <p class="hint warn" id="storageMigrationStatus" role="status" aria-live="polite"></p>
                 <p class="hint" id="secretStoreStatus">正在读取本机系统密钥库...</p>
                 <div class="row-inline">
                   <button type="button" class="btn-primary" id="chooseStorageLocation">迁移到其他磁盘</button>
                   <button type="button" class="btn-ghost" id="openStorageLocation">打开目录</button>
                   <button type="button" class="btn-ghost danger" id="resetSecretStore" hidden>建立新密钥库</button>
+                </div>
+                <div class="row-inline storage-recovery-actions">
+                  <button type="button" class="btn-ghost mini" id="verifyStorageMigration">验证迁移</button>
+                  <button type="button" class="btn-ghost mini" id="backupStorage">导出脱敏备份</button>
+                  <button type="button" class="btn-ghost mini" id="restoreStorage">恢复备份</button>
+                  <button type="button" class="btn-ghost mini" id="exportStorageDiagnostics">导出诊断</button>
                 </div>
                 <p class="hint">对话、运行记录、SQLite、文件仓和密钥库会一起迁移；旧目录不会自动删除。目标目录必须允许当前 Windows 账户写入，请勿选择受保护的安装目录。</p>
                 <p class="hint warn" id="secretStoreRecoveryHint" hidden>建立新密钥库不会恢复旧 Key；原密文会先完整备份，之后请在“账户”中重新填写 API Key。</p>
@@ -513,20 +523,20 @@
                 <ul class="help-list help-faq">
                   <li><b>请求被 CORS 拦截？</b>浏览器直连第三方 API 可能受跨域限制。请将 Base URL 指向支持跨域的端点，或自建本地代理。</li>
                   <li><b>怎么换模型？</b> 聊天模块顶部点模型按钮切换；也可在「配置」里为模块指定默认模型。</li>
-                  <li><b>导出配置包含什么？</b> 导出文件含对话、模块设置与密钥引用，但 <b>不含 API Key 明文</b>（v1.0.6 起密钥由系统密钥库加密保管）。请勿将导出文件分享给他人。</li>
+                  <li><b>导出配置包含什么？</b> 导出文件含对话、模块设置与密钥引用，但 <b>不含 API Key 明文</b>（密钥由系统密钥库加密保管）。请勿将导出文件分享给他人。</li>
                   <li><b>自定义模块打不开？</b> 请确认 URL 为 http/https 且目标站点允许被 iframe 嵌入（部分站点设置了 X-Frame-Options 会拒绝）。</li>
                 </ul>
               </div>
               <div class="set-card">
                 <div class="set-card-title">隐私提示</div>
-                <p class="hint warn">⚠️ 你的对话与文档保存在本机；API Key 自 v1.0.6 起由<b>系统密钥库</b>（Windows DPAPI / macOS Keychain / Linux libsecret）加密保管，明文不再写入任何本地文件。糖包不会主动上传你的数据，请自行负责本地备份。</p>
+                <p class="hint warn">⚠️ 你的对话与文档保存在本机；API Key 由<b>系统密钥库</b>（Windows DPAPI / macOS Keychain / Linux libsecret）加密保管，明文不再写入任何本地文件。糖包不会主动上传你的数据，请自行负责本地备份。</p>
               </div>
 
               <!-- 关于糖包 -->
               <div class="help-section-title">关于糖包</div>
               <div class="set-card about-card">
                 <div class="about-logo">糖</div>
-                <div class="about-name">糖包 <span class="about-ver">v1.0.6</span></div>
+                <div class="about-name">糖包 <span class="about-ver">v1.1.3</span></div>
                 <div class="about-meta">创作者：<b>世界上最帅的人</b></div>
                 <div class="about-slogan">糖包 · 把想要的 AI，装进你自己的桌面</div>
                 <div class="about-meta" style="margin-top:6px;font-size:11.5px;color:var(--text-tertiary)">Local-first AI workstation · 密钥不出本机</div>
@@ -547,7 +557,7 @@
                   <div class="help-module-icon" style="background:#fef3e0;color:#b26a00">🛡️</div>
                   <div class="help-module-body">
                     <div class="help-module-name">跨模块安全 · CROSS_MODULE</div>
-                    <div class="help-module-desc">v1.0.6 安全改造：密钥、权限与跨模块隔离。</div>
+                    <div class="help-module-desc">当前版本安全设计：密钥、权限与跨模块隔离。</div>
                   </div>
                 </a>
                 <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/SKILLS.md" target="_blank" rel="noopener">
@@ -629,7 +639,7 @@
           <div class="field"><span class="field-label">API Base URL</span><input type="text" id="accBase" placeholder="https://ark.cn-beijing.volces.com/api/v3" autocomplete="off" /></div>
           <div class="field"><span class="field-label">API Key</span><div class="key-field"><input type="password" id="accKey" placeholder="粘贴你的 API Key" autocomplete="off" /><button type="button" class="key-eye" data-eye="accKey" title="显示/隐藏" aria-label="显示/隐藏 API Key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
           <div class="field"><span class="field-label">模型列表（可多个，拖动 ⠿ 排序）</span>
-            <div class="model-row-head"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-think">思考类型</span><span class="h-caps">能力预设</span><span class="h-del"></span></div>
+            <div class="model-row-head"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-output">最大输出</span><span class="h-think">思考类型</span><span class="h-caps">能力预设</span><span class="h-del"></span></div>
             <div id="accModels"></div>
             <button type="button" class="btn-ghost mini-add" id="accModelAdd">+ 添加模型</button>
             <p class="hint model-row-hint">「模型名」填供应商给的模型 ID；「上下文窗口」填该模型最大 token（如 128000，留空用默认）；「思考类型」决定糖包如何发送深度思考指令：<b>强度档·OpenAI</b> 可调低/中/高，<b>开关式·Qwen</b> 只有开/关，<b>原生推理</b>（grok、deepseek、豆包 等）模型自己会思考、无需参数，其中豆包在「思考·关」时可显式关闭，不确定就选 <b>自动</b>；「能力预设」决定是否给该模型发送工具定义、能否接收图片输入：<b>工具+视觉 / 工具+文本 / 仅视觉 / 纯文本</b>，不确定就选 <b>自动推断</b>。</p>
@@ -651,8 +661,10 @@
   <script src="src/application/services/fs.js"></script>
   <script src="src/application/services/skills.js"></script>
   <script src="src/application/services/gateway.js"></script>
-  <script src="src/application/services/shell.js"></script>
-  <script src="src/application/services/float.js"></script>
+  <script src="src/application/services/search.js"></script>
+<script src="src/application/services/shell.js"></script>
+<script src="src/application/services/workspace.js"></script>
+<script src="src/application/services/float.js"></script>
   <script src="src/renderer/runtime.js"></script>
   <script src="src/core/models/capabilities.js"></script>
   <script src="src/core/models/agent-prompt.js"></script>
@@ -670,5 +682,6 @@
   <script src="src/renderer/views/workflows/create.js"></script>
   <script src="src/renderer/views/agent/agent.js"></script>
   <script src="src/renderer/app.js"></script>
+  <script src="src/renderer/components/search.js"></script>
 </body>
 </html>

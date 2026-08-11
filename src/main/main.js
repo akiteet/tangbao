@@ -194,6 +194,70 @@ const LOCAL_TOKEN = crypto.randomBytes(32).toString('hex');
 
 let staticServer = null;
 let mainWindow = null;
+let latestStateRevision = 0;
+
+function extractStateRevision(payload, explicitRevision) {
+  const explicit = Number(explicitRevision);
+  if (Number.isSafeInteger(explicit) && explicit > 0) return explicit;
+  try {
+    const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    const revision = parsed && parsed._persistence && Number(parsed._persistence.revision);
+    return Number.isSafeInteger(revision) && revision > 0 ? revision : 0;
+  } catch (_) { return 0; }
+}
+
+function acceptStateRevision(payload, explicitRevision) {
+  const revision = extractStateRevision(payload, explicitRevision);
+  if (revision > 0 && latestStateRevision > 0 && revision < latestStateRevision) {
+    return { ok: false, skipped: true, reason: 'stale_state_revision', revision, latestRevision: latestStateRevision };
+  }
+  if (revision > latestStateRevision) latestStateRevision = revision;
+  return { ok: true, revision };
+}
+
+function writeStateFileAtomic(file, content) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const temp = file + '.' + process.pid + '.' + Date.now().toString(36) + '.tmp';
+  let fd = null;
+  try {
+    fd = fs.openSync(temp, 'w');
+    fs.writeFileSync(fd, String(content || ''), 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(temp, file);
+    const written = fs.readFileSync(file, 'utf8');
+    if (written !== String(content || '')) throw new Error('state_write_verify_failed');
+  } catch (error) {
+    try { if (fd !== null) fs.closeSync(fd); } catch (_) {}
+    try { if (fs.existsSync(temp)) fs.unlinkSync(temp); } catch (_) {}
+    throw error;
+  }
+}
+
+function redactFloatStateJson(raw) {
+  try {
+    const state = JSON.parse(String(raw || '{}'));
+    const settings = state && state.settings;
+    if (settings && typeof settings === 'object') {
+      settings.search = {};
+      if (Array.isArray(settings.accounts)) {
+        settings.accounts = settings.accounts.map((account) => {
+          const next = Object.assign({}, account);
+          delete next.apiKey;
+          return next;
+        });
+      }
+      if (settings.providers && typeof settings.providers === 'object') {
+        for (const key of Object.keys(settings.providers)) {
+          if (settings.providers[key] && typeof settings.providers[key] === 'object') delete settings.providers[key].apiKey;
+        }
+      }
+    }
+    return JSON.stringify(state);
+  } catch (_) { return '{}'; }
+}
 let controlledEvalCount = 0; // v16（批量提速）：运行中的评测并发计数（上限 MAX_CONCURRENT_EVAL）
 const MAX_CONCURRENT_EVAL = 3; // v16（批量提速）：评测并发上限，3 路并行（中转站限流下保守值）
 
@@ -555,6 +619,27 @@ safeHandle('workspace:addRoot', async (_e, workspaceId) => {
 safeHandle('workspace:removeRoot', (_e, workspaceId, rootId) => updateWorkspace(workspaceId, (ws) => WorkspaceRoots.removeRoot(ws, rootId)));
 safeHandle('workspace:renameRoot', (_e, workspaceId, rootId, name) => updateWorkspace(workspaceId, (ws) => WorkspaceRoots.renameRoot(ws, rootId, name)));
 safeHandle('workspace:setPrimary', (_e, workspaceId, rootId) => updateWorkspace(workspaceId, (ws) => WorkspaceRoots.setPrimaryRoot(ws, rootId)));
+safeHandle('workspace:health', (_e, workspaceId) => {
+  const workspace = workspaceRegistry.get(String(workspaceId || ''));
+  if (!workspace) return { ok: false, code: 'unknown_workspace', error: '当前项目的工作区登记已失效' };
+  const roots = (workspace.roots || []).map((root) => {
+    const item = { rootId: root.rootId, name: root.name, path: root.path, exists: false, readable: false, writable: false, status: 'offline' };
+    try {
+      const stat = fs.statSync(root.path);
+      item.exists = stat.isDirectory();
+      if (item.exists) {
+        try { fs.accessSync(root.path, fs.constants.R_OK); item.readable = true; } catch (_) {}
+        try { fs.accessSync(root.path, fs.constants.W_OK); item.writable = true; } catch (_) {}
+      }
+      item.status = item.exists && item.readable && item.writable ? 'healthy' : item.exists && item.readable ? 'degraded' : 'offline';
+    } catch (_) {}
+    return item;
+  });
+  const status = roots.length && roots.every((root) => root.status === 'healthy')
+    ? 'healthy'
+    : roots.some((root) => root.status === 'healthy' || root.status === 'degraded') ? 'degraded' : 'offline';
+  return { ok: true, status, checkedAt: Date.now(), roots };
+});
 // Runtime 获取冻结副本，调用者不能改写主进程注册表。
 function resolveWorkspace(id) {
   if (typeof id !== 'string') return null;
@@ -579,6 +664,27 @@ safeHandle('secrets:list', () => {
     status,
   };
 });
+safeHandle('secrets:diagnose', () => {
+  try { return typeof secrets.diagnose === 'function' ? secrets.diagnose() : { ok: false, code: 'secret_diagnose_unsupported' }; }
+  catch (error) { return { ok: false, code: 'secret_diagnose_failed', error: error && error.message ? error.message : String(error) }; }
+});
+safeHandle('secrets:recoverLegacy', () => {
+  try {
+    const before = typeof secrets.diagnose === 'function' ? secrets.diagnose() : null;
+    const context = legacySecretContext.adoptLegacyContext({ activeRoot: app.getPath('userData'), legacyRoot: defaultUserDataRoot });
+    if (!context.ok) return context;
+    if (context.changed) {
+      const info = secrets.init({ safeStorage, filePath: path.join(app.getPath('userData'), 'tangbao-data', 'secrets.json'), legacyFilePaths: secretStorePaths(app.getPath('userData')) });
+      if (info.state !== 'ready') {
+        legacySecretContext.restoreBackup(path.join(app.getPath('userData'), 'Local State'), context.backupPath);
+        secrets.init({ safeStorage, filePath: path.join(app.getPath('userData'), 'tangbao-data', 'secrets.json'), legacyFilePaths: secretStorePaths(app.getPath('userData')) });
+        return { ok: false, code: 'secret_context_unavailable', error: '旧密钥上下文无法恢复，原密钥未覆盖', before, context };
+      }
+    }
+    const recovered = typeof secrets.recoverLegacy === 'function' ? secrets.recoverLegacy() : { ok: true, recovered: false };
+    return Object.assign({}, recovered, { context, before, status: secrets.getStatus ? secrets.getStatus() : null });
+  } catch (error) { return { ok: false, code: 'secret_recovery_failed', error: error && error.message ? error.message : String(error) }; }
+});
 safeHandle('secrets:reset', () => {
   if (typeof secrets.resetUnreadableStore !== 'function') {
     return { ok: false, code: 'secret_store_reset_unsupported', error: '当前版本不支持重建密钥库' };
@@ -588,6 +694,70 @@ safeHandle('secrets:reset', () => {
 
 // 渲染进程同步「密钥引用 → API Base」映射表；网关据此决定往哪转发（渲染进程指定不了目标）
 safeHandle('gateway:setEndpoints', (e, list) => ({ ok: true, count: gateway.setEndpoints(list) }));
+
+safeHandle('cache:probe', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    if (!opts.ref || !opts.model) return { ok: false, code: 'cache_probe_args_missing', error: '缺少账户或模型' };
+    return await gateway.probeCache(String(opts.ref), String(opts.model), { kind: opts.kind || 'chat' });
+  } catch (error) {
+    return { ok: false, code: error && error.code || 'cache_probe_failed', type: error && error.type || 'model_failure', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('model:health', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    return await gateway.healthCheck(String(opts.ref || ''), String(opts.model || ''), String(opts.kind || 'chat'));
+  } catch (error) { return { ok: false, error: { type: 'infrastructure_failure', code: 'health_check_failed', message: error && error.message ? error.message : String(error) } }; }
+});
+
+safeHandle('model:metrics', async (_e, input) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || (typeof svc.listModelCallMetricsPage !== 'function' && typeof svc.listModelCallMetricsFiltered !== 'function')) return { ok: false, reason: 'no-sqlite', items: [] };
+    const opts = input && typeof input === 'object' ? input : {};
+    const page = typeof svc.listModelCallMetricsPage === 'function'
+      ? svc.listModelCallMetricsPage(opts)
+      : { items: svc.listModelCallMetricsFiltered(opts), nextCursor: null, total: null };
+    return Object.assign({ ok: true }, page);
+  } catch (error) { return { ok: false, reason: 'model-metrics-error', items: [], error: error && error.message ? error.message : String(error) }; }
+});
+
+safeHandle('search:query', async (_e, input) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || typeof svc.searchLocal !== 'function') return { ok: false, reason: 'no-sqlite', items: [], nextCursor: null, total: 0 };
+    const opts = input && typeof input === 'object' ? input : {};
+    const requestedScopes = Array.isArray(opts.scopes) && opts.scopes.length ? opts.scopes.map(String) : [];
+    const wantsSkills = !requestedScopes.length || requestedScopes.includes('skill');
+    const dbScopes = requestedScopes.filter((scope) => scope !== 'skill');
+    const dbResult = svc.searchLocal(opts.query, Object.assign({}, opts, {
+      scopes: dbScopes.length ? dbScopes : (wantsSkills ? ['__none__'] : requestedScopes),
+      cursor: wantsSkills ? 0 : opts.cursor,
+      limit: wantsSkills ? 100 : opts.limit,
+    }));
+    if (!wantsSkills) return dbResult;
+    let skillItems = [];
+    try {
+      const needle = String(opts.query || '').trim().toLowerCase().slice(0, 160);
+      const rows = await SkillRegistry.enumerateInstalled(managedSkillRoots(opts.workspaceId || ''));
+      const redact = (value) => String(value || '').replace(/(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{16,}|(?:api[_-]?key|authorization|bearer)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]');
+      skillItems = (rows || []).filter((row) => {
+        const haystack = [row.name, row.description, row.dir].join('\n').toLowerCase();
+        return needle && haystack.includes(needle);
+      }).map((row) => ({ scope: 'skill', id: String(row.id || row.name || row.dir || ''), title: redact(row.name || ''), snippet: redact(row.description || ''), updatedAt: Number(row.updatedAt || 0) }));
+    } catch (_) { skillItems = []; }
+    const all = (dbResult.items || []).concat(skillItems).sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    const offset = Math.max(Number(opts.cursor) || 0, 0);
+    const limit = Math.min(Math.max(Number(opts.limit) || 30, 1), 100);
+    const items = all.slice(offset, offset + limit);
+    const total = Number(dbResult.total || 0) + skillItems.length;
+    return { ok: dbResult.ok !== false, items, nextCursor: offset + items.length < total ? String(offset + items.length) : null, total };
+  } catch (error) {
+    return { ok: false, reason: 'search-failed', items: [], nextCursor: null, total: 0, error: error && error.message ? error.message : String(error) };
+  }
+});
 
 // 渲染进程（主题切换时）用来同步系统标题栏叠加层的颜色，使浅/深色模式下控件都清晰
 safeOn('set-titlebar-overlay', (e, opts) => {
@@ -642,10 +812,7 @@ safeHandle('shell:openPath', async (e, absPath) => {
 
 // Data location is user-selectable. The pointer stays in the original Electron
 // userData directory; records are copied and activated after the next launch.
-safeHandle('storage:info', () => dataLocation.describe({
-  defaultRoot: defaultUserDataRoot,
-  activeRoot: app.getPath('userData'),
-}));
+safeHandle('storage:info', () => storageInfo());
 
 safeHandle('storage:chooseLocation', async () => {
   try {
@@ -709,16 +876,18 @@ safeHandle('app:relaunch', () => {
 
 // 文件双写：将应用状态写入 userData/tangbao-data/state.json（可读文件，便于查看/备份）
 // 仅允许写到 userData 子目录，防止越权访问其他文件
-safeHandle('fs:writeState', async (e, jsonStr) => {
+safeHandle('fs:writeState', async (e, jsonStr, revision) => {
   try {
+    const gate = acceptStateRevision(jsonStr, revision);
+    if (!gate.ok) return gate;
     const userData = app.getPath('userData');
     const dir = path.join(userData, 'tangbao-data');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, 'state.json');
     // 安全检查：最终路径必须在 userData 子树内
     if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
-    fs.writeFileSync(file, jsonStr || '', 'utf8');
-    return { ok: true };
+    writeStateFileAtomic(file, jsonStr || '');
+    return { ok: true, revision: gate.revision };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
@@ -732,8 +901,9 @@ safeHandle('fs:readState', async () => {
     // 安全检查：最终路径必须在 userData 子树内
     if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
     if (!fs.existsSync(file)) return { ok: true, data: null };
-    const data = fs.readFileSync(file, 'utf8');
-    return { ok: true, data };
+      const data = fs.readFileSync(file, 'utf8');
+      latestStateRevision = Math.max(latestStateRevision, extractStateRevision(data));
+      return { ok: true, data };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
@@ -745,16 +915,84 @@ let storageService = null;
 let storageFileRepo = null;
 let storageReady = false;      // 完整性自检通过后才算真正可用
 let backupRotatedOnce = false; // 每次启动只轮转一次备份
+let storageFailure = '';
 
-// M6：文件仓孤儿 GC —— 仅当 SQLite 已是权威源（有 synced_at/migrated_v1）时清理无引用文件
-function runFileGC(svc, fileRepo) {
+// v1.1.3：文件仓只做审计，不自动删除用户文件；清理必须经过预览和显式隔离操作。
+function auditFileRepo(svc, fileRepo) {
   try {
-    if (!svc.getKV || (!svc.getKV('synced_at') && !svc.getKV('migrated_v1'))) return;
     const refImg = new Set((svc.getImageFileNames ? svc.getImageFileNames() : []).filter(Boolean));
-    for (const f of (fileRepo.list('images') || [])) if (!refImg.has(f)) fileRepo.remove('images', f);
+    const orphanImages = (fileRepo.list('images') || []).filter((f) => !refImg.has(f));
     const refDoc = new Set((svc.getDocIds ? svc.getDocIds() : []).filter(Boolean));
-    for (const f of (fileRepo.list('documents') || [])) if (!refDoc.has(f)) fileRepo.remove('documents', f);
+    const orphanDocuments = (fileRepo.list('documents') || []).filter((f) => !refDoc.has(f));
+    const trace = svc && typeof svc.auditAgentTrace === 'function'
+      ? svc.auditAgentTrace()
+      : { ok: false, orphanEvents: [], invalidEvents: [], duplicateSequences: [] };
+    return { orphanImages, orphanDocuments, trace };
   } catch (e) { console.warn('[存储层] 文件仓 GC 失败（忽略）：', e && e.message ? e.message : e); }
+  return { orphanImages: [], orphanDocuments: [], trace: { ok: false, orphanEvents: [], invalidEvents: [], duplicateSequences: [] } };
+}
+
+function stateShape(value) {
+  const state = value && typeof value === 'object' ? value : {};
+  const settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+  return {
+    conversations: Array.isArray(state.conversations) ? state.conversations.length : null,
+    accounts: Array.isArray(settings.accounts) ? settings.accounts.length : null,
+    documents: Array.isArray(settings.docs) ? settings.docs.length : null,
+    images: Array.isArray(settings.imageHistory) ? settings.imageHistory.length : null,
+    projects: Array.isArray(state.projects) ? state.projects.length : null,
+    threads: Array.isArray(state.agentThreads) ? state.agentThreads.length : null,
+  };
+}
+
+function auditStateConsistency(svc) {
+  const disk = readActiveStateObject();
+  if (!disk) return { status: 'unknown', reason: 'state_missing', disk: null, sqlite: null, mismatches: [] };
+  if (!svc || typeof svc.ready !== 'function' || !svc.ready()) {
+    return { status: 'unknown', reason: 'sqlite_unavailable', disk: stateShape(disk), sqlite: null, mismatches: [] };
+  }
+  try {
+    const migrator = require('../infrastructure/storage/migrator');
+    const loaded = migrator.readState(svc, storageFileRepo);
+    if (!loaded || !loaded.ok) return { status: 'unknown', reason: loaded && loaded.reason || 'sqlite_state_unavailable', disk: stateShape(disk), sqlite: null, mismatches: [] };
+    const left = stateShape(disk);
+    const right = stateShape(loaded.state);
+    const mismatches = Object.keys(left)
+      .filter((key) => left[key] != null && right[key] != null && left[key] !== right[key])
+      .map((key) => ({ field: key, disk: left[key], sqlite: right[key] }));
+    return { status: mismatches.length ? 'inconsistent' : 'consistent', disk: left, sqlite: right, mismatches };
+  } catch (error) {
+    return { status: 'unknown', reason: 'consistency_check_failed', disk: stateShape(disk), sqlite: null, mismatches: [], error: error && error.message ? error.message : String(error) };
+  }
+}
+
+function listStorageBackups() {
+  const dataDir = path.join(app.getPath('userData'), 'tangbao-data');
+  try {
+    return fs.readdirSync(dataDir)
+      .filter((name) => /(?:backup|before-restore|pre-v|unreadable|secret-context)/i.test(name))
+      .slice(0, 100)
+      .map((name) => {
+        const filePath = path.join(dataDir, name);
+        let stat = null;
+        try { stat = fs.statSync(filePath); } catch (_) {}
+        return { name, path: filePath, bytes: stat && stat.isFile() ? stat.size : 0, isDirectory: !!(stat && stat.isDirectory()) };
+      });
+  } catch (_) { return []; }
+}
+
+function storageInfo() {
+  const info = dataLocation.describe({ defaultRoot: defaultUserDataRoot, activeRoot: app.getPath('userData') });
+  info.startupMigration = startupLocation && startupLocation.migration && startupLocation.migration.ok === false
+    ? startupLocation.migration
+    : null;
+  const svc = getStorageService();
+  info.database = { path: svc && svc.dbPathInfo ? svc.dbPathInfo() : path.join(app.getPath('userData'), 'tangbao-data', 'tangbao.db'), available: !!svc, integrity: svc && typeof svc.checkIntegrity === 'function' ? !!svc.checkIntegrity() : false, reason: svc ? '' : (storageFailure || 'sqlite_unavailable') };
+  info.secretStore = typeof secrets.getStatus === 'function' ? secrets.getStatus() : null;
+  info.audit = svc && storageFileRepo ? auditFileRepo(svc, storageFileRepo) : { orphanImages: [], orphanDocuments: [], trace: { ok: false, orphanEvents: [], invalidEvents: [], duplicateSequences: [] } };
+  info.audit.stateConsistency = auditStateConsistency(svc);
+  info.backups = listStorageBackups();
+  return info;
 }
 
 function getStorageService() {
@@ -767,31 +1005,138 @@ function getStorageService() {
     fs.mkdirSync(dataDir, { recursive: true });
     fileRepo.init(userData);
     storageFileRepo = fileRepo;
-    if (!initStore(path.join(dataDir, 'tangbao.db'), fileRepo)) return null;
-    // M6：完整性自检失败 → 禁用 SQLite，App 走 state.json 回退链
-    if (!checkIntegrity()) {
-      console.error('[存储层] SQLite 完整性检查未通过，本次禁用 SQLite，回退 state.json。');
+    if (!initStore(path.join(dataDir, 'tangbao.db'), fileRepo)) {
+      storageFailure = 'sqlite_init_failed';
       return null;
     }
+    if (!checkIntegrity()) {
+      storageFailure = 'sqlite_integrity_failed';
+      return null;
+    }
+    storageFailure = '';
     storageService = StorageService;
     storageReady = true;
-    // M6：文件仓孤儿 GC（每个启动周期一次）
-    try { runFileGC(storageService, storageFileRepo); } catch (_) { /* ignore */ }
+    // v1.1.3：启动只审计文件仓，不自动删除孤儿图片/文档。
+    try { auditFileRepo(storageService, storageFileRepo); } catch (_) { /* ignore */ }
     return storageService;
   } catch (e) {
+    storageFailure = 'sqlite_unavailable';
     console.error('[存储层] better-sqlite3 不可用，回退 state.json：', e && e.message ? e.message : e);
     return null;
   }
 }
 
 // 渲染进程启动后查询存储层是否可用（用于 UI 提示，不影响主流程）
-safeHandle('storage:available', () => ({ ok: !!getStorageService() }));
+safeHandle('storage:available', () => {
+  const available = !!getStorageService();
+  return { ok: available, reason: available ? '' : (storageFailure || 'sqlite_unavailable'), fallback: 'state.json' };
+});
+
+safeHandle('storage:verifyMigration', () => {
+  try {
+    const info = dataLocation.describe({ defaultRoot: defaultUserDataRoot, activeRoot: app.getPath('userData') });
+    const migration = info.migration || {};
+    if (!migration.sourceRoot || !migration.targetRoot) return { ok: false, code: 'migration_not_found', status: 'unknown' };
+    return dataLocation.verifyMigration({ pointerRoot: defaultUserDataRoot, sourceRoot: migration.sourceRoot, targetRoot: migration.targetRoot, migrationId: migration.id });
+  } catch (error) { return { ok: false, code: 'migration_verify_failed', error: error && error.message ? error.message : String(error) }; }
+});
+
+safeHandle('storage:cleanupPreview', () => dataLocation.cleanupPreview({ defaultRoot: defaultUserDataRoot, activeRoot: app.getPath('userData') }));
+safeHandle('storage:cleanupLegacy', (_e, input) => dataLocation.cleanupLegacy({ defaultRoot: defaultUserDataRoot, activeRoot: app.getPath('userData'), previewId: input && input.previewId }));
+
+function redactBackupValue(value, key) {
+  if (key && /api[_-]?key|authorization|password|secret|token|credential/i.test(String(key))) return undefined;
+  if (Array.isArray(value)) return value.map((item) => redactBackupValue(item, '')).filter((item) => item !== undefined);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const safe = redactBackupValue(childValue, childKey);
+      if (safe !== undefined) out[childKey] = safe;
+    }
+    return out;
+  }
+  return value;
+}
+
+function readActiveStateObject() {
+  const file = path.join(app.getPath('userData'), 'tangbao-data', 'state.json');
+  if (!fs.existsSync(file)) return null;
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
+}
+
+safeHandle('storage:backup', async (_e, input) => {
+  try {
+    const state = readActiveStateObject();
+    if (!state || typeof state !== 'object') return { ok: false, code: 'storage_state_missing', error: '暂无可备份数据' };
+    const payload = { format: 'tangbao-backup', reportVersion: 2, createdAt: new Date().toISOString(), schemaVersion: 16, storage: dataLocation.describe({ defaultRoot: defaultUserDataRoot, activeRoot: app.getPath('userData') }), state: redactBackupValue(state) };
+    const opts = input && typeof input === 'object' ? input : {};
+    const chosen = opts.filePath ? String(opts.filePath) : '';
+    const result = chosen ? { canceled: false, filePath: chosen } : await dialog.showSaveDialog(mainWindow, { title: '导出糖包脱敏备份', defaultPath: 'tangbao-backup-' + new Date().toISOString().slice(0, 10) + '.json', filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(result.filePath, JSON.stringify(payload, null, 2), 'utf8');
+    return { ok: true, filePath: result.filePath, includeSecrets: false, reportVersion: 2 };
+  } catch (error) { return { ok: false, code: 'storage_backup_failed', error: error && error.message ? error.message : String(error) }; }
+});
+
+safeHandle('storage:diagnostics', async () => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出脱敏诊断包',
+      defaultPath: 'tangbao-diagnostics-' + new Date().toISOString().slice(0, 10) + '.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    const payload = {
+      format: 'tangbao-diagnostics',
+      reportVersion: 2,
+      createdAt: new Date().toISOString(),
+      appVersion: require('../../package.json').version,
+      platform: process.platform,
+      arch: process.arch,
+      node: process.versions.node,
+      electron: process.versions.electron,
+      storage: storageInfo(),
+      secrets: typeof secrets.diagnose === 'function' ? secrets.diagnose() : null,
+      note: '此诊断包不包含 API Key、Prompt、消息正文或模型输出。',
+    };
+    fs.writeFileSync(result.filePath, JSON.stringify(payload, null, 2), 'utf8');
+    return { ok: true, filePath: result.filePath, redacted: true };
+  } catch (error) {
+    return { ok: false, code: 'diagnostics_export_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('storage:restore', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    const selected = opts.filePath ? { canceled: false, filePaths: [String(opts.filePath)] } : await dialog.showOpenDialog(mainWindow, { title: '恢复糖包脱敏备份', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (selected.canceled || !selected.filePaths || !selected.filePaths.length) return { ok: false, canceled: true };
+    const source = selected.filePaths[0];
+    const parsed = JSON.parse(fs.readFileSync(source, 'utf8'));
+    const state = parsed && parsed.format === 'tangbao-backup' ? parsed.state : parsed;
+    if (!state || typeof state !== 'object' || (!state.conversations && !state.settings)) return { ok: false, code: 'invalid_backup', error: '备份文件缺少有效的 conversations/settings' };
+    const safeState = redactBackupValue(state);
+    const dataDir = path.join(app.getPath('userData'), 'tangbao-data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    const stateFile = path.join(dataDir, 'state.json');
+    const previous = stateFile + '.before-restore-' + Date.now() + '.json';
+    if (fs.existsSync(stateFile)) fs.copyFileSync(stateFile, previous);
+    const temp = stateFile + '.restore.tmp';
+    fs.writeFileSync(temp, JSON.stringify(safeState, null, 2), 'utf8');
+    fs.renameSync(temp, stateFile);
+    const svc = getStorageService();
+    if (svc) {
+      try { require('../infrastructure/storage/migrator').syncState(svc, storageFileRepo, safeState); } catch (_) {}
+    }
+    return { ok: true, restartRequired: true, backupFile: previous, includeSecrets: false };
+  } catch (error) { return { ok: false, code: 'storage_restore_failed', error: error && error.message ? error.message : String(error) }; }
+});
 
 // 渲染进程把归一化后的 App.state 传过来，一次性灌入 SQLite（迁移器内部幂等 + 失败回滚）
 safeHandle('storage:migrate', async (e, stateJson) => {
   try {
     const svc = getStorageService();
-    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    if (!svc) return { ok: false, reason: 'no-sqlite', fallback: 'state.json', storageFailure };
     const userData = app.getPath('userData');
     const dataDir = path.join(userData, 'tangbao-data');
     let raw = '';
@@ -806,22 +1151,24 @@ safeHandle('storage:migrate', async (e, stateJson) => {
 
 // M4 写穿：把 App.state 整库替换进 SQLite（主数据源）。无 migrated_v1 门槛、幂等；
 // 备份策略（M6）：canonical 缺失时直接写；已存在则每个启动周期轮转一次（保留最近 3 份带时间戳副本）。
-safeHandle('storage:syncState', async (e, stateJson) => {
+safeHandle('storage:syncState', async (e, stateJson, revision) => {
   try {
+    const gate = acceptStateRevision(stateJson, revision);
+    if (!gate.ok) return gate;
+    const normalized = JSON.parse(stateJson);
     const svc = getStorageService();
-    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    if (!svc) return { ok: false, reason: 'no-sqlite', fallback: 'state.json', storageFailure };
     const userData = app.getPath('userData');
     const dataDir = path.join(userData, 'tangbao-data');
     const bak = path.join(dataDir, 'state.v1.backup.json');
     const migrator = require('../infrastructure/storage/migrator');
-    if (!fs.existsSync(bak)) {
-      try { fs.writeFileSync(bak, stateJson || '{}', 'utf8'); } catch (_) { /* 备份失败不阻断同步 */ }
+      if (!fs.existsSync(bak)) {
+        try { fs.writeFileSync(bak, stateJson || '{}', 'utf8'); } catch (_) { /* 备份失败不阻断同步 */ }
     } else if (!backupRotatedOnce) {
       backupRotatedOnce = true;
       migrator.rotateBackup(dataDir, stateJson || '{}', 3);
     }
-    const normalized = JSON.parse(stateJson);
-    return migrator.syncState(svc, storageFileRepo, normalized);
+      return Object.assign({}, migrator.syncState(svc, storageFileRepo, normalized), { revision: gate.revision });
   } catch (err) {
     return { ok: false, reason: 'sync-error', error: err && err.message ? err.message : String(err) };
   }
@@ -829,21 +1176,31 @@ safeHandle('storage:syncState', async (e, stateJson) => {
 
 // 聊天修复：关闭前同步落盘（sendSync——主进程阻塞同步写 state.json + SQLite，杜绝防抖未送达的竞态丢数据）
 // B2（P1）：改用 safeOn 加 assertTrustedSender 鉴权——修复裸 ipcMain.on 可被嵌入 iframe 无鉴权覆写 state.json + SQLite 的问题
-safeOn('storage:flushSync', (e, stateJson) => {
-  try {
-    const userData = app.getPath('userData');
-    const dataDir = path.join(userData, 'tangbao-data');
-    const stateFile = path.join(dataDir, 'state.json');
-    try { fs.writeFileSync(stateFile, String(stateJson || '{}'), 'utf8'); } catch (_) {}
-    const svc = getStorageService();
-    if (svc && stateJson) {
+safeOn('storage:flushSync', (e, stateJson, revision) => {
+    try {
+      const gate = acceptStateRevision(stateJson, revision);
+      if (!gate.ok) {
+        if (e && e.returnValue === undefined) e.returnValue = gate;
+        return;
+      }
+      const userData = app.getPath('userData');
+      const dataDir = path.join(userData, 'tangbao-data');
+      const stateFile = path.join(dataDir, 'state.json');
+      let fileError = null;
+      try { writeStateFileAtomic(stateFile, String(stateJson || '{}')); } catch (error) { fileError = error; }
+      const svc = getStorageService();
+      let sqlite = { ok: false, reason: storageFailure || 'no-sqlite', fallback: 'state.json' };
+      if (!fileError && svc && stateJson) {
       try {
         const migrator = require('../infrastructure/storage/migrator');
         const normalized = JSON.parse(stateJson);
-        migrator.syncState(svc, storageFileRepo, normalized);
-      } catch (_) { /* SQLite 同步失败不阻断退出 */ }
-    }
-    if (e && e.returnValue === undefined) e.returnValue = { ok: true };
+        const syncResult = migrator.syncState(svc, storageFileRepo, normalized);
+        sqlite = Object.assign({}, syncResult, { ok: !syncResult || syncResult.ok !== false });
+      } catch (error) { sqlite = { ok: false, reason: 'sqlite_sync_failed', error: error && error.message ? error.message : String(error), fallback: 'state.json' }; }
+      }
+      if (e && e.returnValue === undefined) e.returnValue = fileError
+        ? { ok: false, code: 'state_file_write_failed', error: fileError.message || String(fileError), revision: gate.revision }
+        : { ok: true, revision: gate.revision, file: 'saved', sqlite };
   } catch (err) {
     if (e && e.returnValue === undefined) e.returnValue = { ok: false, error: err && err.message ? err.message : String(err) };
   }
@@ -854,7 +1211,7 @@ safeOn('storage:flushSync', (e, stateJson) => {
 safeHandle('storage:loadState', async () => {
   try {
     const svc = getStorageService();
-    if (!svc) return { ok: false, reason: 'no-sqlite' };
+    if (!svc) return { ok: false, reason: 'no-sqlite', fallback: 'state.json', storageFailure };
     const userData = app.getPath('userData');
     const migrator = require('../infrastructure/storage/migrator');
     const r = migrator.readState(svc, storageFileRepo);
@@ -918,7 +1275,7 @@ safeHandle('agent:runTree', async (_e, rootRunId) => {
   } catch (err) { return { ok: false, reason: 'list-agent-run-tree-error', tree: null, error: err && err.message ? err.message : String(err) }; }
 });
 
-// v1.1.2：只读 Trace Inspector 查询，按根 Run 分页，避免一次性载入大型事件流。
+// v1.1.3：只读 Trace Inspector 查询，按根 Run 分页，避免一次性载入大型事件流。
 safeHandle('agent:tracePage', async (_e, input) => {
   try {
     const svc = getStorageService();
@@ -1779,7 +2136,7 @@ function createFloatingWindow() {
     try {
       const file = path.join(app.getPath('userData'), 'tangbao-data', 'state.json');
       const raw = fs.readFileSync(file, 'utf8');
-      win.webContents.send('float:init', raw);
+        win.webContents.send('float:init', redactFloatStateJson(raw));
     } catch (_) { /* 无 state.json 时浮窗用默认空状态 */ }
   });
   win.once('ready-to-show', () => win.show());
@@ -1823,8 +2180,26 @@ safeHandle('float:close', async () => {
 
 // 浮窗 → 主窗：转发状态变更（主窗据此合并并落盘）
 safeOn('float:sync', (e, s) => {
-  if (mainWindow && mainWindow.webContents) mainWindow.webContents.send('float:apply', s);
-});
+    if (!mainWindow || e.sender === mainWindow.webContents) return;
+    if (!s || typeof s !== 'object' || !Array.isArray(s.conversations)) return;
+    mainWindow.webContents.send('float:apply', {
+      type: 'patch',
+      conversations: s.conversations,
+      activeId: s.activeId,
+      web: s.web,
+      thinkLevel: s.thinkLevel,
+    });
+  });
+
+  // Main window -> float: send the latest in-memory snapshot. This path never
+  // writes storage and is intentionally separate from the float patch path.
+  safeOn('float:pushState', (e, payload) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    if (!payload || typeof payload !== 'object' || !payload.state || typeof payload.state !== 'object') return;
+    floatWindows.forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('float:state', payload);
+    });
+  });
 
 // 主窗 → 浮窗：通知重渲染（流式结束 / 浮窗关闭后）
 safeHandle('float:refresh', async () => {

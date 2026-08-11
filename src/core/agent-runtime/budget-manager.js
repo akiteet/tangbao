@@ -93,8 +93,11 @@ class BudgetManager {
         return { ok: false, type: 'budget_exhausted', code: 'budget_' + label + '_exhausted', dimension: limitKey, remaining: Math.max(0, this.budget[limitKey] - this.spent[spentKey]) };
       }
     }
-    if (this.budget.maxDurationMs > 0 && this.elapsedMs(now) + (Number(delta && delta.durationMs) || 0) > this.budget.maxDurationMs) {
-      return { ok: false, type: 'budget_exhausted', code: 'budget_duration_exhausted', dimension: 'maxDurationMs', remaining: Math.max(0, this.budget.maxDurationMs - this.elapsedMs(now)) };
+    // elapsedMs already includes the work represented by durationMs. Use the
+    // larger value so a single model/tool call is not counted twice.
+    const elapsed = Math.max(this.elapsedMs(now), next.durationMs || 0);
+    if (this.budget.maxDurationMs > 0 && elapsed > this.budget.maxDurationMs) {
+      return { ok: false, type: 'budget_exhausted', code: 'budget_duration_exhausted', dimension: 'maxDurationMs', remaining: Math.max(0, this.budget.maxDurationMs - elapsed) };
     }
     return { ok: true, remaining: this.remainingSnapshot(next) };
   }
@@ -155,12 +158,23 @@ class BudgetManager {
   }
 
   snapshot() {
+    const children = {};
+    for (const [id, record] of this.children) {
+      children[id] = {
+        released: !!record.released,
+        granted: Object.assign({}, record.granted),
+        spent: record.manager ? Object.assign({}, record.manager.spent) : emptySpent(),
+        remaining: record.manager ? record.manager.remainingSnapshot() : {},
+        exhausted: !!(record.manager && record.manager.lastExhaustion),
+      };
+    }
     return {
       budget: Object.assign({}, this.budget),
       granted: Object.assign({}, this.granted),
       spent: Object.assign({}, this.spent),
       reserved: Object.assign({}, this.reserved),
       remaining: this.remainingSnapshot(),
+      children,
       startedAt: this.startedAt,
       elapsedMs: this.elapsedMs(),
       exhausted: !!this.lastExhaustion,

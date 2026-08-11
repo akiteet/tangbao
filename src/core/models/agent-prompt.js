@@ -60,7 +60,7 @@
 
   const SYSTEM_PROMPT = BLOCKS.join('\n\n');
   // Prompt metadata is persisted with every Run so benchmark results remain comparable.
-  const PROMPT_VERSION = '1.1.2';
+  const PROMPT_VERSION = '1.1.3';
   const PROMPT_SECTIONS = Object.freeze({
     identity: BLOCKS[0],
     completionCriteria: BLOCKS[1],

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 
 const root = path.resolve(__dirname, '../..');
 
-test('糖码首屏提供紧凑入口，并以弹窗展示 v1.1.2 Agent Engineering 运行观测', () => {
+test('糖码首屏提供紧凑入口，并以弹窗展示 v1.1.3 Agent Engineering 运行观测', () => {
   const agentSource = fs.readFileSync(path.join(root, 'src/renderer/views/agent/agent.js'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 

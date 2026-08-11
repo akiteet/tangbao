@@ -16,9 +16,13 @@
  * 渲染进程既指定不了转发目标，也拿不到密钥。
  */
 
+const crypto = require('crypto');
 const { classify } = require('../../core/errors');
 const { detectAdapter, buildRequest, parseNonStream, normalizeUsage, mergeUsage, parseSSE } = require('./adapters'); // v2（P2-7）
 const { normalizeModelUsage } = require('../../core/agent-runtime/model-telemetry');
+const { beginModelCall, finishModelCall } = require('../../core/agent-runtime/model-call-recorder');
+const { calculateCost } = require('../../core/agent-runtime/cost-ledger');
+const TokenEstimator = require('../../core/models/tokenizer');
 
 const KIND = {
   chat:       { path: '/chat/completions',  method: 'POST' },
@@ -78,35 +82,37 @@ function telemetryMeta(body, kind, adapter) {
     rootRunId: String(input.rootRunId || '').slice(0, 160),
     requestId: String(input.requestId || '').slice(0, 160),
     provider: clean(input.provider, adapter),
+    accountRef: clean(input.accountRef || input.ref, ''),
+    projectId: String(input.projectId || '').slice(0, 160),
   };
 }
 
 function recordGatewayMetric(meta) {
   if (!recordModelCallMetric || !meta || meta.kind === 'models') return;
-  const usage = normalizeModelUsage({ adapterUsage: meta.usage || null, cache: meta.cache || null });
-  try {
-    recordModelCallMetric({
-      id: meta.requestId || undefined,
-      runId: meta.runId,
-      rootRunId: meta.rootRunId || meta.runId,
-      scope: meta.scope,
-      callType: meta.callType,
-      modelId: meta.model,
-      provider: meta.provider,
-      requestId: meta.requestId,
-      adapterUsage: meta.usage || {},
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      reasoningTokens: usage.reasoningTokens,
-      cache: usage.cache,
-      costUsd: usage.costUsd,
-      latencyMs: Math.max(0, (Number(meta.finishedAt) || Date.now()) - (Number(meta.startedAt) || Date.now())),
-      status: meta.status || 'completed',
-      errorType: meta.errorType || '',
-      startedAt: meta.startedAt,
-      finishedAt: meta.finishedAt,
-    });
-  } catch (_) {}
+  finishModelCall({
+    requestId: meta.requestId || meta.localRequestId,
+    runId: meta.runId,
+    rootRunId: meta.rootRunId || meta.runId,
+    scope: meta.scope,
+    callType: meta.callType,
+    modelId: meta.model,
+    provider: meta.provider,
+    accountRef: meta.accountRef,
+    projectId: meta.projectId,
+    module: meta.scope,
+    startedAt: meta.startedAt,
+  }, {
+    usage: meta.usage || null,
+    cache: meta.cache || null,
+    costUsd: meta.costUsd,
+    cost: meta.cost || null,
+    costSource: meta.costSource || '',
+    status: meta.status || 'completed',
+    errorType: meta.errorType || '',
+    error: meta.error || null,
+    finishedAt: meta.finishedAt,
+    queueWaitMs: meta.queueWaitMs,
+  }, recordModelCallMetric);
 }
 
 /*
@@ -202,10 +208,17 @@ async function handleGateway(req, res) {
   if (bad) { fail(res, 403, bad); return; }
 
   const adapter = detectAdapter((body.payload && body.payload.model) || '', base);
+  const call = beginModelCall(Object.assign(telemetryMeta(body, kind, adapter), {
+    modelId: String(body.payload && body.payload.model || ''),
+  }));
   const telemetry = Object.assign(telemetryMeta(body, kind, adapter), {
     kind,
     model: String(body.payload && body.payload.model || ''),
-    startedAt: Date.now(),
+    // Keep a local request id even when the provider returns its own id. The
+    // historic requestId field remains provider-compatible for existing traces.
+    localRequestId: call.requestId,
+    requestId: String(body.telemetry && body.telemetry.requestId || ''),
+    startedAt: call.startedAt,
     status: 'completed',
     usage: null,
   });
@@ -376,4 +389,238 @@ async function handleGateway(req, res) {
   }
 }
 
-module.exports = { configure, setEndpoints, getEndpoint, handleGateway, checkTarget, buildUrl, KIND };
+function jsonError(status, message, type) {
+  const error = new Error(String(message || '请求失败'));
+  error.status = Number(status) || 500;
+  error.type = String(type || 'infrastructure_failure');
+  return error;
+}
+
+function probeMessages() {
+  return [
+    { role: 'system', content: 'You are a cache measurement probe. Reply with the single word OK.' },
+    { role: 'user', content: 'Reply with OK.' },
+  ];
+}
+
+function cacheSample(adapter, json, eligibleTokens, mode, prefix) {
+  const usage = normalizeUsage(adapter, json || {});
+  const reported = usage.cacheReported === true;
+  const cacheReadTokens = reported ? usage.cacheReadTokens : null;
+  const hitRate = eligibleTokens != null && eligibleTokens > 0 && cacheReadTokens != null ? Math.min(1, cacheReadTokens / eligibleTokens) : null;
+  return {
+    mode,
+    eligibleTokens: reported ? eligibleTokens : null,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens: reported ? usage.cacheWriteTokens : null,
+    hitRate,
+    savedTokens: cacheReadTokens,
+    source: reported ? 'provider' : 'unknown',
+    dataOrigin: reported ? 'provider_usage' : 'unknown',
+    unknownReason: reported ? (cacheReadTokens == null ? 'provider_did_not_report_cache_read' : null) : 'provider_did_not_report_cache_usage',
+    prefixFingerprint: prefix,
+  };
+}
+
+async function probeCache(ref, model, options) {
+  const base = getEndpoint(ref);
+  const key = getSecret(ref);
+  const targetModel = String(model || '').trim();
+  if (!base) throw jsonError(400, '未找到该来源的接口地址', 'model_failure');
+  if (!key) throw jsonError(401, '该来源尚未配置 API Key', 'permission_failure');
+  if (!targetModel) throw jsonError(400, '缺少模型名称', 'invalid_result');
+  const adapter = detectAdapter(targetModel, base);
+  const messages = probeMessages();
+  const eligibleTokens = TokenEstimator.estimateTokens(messages.map((item) => item.content).join('\n'));
+  const prefix = crypto.createHash('sha256').update(JSON.stringify({ adapter, model: targetModel, messages })).digest('hex');
+  const samples = [];
+  const calls = [];
+  const invoke = async (mode, request) => {
+    const startedAt = Date.now();
+    const call = beginModelCall({ scope: 'cache', callType: 'cache_probe', modelId: targetModel, provider: adapter, accountRef: ref, module: 'cache' });
+    let status = 'completed';
+    let json = {};
+    let errorType = '';
+    try {
+      const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body) });
+      const raw = await response.text();
+      try { json = JSON.parse(raw || '{}'); } catch (_) { json = {}; }
+      if (!response.ok) throw jsonError(response.status, 'Provider 返回 ' + response.status, 'model_failure');
+      const providerUsage = normalizeUsage(adapter, json);
+      const cache = cacheSample(adapter, json, eligibleTokens, mode, prefix);
+      const cost = calculateCost({ provider: adapter, model: targetModel, usage: providerUsage, cache });
+      const measured = Object.assign({}, cache, { estimatedCostUsd: cost.totalUsd, estimatedSavedCostUsd: cost.savedUsd });
+      samples.push(measured);
+      return json;
+    } catch (error) {
+      status = 'failed';
+      errorType = error && error.type || 'infrastructure_failure';
+      throw error;
+    } finally {
+      calls.push(finishModelCall(call, {
+        usage: json && Object.keys(json).length ? normalizeUsage(adapter, json) : null,
+        cache: samples[samples.length - 1] && samples[samples.length - 1].mode === mode ? samples[samples.length - 1] : { mode, source: 'unknown', unknownReason: 'probe_request_failed', dataOrigin: 'unknown', prefixFingerprint: prefix },
+        cost: samples[samples.length - 1] && samples[samples.length - 1].mode === mode ? calculateCost({ provider: adapter, model: targetModel, usage: normalizeUsage(adapter, json), cache: samples[samples.length - 1] }) : null,
+        status,
+        errorType,
+        finishedAt: Date.now(),
+        costUsd: null,
+        queueWaitMs: Math.max(0, startedAt - call.startedAt),
+      }, recordModelCallMetric));
+    }
+  };
+
+  let cachedContentName = '';
+  const createGeminiCache = async () => {
+    const cacheBase = String(base).replace(/\/v1beta\/?$/i, '').replace(/\/+$/, '');
+    const createUrl = cacheBase + '/v1beta/cachedContents';
+    const cacheResponse = await fetch(createUrl, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'models/' + targetModel, ttl: '300s', systemInstruction: { parts: [{ text: messages[0].content }] }, contents: [{ role: 'user', parts: [{ text: messages[1].content }] }] }),
+    });
+    const cacheJson = await cacheResponse.json().catch(() => ({}));
+    if (!cacheResponse.ok || !cacheJson.name) throw jsonError(cacheResponse.status, 'Gemini cachedContent 创建失败', 'model_failure');
+    return cacheJson.name;
+  };
+
+  for (let i = 0; i < 2; i++) {
+    // Gemini 的第一轮必须是真正的冷请求；只有在冷请求完成后创建
+    // cachedContent，第二轮才携带资源并读取 provider 返回的命中 Usage。
+    if (adapter === 'gemini' && i === 1 && !cachedContentName) cachedContentName = await createGeminiCache();
+    const request = buildRequest(adapter, {
+      apiBase: base,
+      apiKey: key,
+      model: targetModel,
+      messages,
+      tools: [],
+      stream: false,
+      promptCaching: true,
+      cachedContentName: i === 1 ? cachedContentName || undefined : undefined,
+      maxOutputTokens: 16,
+    });
+    await invoke(i === 0 ? 'cold' : 'warm', request);
+  }
+  const warm = samples[1] || {};
+  const cold = samples[0] || {};
+  const hit = warm.cacheReadTokens == null ? null : warm.cacheReadTokens;
+  const result = {
+    ok: true,
+    adapter,
+    model: targetModel,
+    requestCount: 2,
+    cold,
+    warm,
+    cache: Object.assign({}, warm, {
+      eligibleTokens: cold.eligibleTokens != null ? cold.eligibleTokens : warm.eligibleTokens,
+      savedTokens: hit,
+      hitRate: hit != null && (warm.eligibleTokens || eligibleTokens) > 0 ? hit / (warm.eligibleTokens || eligibleTokens) : null,
+      estimatedCostUsd: null,
+      estimatedSavedCostUsd: null,
+      unknownReason: hit == null ? (warm.unknownReason || 'provider_did_not_report_cache_usage') : null,
+    }),
+    calls,
+    notice: '已执行两次真实请求；Provider 可能计费。未返回 Usage 的字段保持未知。',
+  };
+  return result;
+}
+
+async function healthCheck(ref, model, kind) {
+  const base = getEndpoint(ref);
+  const key = getSecret(ref);
+  const targetModel = String(model || '').trim();
+  const result = {
+    ok: true,
+    ref: String(ref || ''),
+    model: targetModel,
+    apiReachable: false,
+    keyConfigured: !!key,
+    modelExists: null,
+    capabilities: {},
+    latencyMs: null,
+    firstByteLatencyMs: null,
+    responseLatencyMs: null,
+    usageSupport: null,
+    cacheSupport: null,
+    error: null,
+  };
+  if (!base) return Object.assign(result, { ok: false, error: { type: 'model_failure', code: 'endpoint_missing', message: '未找到接口地址' } });
+  if (!key) return Object.assign(result, { ok: false, error: { type: 'permission_failure', code: 'api_key_missing', message: 'API Key 未配置' } });
+  const startedAt = Date.now();
+  const adapter = detectAdapter(targetModel, base);
+  const call = beginModelCall({ scope: 'provider', callType: 'health_check', modelId: targetModel, provider: adapter });
+  let status = 'completed';
+  let errorType = '';
+  try {
+    const target = new URL(buildUrl(base, 'models'));
+    const blocked = checkTarget(target);
+    if (blocked) throw jsonError(403, blocked, 'permission_failure');
+    const response = await fetch(target.href, { headers: { Authorization: 'Bearer ' + key, Accept: 'application/json' } });
+    const responseStartedAt = Date.now();
+    let firstByteAt = null;
+    let raw = '';
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (firstByteAt == null && part.value && part.value.byteLength) firstByteAt = Date.now();
+        if (part.value) {
+          const chunk = Buffer.from(part.value);
+          chunks.push(chunk);
+          total += chunk.length;
+        }
+      }
+      raw = Buffer.concat(chunks, total).toString('utf8');
+    } else {
+      raw = await response.text();
+      if (raw) firstByteAt = Date.now();
+    }
+    result.firstByteLatencyMs = firstByteAt == null ? null : Math.max(0, firstByteAt - startedAt);
+    result.responseLatencyMs = Math.max(0, Date.now() - startedAt);
+    result.latencyMs = result.responseLatencyMs;
+    result.apiReachable = response.ok || response.status === 401 || response.status === 403;
+    let json = {};
+    try { json = JSON.parse(raw || '{}'); } catch (_) {}
+    if (!response.ok) throw jsonError(response.status, 'Provider 返回 ' + response.status, response.status === 401 || response.status === 403 ? 'permission_failure' : 'model_failure');
+    const ids = Array.isArray(json.data) ? json.data.map((item) => String(item.id || '')) : [];
+    result.modelExists = targetModel ? ids.includes(targetModel) || !ids.length : null;
+    result.cacheSupport = { supported: adapterCacheSupport(targetModel, base), adapter, usage: adapter === 'openai' || adapter === 'openai-responses' || adapter === 'anthropic' || adapter === 'gemini' ? 'provider_or_unknown' : 'unknown' };
+    result.usageSupport = { tokens: adapter !== 'unknown', cache: result.cacheSupport.usage };
+    result.capabilities = {
+      chat: true,
+      tool: true,
+      vision: /vision|vl|4o|gemini|claude-3/i.test(targetModel),
+      image: String(kind || '') === 'images',
+      cache: result.cacheSupport,
+    };
+    return result;
+  } catch (error) {
+    status = 'failed';
+    errorType = error.type || 'infrastructure_failure';
+    result.ok = false;
+    result.error = { type: error.type || 'infrastructure_failure', code: error.code || 'health_check_failed', message: error.message || String(error) };
+    return result;
+  } finally {
+    finishModelCall(call, {
+      status,
+      errorType,
+      finishedAt: Date.now(),
+      usage: null,
+      cache: null,
+      costUsd: null,
+      queueWaitMs: Math.max(0, startedAt - call.startedAt),
+    }, recordModelCallMetric);
+  }
+}
+
+function adapterCacheSupport(model, base) {
+  const adapter = detectAdapter(model, base);
+  return { openai: true, 'openai-responses': true, anthropic: true, gemini: true }[adapter] === true;
+}
+
+module.exports = { configure, setEndpoints, getEndpoint, handleGateway, probeCache, healthCheck, checkTarget, buildUrl, KIND };

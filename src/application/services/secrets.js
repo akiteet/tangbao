@@ -15,6 +15,12 @@
     listSecrets() {
       try { return (window.electron && window.electron.listSecrets) ? window.electron.listSecrets() : { ok: false }; } catch (e) { return { ok: false }; }
     },
+    diagnose() {
+      try { return (window.electron && window.electron.diagnoseSecrets) ? window.electron.diagnoseSecrets() : { ok: false }; } catch (e) { return { ok: false }; }
+    },
+    recoverLegacy() {
+      try { return (window.electron && window.electron.recoverLegacySecrets) ? window.electron.recoverLegacySecrets() : { ok: false }; } catch (e) { return { ok: false }; }
+    },
     resetSecretStore() {
       try { return (window.electron && window.electron.resetSecretStore) ? window.electron.resetSecretStore() : { ok: false, code: 'secret_store_reset_unsupported' }; } catch (e) { return { ok: false }; }
     },

@@ -37,7 +37,7 @@
 
 ## 安装
 
-- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.2-setup.exe`，双击安装即可。
+- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.3-setup.exe`，双击安装即可。
 - **从源码运行**：
 
 ```bash
@@ -49,7 +49,7 @@ npm start          # 启动应用（糖码本地后端随应用自动启动）
 
 > `npm run server` 仅用于独立调试糖码后端；正常使用不需要单独启动。
 >
-> **打包**：`npm run dist` → `dist/tangbao-1.1.2-setup.exe`
+> **打包**：`npm run dist` → `dist/tangbao-1.1.3-setup.exe`
 
 ## 配置
 
@@ -110,11 +110,13 @@ tangbao/
 - **打包**：`npm run dist`（Electron 31 + electron-builder，产物在 `dist/`）
 - **数据模型**：见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.2
+## v1.1.3
 
-- Agent Engineering 基础能力：Tool Registry、Role Registry、Budget、Abort、统一错误与 Usage/Cache 指标。
-- 新增只读 Trace Inspector、离线 Benchmark Suite，以及 Schema v16 的 Run 版本追踪和模型调用指标。
-- 数据目录迁移后会在条件满足时自动恢复旧 Windows 密钥上下文，不要求重新填写 API Key。
+- 稳定性闭环：数据目录迁移状态、临时复制校验、失败回滚、恢复中心、SQLite/state 一致性审计、备份与隔离清理预览。
+- 模型与 Cache 管理：Provider Health、模型配置档案、统一模型调用指标，以及用户主动触发的真实 Cache Probe；Provider 未返回 Usage 时保持未知。
+- 产品效率：`Ctrl/Cmd + K` 命令面板、本地分页搜索、通知中心和统一加载/失败/取消状态。
+- Agent 工程：只读 Trace Inspector、协作树、Budget/Abort/Error 归一化、脱敏导出和可重复的 Runtime Offline Benchmark。
+- 数据目录迁移后会在条件满足时自动恢复旧 Windows 密钥上下文，不要求重新填写 API Key；密钥不进入普通备份、诊断包或 Trace 导出。
 
 ## v1.1.1（历史版本）
 

@@ -16,9 +16,10 @@ try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
 const fs = require('fs');
 
 const { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS } = require('../../core/schemas/db-schema');
-const { normalizeRunStatus } = require('../../core/agent-runtime/state-machine');
+const { normalizeRunStatus, TERMINAL_PHASES } = require('../../core/agent-runtime/state-machine');
 const { tracePage, exportRedactedJSONL, redactPayload, eventStatus } = require('../../core/agent-runtime/trace-recorder');
 const { normalizeModelUsage, mergeCacheMetrics } = require('../../core/agent-runtime/model-telemetry');
+const { calculateCost, normalizeAttribution, normalizeCost, mergeCosts } = require('../../core/agent-runtime/cost-ledger');
 
 let db = null;
 let fileRepo = null;
@@ -26,6 +27,82 @@ const stmt = {};
 
 const j = (v) => (v === undefined ? null : JSON.stringify(v));
 const u = (s) => { if (s == null) return null; try { return JSON.parse(s); } catch (_) { return null; } };
+
+function packTelemetry(cache, cost, attribution) {
+  const payload = cache && typeof cache === 'object' ? Object.assign({}, cache) : {};
+  if (cost) payload.cost = normalizeCost(cost);
+  if (attribution) payload.attribution = normalizeAttribution(attribution);
+  return Object.keys(payload).length ? payload : null;
+}
+
+function unpackTelemetry(value) {
+  const payload = value && typeof value === 'object' ? value : {};
+  const cache = payload.metrics && typeof payload.metrics === 'object'
+    ? payload.metrics
+    : (payload.cache && typeof payload.cache === 'object' ? payload.cache : payload);
+  return {
+    cache: cache && typeof cache === 'object' ? cache : null,
+    cost: payload.cost ? normalizeCost(payload.cost) : null,
+    attribution: payload.attribution ? normalizeAttribution(payload.attribution) : null,
+  };
+}
+
+// v16 initially created token columns as NOT NULL even though unknown usage is
+// represented by null. Rebuild that table in place for databases created by
+// that release, without changing the public schema version.
+function repairAgentRunMetricTokenColumns(database) {
+  const columns = database.prepare('PRAGMA table_info(agent_run_metrics)').all();
+  const tokenNames = new Set(['input_tokens', 'output_tokens', 'reasoning_tokens']);
+  const existing = new Set(columns.map((column) => column.name));
+  if (!['run_id', 'root_run_id', 'input_tokens', 'output_tokens', 'reasoning_tokens'].every((name) => existing.has(name))) return;
+  if (!columns.some((column) => tokenNames.has(column.name) && Number(column.notnull) === 1)) return;
+
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS agent_run_metrics_v16_repair;
+      CREATE TABLE agent_run_metrics_v16_repair (
+        run_id              TEXT PRIMARY KEY,
+        root_run_id         TEXT NOT NULL DEFAULT '',
+        steps               INTEGER NOT NULL DEFAULT 0,
+        tool_calls          INTEGER NOT NULL DEFAULT 0,
+        input_tokens        INTEGER,
+        output_tokens       INTEGER,
+        reasoning_tokens    INTEGER,
+        cache_json          TEXT,
+        cost_usd            REAL,
+        latency_ms          INTEGER,
+        queue_wait_ms       INTEGER,
+        process_ms          INTEGER,
+        human_interventions INTEGER NOT NULL DEFAULT 0,
+        recovery_rate       REAL,
+        error_breakdown_json TEXT,
+        source              TEXT NOT NULL DEFAULT 'runtime',
+        created_at          INTEGER NOT NULL DEFAULT 0,
+        updated_at          INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO agent_run_metrics_v16_repair (
+        run_id,root_run_id,steps,tool_calls,input_tokens,output_tokens,
+        reasoning_tokens,cache_json,cost_usd,latency_ms,queue_wait_ms,
+        process_ms,human_interventions,recovery_rate,error_breakdown_json,
+        source,created_at,updated_at
+      )
+      SELECT run_id,root_run_id,steps,tool_calls,input_tokens,output_tokens,
+        reasoning_tokens,cache_json,cost_usd,latency_ms,queue_wait_ms,
+        process_ms,human_interventions,recovery_rate,error_breakdown_json,
+        source,created_at,updated_at
+      FROM agent_run_metrics;
+      DROP TABLE agent_run_metrics;
+      ALTER TABLE agent_run_metrics_v16_repair RENAME TO agent_run_metrics;
+      CREATE INDEX IF NOT EXISTS idx_agent_run_metrics_root ON agent_run_metrics(root_run_id, updated_at ASC);
+    `);
+  })();
+}
+
+function metricCost(metric, usage, cache) {
+  if (metric && metric.cost) return normalizeCost(metric.cost);
+  if (metric && metric.costUsd != null) return normalizeCost({ totalUsd: metric.costUsd, source: metric.costSource || 'estimated', unknownReason: metric.costSource ? null : 'legacy_estimate' });
+  return calculateCost({ usage, cache, provider: metric && metric.provider, model: metric && metric.modelId });
+}
 
 /** 打开并初始化数据库。成功返回 true，原生模块不可用返回 false。 */
 function init(dbPath, fileRepoInstance) {
@@ -57,6 +134,7 @@ function init(dbPath, fileRepoInstance) {
       if (!m) break;
       opened.transaction(() => { m(opened); opened.pragma('user_version = ' + (i + 1)); })();
     }
+    repairAgentRunMetricTokenColumns(opened);
     fileRepo = fileRepoInstance || null;
     db = opened;
     prepare();
@@ -200,11 +278,11 @@ function prepare() {
   stmt.insRun = db.prepare(
     `INSERT INTO agent_runs (id,thread_id,workspace_id,cwd,workspace_snapshot_json,workspace_fingerprint,primary_root_id,user_goal,status,phase,model_id,provider_ref,plan_mode,limits_json,usage_json,error,started_at,finished_at,working_state_id,latest_checkpoint_id,created_at,parent_run_id,role,depth,read_only,budget_json,continued_from_run_id,root_run_id,continuation_index,root_scope_json,prompt_version,toolset_version,runtime_version)
      VALUES (@id,@thread_id,@workspace_id,@cwd,@workspace_snapshot_json,@workspace_fingerprint,@primary_root_id,@user_goal,@status,@phase,@model_id,@provider_ref,@plan_mode,@limits_json,@usage_json,@error,@started_at,@finished_at,@working_state_id,@latest_checkpoint_id,@created_at,@parent_run_id,@role,@depth,@read_only,@budget_json,@continued_from_run_id,@root_run_id,@continuation_index,@root_scope_json,@prompt_version,@toolset_version,@runtime_version)`);
-  stmt.updRun = db.prepare(
+   stmt.updRun = db.prepare(
     `UPDATE agent_runs SET status=@status, phase=@phase, usage_json=@usage_json, error=@error, finished_at=@finished_at,
-       prompt_version=COALESCE(@prompt_version,prompt_version), toolset_version=COALESCE(@toolset_version,toolset_version), runtime_version=COALESCE(@runtime_version,runtime_version),
-       budget_json=COALESCE(@budget_json,budget_json), model_id=COALESCE(@model_id,model_id), provider_ref=COALESCE(@provider_ref,provider_ref)
-     WHERE id=@id`);
+        prompt_version=COALESCE(@prompt_version,prompt_version), toolset_version=COALESCE(@toolset_version,toolset_version), runtime_version=COALESCE(@runtime_version,runtime_version),
+        budget_json=COALESCE(@budget_json,budget_json), model_id=COALESCE(@model_id,model_id), provider_ref=COALESCE(@provider_ref,provider_ref)
+      WHERE id=@id AND (status NOT IN ('completed','blocked','failed','budget_exhausted','cancelled') OR status=@status)`);
   stmt.listRuns = db.prepare('SELECT * FROM agent_runs WHERE thread_id=? ORDER BY started_at DESC LIMIT ? OFFSET ?');
   stmt.listRunsByRoot = db.prepare('SELECT * FROM agent_runs WHERE root_run_id=? OR id=? ORDER BY depth ASC, started_at ASC');
   stmt.listRunsAll = db.prepare('SELECT * FROM agent_runs ORDER BY started_at ASC, created_at ASC');
@@ -548,18 +626,25 @@ function updateAgentRun(id, patch) {
   // B5（P2）：部分更新保留旧值——读取当前行，未提供的字段沿用，避免 phase/usage/error 被误重置
   let cur = null;
   try { cur = stmt.getRun.get(String(id || '')) || null; } catch (_) {}
+  const currentStatus = cur ? normalizeRunStatus(cur.status) : '';
   const keep = (provided, fallback, dflt) => (provided != null ? provided : (fallback != null ? fallback : dflt));
+  const requestedStatus = normalizeRunStatus(keep(p.status, cur && cur.status) || 'running');
+  // A terminal run is immutable. This guard is paired with the SQL predicate
+  // above so late async callbacks cannot turn cancelled/failed into completed.
+  if (cur && TERMINAL_PHASES.includes(currentStatus) && requestedStatus !== currentStatus) return getAgentRun(id);
+  const usage = p.usage != null ? p.usage : (cur && jp(cur.usage_json));
+  const budget = p.budget != null ? p.budget : (cur && jp(cur.budget_json));
   stmt.updRun.run({
     id: String(id || ''),
-    status: normalizeRunStatus(keep(p.status, cur && cur.status)),
+    status: requestedStatus,
     phase: String(keep(p.phase, cur && cur.phase, 'understanding')),
-    usage_json: keep(p.usage, cur && cur.usage_json) != null ? JSON.stringify(keep(p.usage, cur && cur.usage_json)) : null,
+    usage_json: usage != null ? JSON.stringify(usage) : null,
     error: keep(p.error, cur && cur.error) != null ? String(keep(p.error, cur && cur.error)) : null,
     finished_at: Number(keep(p.finishedAt, cur && cur.finished_at, 0)) || 0,
     prompt_version: p.promptVersion != null ? String(p.promptVersion) : null,
     toolset_version: p.toolsetVersion != null ? String(p.toolsetVersion) : null,
     runtime_version: p.runtimeVersion != null ? String(p.runtimeVersion) : null,
-    budget_json: p.budget != null ? JSON.stringify(p.budget) : null,
+    budget_json: budget != null ? JSON.stringify(budget) : null,
     model_id: p.modelId != null ? String(p.modelId) : null,
     provider_ref: p.providerRef != null ? String(p.providerRef) : null,
   });
@@ -569,19 +654,25 @@ function listAgentRuns(threadId, limit, offset) {
   try {
     const pageSize = Math.min(Math.max(Number(limit) || 30, 1), 100);
     const pageOffset = Math.max(Number(offset) || 0, 0);
-    return stmt.listRuns.all(String(threadId || ''), pageSize, pageOffset).map((row) => ({
-      id: row.id, threadId: row.thread_id, workspaceId: row.workspace_id, cwd: row.cwd,
-      workspaceSnapshot: jp(row.workspace_snapshot_json), workspaceFingerprint: row.workspace_fingerprint || '', primaryRootId: row.primary_root_id || '',
-      userGoal: row.user_goal, status: normalizeRunStatus(row.status), phase: row.phase,
-      modelId: row.model_id, providerRef: row.provider_ref, planMode: !!row.plan_mode,
-      limits: jp(row.limits_json), usage: jp(row.usage_json), error: row.error,
-      startedAt: row.started_at, finishedAt: row.finished_at,
-      workingStateId: row.working_state_id, latestCheckpointId: row.latest_checkpoint_id, createdAt: row.created_at, // v2（补全 7）
-      parentRunId: row.parent_run_id || '', role: row.role || 'main', depth: Number(row.depth) || 0, readOnly: !!row.read_only, budget: jp(row.budget_json),
-      continuedFromRunId: row.continued_from_run_id || '', rootRunId: row.root_run_id || row.id,
-      continuationIndex: Number(row.continuation_index) || 0, rootScope: jp(row.root_scope_json) || { mode: 'primary', rootId: '' },
-      promptVersion: row.prompt_version || 'legacy/unknown', toolsetVersion: row.toolset_version || 'legacy/unknown', runtimeVersion: row.runtime_version || 'legacy/unknown',
-    }));
+    return stmt.listRuns.all(String(threadId || ''), pageSize, pageOffset).map((row) => {
+      const run = {
+        id: row.id, threadId: row.thread_id, workspaceId: row.workspace_id, cwd: row.cwd,
+        workspaceSnapshot: jp(row.workspace_snapshot_json), workspaceFingerprint: row.workspace_fingerprint || '', primaryRootId: row.primary_root_id || '',
+        userGoal: row.user_goal, status: normalizeRunStatus(row.status), phase: row.phase,
+        modelId: row.model_id, providerRef: row.provider_ref, planMode: !!row.plan_mode,
+        limits: jp(row.limits_json), usage: jp(row.usage_json), error: row.error,
+        startedAt: row.started_at, finishedAt: row.finished_at,
+        workingStateId: row.working_state_id, latestCheckpointId: row.latest_checkpoint_id, createdAt: row.created_at, // v2（补全 7）
+        parentRunId: row.parent_run_id || '', role: row.role || 'main', depth: Number(row.depth) || 0, readOnly: !!row.read_only, budget: jp(row.budget_json),
+        continuedFromRunId: row.continued_from_run_id || '', rootRunId: row.root_run_id || row.id,
+        continuationIndex: Number(row.continuation_index) || 0, rootScope: jp(row.root_scope_json) || { mode: 'primary', rootId: '' },
+        promptVersion: row.prompt_version || 'legacy/unknown', toolsetVersion: row.toolset_version || 'legacy/unknown', runtimeVersion: row.runtime_version || 'legacy/unknown',
+      };
+      // The history list receives the compact summary only. Events remain lazy,
+      // while the v16 metrics side table makes cost/cache visible immediately.
+      run.metrics = getAgentRunMetrics(run.id);
+      return run;
+    });
   } catch (_) { return []; }
 }
 
@@ -639,6 +730,33 @@ function listAgentEvents(runId) {
   } catch (_) { return []; }
 }
 
+// Keep trace corruption visible to the recovery center. Invalid payloads are
+// reported instead of being silently discarded by the normal reader.
+function auditAgentTrace() {
+  if (!db) return { ok: false, orphanEvents: [], invalidEvents: [], duplicateSequences: [] };
+  try {
+    const runs = new Set(db.prepare('SELECT id FROM agent_runs').all().map((row) => String(row.id)));
+    const rows = db.prepare('SELECT id,run_id,seq,payload_json FROM agent_run_events ORDER BY run_id,seq').all();
+    const orphanEvents = [];
+    const invalidEvents = [];
+    const duplicateSequences = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const runId = String(row.run_id || '');
+      if (!runs.has(runId)) orphanEvents.push({ id: row.id, runId, seq: row.seq });
+      const sequenceKey = runId + ':' + String(row.seq);
+      if (seen.has(sequenceKey)) duplicateSequences.push({ id: row.id, runId, seq: row.seq });
+      seen.add(sequenceKey);
+      if (row.payload_json != null) {
+        try { JSON.parse(row.payload_json); } catch (_) { invalidEvents.push({ id: row.id, runId, seq: row.seq, payloadInvalid: true }); }
+      }
+    }
+    return { ok: true, eventCount: rows.length, runCount: runs.size, orphanEvents, invalidEvents, duplicateSequences };
+  } catch (error) {
+    return { ok: false, orphanEvents: [], invalidEvents: [], duplicateSequences: [], error: error && error.message ? error.message : String(error) };
+  }
+}
+
 function listAgentEventsPage(runId, options) {
   try {
     const page = tracePage(listAgentEvents(runId), options || {});
@@ -678,16 +796,19 @@ function listAgentTracePage(rootRunId, options) {
 
 function metricFromRow(row) {
   if (!row) return null;
+  const telemetry = unpackTelemetry(jp(row.cache_json));
   return {
     runId: row.run_id,
     rootRunId: row.root_run_id || row.run_id,
     steps: Number(row.steps) || 0,
     toolCalls: Number(row.tool_calls) || 0,
-    inputTokens: Number(row.input_tokens) || 0,
-    outputTokens: Number(row.output_tokens) || 0,
-    reasoningTokens: Number(row.reasoning_tokens) || 0,
-    cache: jp(row.cache_json),
-    costUsd: row.cost_usd == null ? null : Number(row.cost_usd),
+    inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
+    outputTokens: row.output_tokens == null ? null : Number(row.output_tokens),
+    reasoningTokens: row.reasoning_tokens == null ? null : Number(row.reasoning_tokens),
+    cache: telemetry.cache,
+    cost: telemetry.cost,
+    attribution: telemetry.attribution,
+    costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : Number(row.cost_usd),
     latencyMs: row.latency_ms == null ? null : Number(row.latency_ms),
     queueWaitMs: row.queue_wait_ms == null ? null : Number(row.queue_wait_ms),
     processMs: row.process_ms == null ? null : Number(row.process_ms),
@@ -703,13 +824,29 @@ function metricFromRow(row) {
 function upsertAgentRunMetrics(metrics) {
   const m = metrics || {};
   const cache = m.cache ? mergeCacheMetrics([m.cache]) : (m.usage && m.usage.cache ? mergeCacheMetrics([m.usage.cache]) : null);
+  const usage = m.usage || m;
+  const cost = metricCost(m, usage, cache);
+  const attribution = normalizeAttribution(m.attribution || {
+    provider: m.provider,
+    accountRef: m.accountRef,
+    model: m.modelId || m.model,
+    module: m.module || m.scope || 'agent',
+    projectId: m.projectId,
+    runId: m.runId,
+    rootRunId: m.rootRunId || m.runId,
+  });
+  const metricNumber = (value) => {
+    if (value == null || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  };
   const now = Date.now();
   stmt.upsertRunMetrics.run({
     run_id: String(m.runId || ''), root_run_id: String(m.rootRunId || m.runId || ''),
     steps: Number(m.steps) || 0, tool_calls: Number(m.toolCalls) || 0,
-    input_tokens: Number(m.inputTokens) || 0, output_tokens: Number(m.outputTokens) || 0, reasoning_tokens: Number(m.reasoningTokens) || 0,
-    cache_json: cache ? JSON.stringify(cache) : null,
-    cost_usd: m.costUsd == null ? null : Number(m.costUsd), latency_ms: m.latencyMs == null ? null : Number(m.latencyMs),
+    input_tokens: metricNumber(m.inputTokens), output_tokens: metricNumber(m.outputTokens), reasoning_tokens: metricNumber(m.reasoningTokens),
+    cache_json: packTelemetry(cache, cost, attribution) ? JSON.stringify(packTelemetry(cache, cost, attribution)) : null,
+    cost_usd: cost.totalUsd, latency_ms: m.latencyMs == null ? null : Number(m.latencyMs),
     queue_wait_ms: m.queueWaitMs == null ? null : Number(m.queueWaitMs), process_ms: m.processMs == null ? null : Number(m.processMs),
     human_interventions: Number(m.humanInterventions) || 0, recovery_rate: m.recoveryRate == null ? null : Number(m.recoveryRate),
     error_breakdown_json: m.errorBreakdown ? JSON.stringify(m.errorBreakdown) : null, source: String(m.source || 'runtime'), created_at: Number(m.createdAt) || now, updated_at: now,
@@ -728,8 +865,9 @@ function getAgentRunMetrics(runId) {
     return {
       runId: run.id, rootRunId: run.rootRunId || run.id,
       steps: Number(usage.steps) || 0, toolCalls: Number(usage.toolCalls) || 0,
-      inputTokens: normalized.inputTokens || 0, outputTokens: normalized.outputTokens || 0, reasoningTokens: normalized.reasoningTokens || 0,
-      cache: normalized.cache, costUsd: normalized.costUsd,
+       inputTokens: normalized.inputTokens, outputTokens: normalized.outputTokens, reasoningTokens: normalized.reasoningTokens,
+      cache: normalized.cache, cost: normalizeCost({ totalUsd: normalized.costUsd, source: normalized.costUsd == null ? 'unknown' : 'estimated', unknownReason: normalized.costUsd == null ? 'legacy_unknown' : 'legacy_estimate' }),
+      attribution: normalizeAttribution({ provider: run.providerRef, model: run.modelId, module: 'agent', runId: run.id, rootRunId: run.rootRunId || run.id }), costUsd: normalized.costUsd,
       latencyMs: run.finishedAt && run.startedAt ? Math.max(0, run.finishedAt - run.startedAt) : null,
       queueWaitMs: null, processMs: null, humanInterventions: Number(usage.approvals) || 0,
       recoveryRate: null, errorBreakdown: run.error ? { legacy: 1 } : {}, source: 'legacy/unknown', createdAt: run.createdAt, updatedAt: run.finishedAt || run.startedAt,
@@ -769,7 +907,9 @@ function aggregateAgentRunMetrics(rootRunId) {
       outputTokens: sumMetric(metrics.map((metric) => metric.outputTokens)),
       reasoningTokens: sumMetric(metrics.map((metric) => metric.reasoningTokens)),
       cache,
+      cost: mergeCosts(metrics.map((metric) => metric.cost || { totalUsd: metric.costUsd, source: metric.costUsd == null ? 'unknown' : 'estimated' })),
       costUsd: sumMetric(metrics.map((metric) => metric.costUsd)),
+      unknownReasons: metrics.map((metric) => metric.cost && metric.cost.unknownReason).filter(Boolean),
       latencyMs: rootLatency,
       totalLatencyMs: sumMetric(metrics.map((metric) => metric.latencyMs)),
       queueWaitMs: sumMetric(metrics.map((metric) => metric.queueWaitMs)),
@@ -787,12 +927,22 @@ function aggregateAgentRunMetrics(rootRunId) {
 function recordModelCallMetric(metric) {
   const m = metric || {};
   const usage = normalizeModelUsage(m);
+  const cost = metricCost(m, usage, usage.cache);
+  const attribution = normalizeAttribution(m.attribution || {
+    provider: m.provider || m.providerRef,
+    accountRef: m.accountRef || m.ref,
+    model: m.modelId || m.model,
+    module: m.module || m.scope || 'agent',
+    projectId: m.projectId,
+    runId: m.runId,
+    rootRunId: m.rootRunId || m.runId,
+  });
   const id = String(m.id || 'mc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
   stmt.insModelCallMetric.run({
     id, run_id: String(m.runId || ''), root_run_id: String(m.rootRunId || m.runId || ''), scope: String(m.scope || 'agent'), call_type: String(m.callType || 'chat'),
     model_id: String(m.modelId || ''), provider: String(m.provider || m.providerRef || ''), request_id: String(m.requestId || ''),
-    input_tokens: usage.inputTokens == null ? 0 : usage.inputTokens, output_tokens: usage.outputTokens == null ? 0 : usage.outputTokens, reasoning_tokens: usage.reasoningTokens == null ? 0 : usage.reasoningTokens,
-    cache_json: usage.cache ? JSON.stringify(usage.cache) : null, cost_usd: usage.costUsd,
+    input_tokens: usage.inputTokens == null ? null : usage.inputTokens, output_tokens: usage.outputTokens == null ? null : usage.outputTokens, reasoning_tokens: usage.reasoningTokens == null ? null : usage.reasoningTokens,
+    cache_json: packTelemetry(usage.cache, cost, attribution) ? JSON.stringify(packTelemetry(usage.cache, cost, attribution)) : null, cost_usd: cost.totalUsd,
     latency_ms: m.latencyMs == null ? null : Number(m.latencyMs), queue_wait_ms: m.queueWaitMs == null ? null : Number(m.queueWaitMs),
     status: String(m.status || 'completed'), error_type: String(m.errorType || ''), started_at: Number(m.startedAt) || Date.now(), finished_at: Number(m.finishedAt) || Date.now(),
   });
@@ -801,12 +951,15 @@ function recordModelCallMetric(metric) {
 
 function listModelCallMetrics(runId) {
   try {
-    return stmt.listModelCallMetrics.all(String(runId || '')).map((row) => ({
+    return stmt.listModelCallMetrics.all(String(runId || '')).map((row) => {
+      const telemetry = unpackTelemetry(jp(row.cache_json));
+      return {
       id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type, modelId: row.model_id, provider: row.provider,
-      requestId: row.request_id, inputTokens: row.input_tokens, outputTokens: row.output_tokens, reasoningTokens: row.reasoning_tokens,
-      cache: jp(row.cache_json), costUsd: row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
+      requestId: row.request_id, inputTokens: row.input_tokens == null ? null : row.input_tokens, outputTokens: row.output_tokens == null ? null : row.output_tokens, reasoningTokens: row.reasoning_tokens == null ? null : row.reasoning_tokens,
+      cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution, costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
       startedAt: row.started_at, finishedAt: row.finished_at,
-    }));
+      };
+    });
   } catch (_) { return []; }
 }
 
@@ -814,13 +967,140 @@ function listModelCallMetricsByRoot(rootRunId) {
   try {
     const root = getAgentRun(rootRunId);
     const actualRootId = root ? (root.rootRunId || root.id) : String(rootRunId || '');
-    return stmt.listModelCallMetricsByRoot.all(actualRootId, actualRootId).map((row) => ({
+    return stmt.listModelCallMetricsByRoot.all(actualRootId, actualRootId).map((row) => {
+      const telemetry = unpackTelemetry(jp(row.cache_json));
+      return {
       id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type, modelId: row.model_id, provider: row.provider,
-      requestId: row.request_id, inputTokens: row.input_tokens, outputTokens: row.output_tokens, reasoningTokens: row.reasoning_tokens,
-      cache: jp(row.cache_json), costUsd: row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
+      requestId: row.request_id, inputTokens: row.input_tokens == null ? null : row.input_tokens, outputTokens: row.output_tokens == null ? null : row.output_tokens, reasoningTokens: row.reasoning_tokens == null ? null : row.reasoning_tokens,
+      cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution, costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
       startedAt: row.started_at, finishedAt: row.finished_at,
-    }));
+      };
+    });
   } catch (_) { return []; }
+}
+
+function modelCallMetricFromRow(row) {
+  const telemetry = unpackTelemetry(jp(row.cache_json));
+  return {
+    id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type,
+    modelId: row.model_id, provider: row.provider, requestId: row.request_id,
+    inputTokens: row.input_tokens == null ? null : row.input_tokens,
+    outputTokens: row.output_tokens == null ? null : row.output_tokens,
+    reasoningTokens: row.reasoning_tokens == null ? null : row.reasoning_tokens,
+    cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution,
+    costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd,
+    latencyMs: row.latency_ms == null ? null : row.latency_ms, queueWaitMs: row.queue_wait_ms == null ? null : row.queue_wait_ms,
+    status: row.status, errorType: row.error_type, startedAt: row.started_at, finishedAt: row.finished_at,
+  };
+}
+
+function listModelCallMetricsPage(options) {
+  const opts = options || {};
+  const where = [];
+  const params = [];
+  if (opts.scope) { where.push('scope = ?'); params.push(String(opts.scope)); }
+  if (opts.provider) { where.push('provider = ?'); params.push(String(opts.provider)); }
+  if (opts.callType) { where.push('call_type = ?'); params.push(String(opts.callType)); }
+  if (opts.model) { where.push('model_id = ?'); params.push(String(opts.model)); }
+  if (opts.runId) { where.push('(run_id = ? OR root_run_id = ?)'); params.push(String(opts.runId), String(opts.runId)); }
+  if (opts.from != null) { where.push('started_at >= ?'); params.push(Number(opts.from) || 0); }
+  if (opts.to != null) { where.push('started_at <= ?'); params.push(Number(opts.to) || Date.now()); }
+  const jsonFilters = [];
+  if (opts.accountRef) jsonFilters.push(['accountRef', String(opts.accountRef)]);
+  if (opts.projectId) jsonFilters.push(['projectId', String(opts.projectId)]);
+  const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 1000);
+  const offset = Math.max(Number(opts.cursor) || 0, 0);
+  const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
+  try {
+    // JSON1 is bundled by most SQLite builds, but older user databases can be
+    // opened by a build without it. Keep the metrics endpoint useful there.
+    let jsonExtractAvailable = true;
+    if (jsonFilters.length) {
+      try { db.prepare("SELECT json_extract('{}', '$.attribution') AS value").get(); } catch (_) { jsonExtractAvailable = false; }
+    }
+    if (jsonFilters.length && !jsonExtractAvailable) {
+      const allRows = db.prepare('SELECT * FROM model_call_metrics' + whereSql + ' ORDER BY started_at DESC, id DESC').all(...params);
+      const filtered = allRows.filter((row) => {
+        const attribution = unpackTelemetry(jp(row.cache_json)).attribution || {};
+        return jsonFilters.every(([key, value]) => String(attribution[key] || '') === value);
+      });
+      const pageRows = filtered.slice(offset, offset + limit);
+      return { items: pageRows.map(modelCallMetricFromRow), nextCursor: offset + pageRows.length < filtered.length ? String(offset + pageRows.length) : null, total: filtered.length, dataOrigin: 'sqlite-fallback' };
+    }
+    jsonFilters.forEach(([key, value]) => { where.push("json_extract(cache_json, '$.attribution." + key + "') = ?"); params.push(value); });
+    const filteredWhereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
+    const total = Number(db.prepare('SELECT COUNT(*) AS total FROM model_call_metrics' + filteredWhereSql).get(...params).total) || 0;
+    const rows = db.prepare('SELECT * FROM model_call_metrics' + filteredWhereSql + ' ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?').all(...params, limit, offset);
+    return { items: rows.map(modelCallMetricFromRow), nextCursor: offset + rows.length < total ? String(offset + rows.length) : null, total };
+  } catch (error) {
+    return { items: [], nextCursor: null, total: 0, error: error && error.message ? error.message : String(error) };
+  }
+}
+
+function listModelCallMetricsFiltered(options) {
+  const page = listModelCallMetricsPage(options);
+  return page.items;
+}
+
+function searchLocal(query, options) {
+  if (!db) return { ok: false, items: [], nextCursor: null, total: 0 };
+  const text = String(query || '').trim().slice(0, 160);
+  if (!text) return { ok: true, items: [], nextCursor: null, total: 0 };
+  const opts = options && typeof options === 'object' ? options : {};
+  const allowed = new Set(Array.isArray(opts.scopes) && opts.scopes.length ? opts.scopes.map(String) : ['conversation', 'document', 'run', 'workflow']);
+  const limit = Math.min(Math.max(Number(opts.limit) || 30, 1), 100);
+  const offset = Math.max(Number(opts.cursor) || 0, 0);
+  const like = '%' + text.replace(/[\\%_]/g, '\\$&') + '%';
+  const redact = (value) => String(value || '').replace(/(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{16,}|(?:api[_-]?key|authorization|bearer)\s*[:=]\s*)[^\s,;]+/gi, (match, prefix) => /^(?:sk-|AIza)/i.test(prefix) ? '[redacted]' : prefix + '[redacted]');
+  const fragments = [];
+  const params = [];
+  const add = (scope, sql, values) => {
+    if (!allowed.has(scope)) return;
+    const scopeLiteral = "'" + String(scope).replace(/'/g, "''") + "'";
+    fragments.push(sql.replace(/^SELECT /, 'SELECT ' + scopeLiteral + ' AS scope, '));
+    params.push(...values);
+  };
+  try {
+      add('conversation', `SELECT c.id,c.title,c.updated_at,
+        CASE WHEN c.title LIKE ? ESCAPE '\\' THEN c.title ELSE COALESCE(m.content,'') END AS snippet,
+        NULL AS thread_id, NULL AS project_id
+        FROM conversations c LEFT JOIN messages m ON m.conv_id=c.id
+        WHERE c.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\'
+        GROUP BY c.id`, [like, like, like]);
+      add('document', `SELECT id,name,created_at,
+        CASE WHEN name LIKE ? ESCAPE '\\' THEN name ELSE COALESCE(text,'') END AS snippet,
+        NULL AS thread_id, NULL AS project_id
+        FROM docs WHERE name LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\'
+        `, [like, like, like]);
+      const runFilters = [];
+      const runValues = [like, like, like];
+      if (opts.projectId) { runFilters.push('(r.workspace_id = ? OR t.project_id = ?)'); runValues.push(String(opts.projectId), String(opts.projectId)); }
+      if (opts.runId) { runFilters.push('(r.id = ? OR r.root_run_id = ?)'); runValues.push(String(opts.runId), String(opts.runId)); }
+      const runFilterSql = runFilters.length ? ' AND ' + runFilters.join(' AND ') : '';
+      add('run', `SELECT r.id,r.user_goal AS title,r.started_at AS updated_at,
+        CASE WHEN r.user_goal LIKE ? ESCAPE '\\' THEN r.user_goal ELSE COALESCE(r.error,'') END AS snippet,
+        r.thread_id AS thread_id, t.project_id AS project_id
+        FROM agent_runs r LEFT JOIN agent_threads t ON t.id = r.thread_id
+        WHERE (r.user_goal LIKE ? ESCAPE '\\' OR r.error LIKE ? ESCAPE '\\')${runFilterSql}
+        `, runValues);
+      add('workflow', `SELECT id,name,created_at,name AS snippet,
+        NULL AS thread_id, NULL AS project_id
+        FROM workflows WHERE name LIKE ? ESCAPE '\\' OR steps LIKE ? ESCAPE '\\'
+        `, [like, like]);
+    if (!fragments.length) return { ok: true, items: [], nextCursor: null, total: 0, unsupportedScopes: ['skill'] };
+    const union = fragments.join(' UNION ALL ');
+    const total = Number(db.prepare('SELECT COUNT(*) AS total FROM (' + union + ')').get(...params).total) || 0;
+    const rows = db.prepare('SELECT * FROM (' + union + ') ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?').all(...params, limit, offset);
+      const items = rows.map((row) => ({
+        scope: String(row.scope || ''), id: String(row.id || ''), title: redact(row.title || row.name || ''),
+        snippet: redact(String(row.snippet || '').slice(0, 240)), updatedAt: Number(row.updated_at || 0),
+        threadId: row.thread_id == null ? '' : String(row.thread_id),
+        projectId: row.project_id == null ? '' : String(row.project_id),
+      }));
+    return { ok: true, items, nextCursor: offset + items.length < total ? String(offset + items.length) : null, total };
+  } catch (error) {
+    return { ok: false, items: [], nextCursor: null, total: 0, error: error && error.message ? error.message : String(error) };
+  }
 }
 
 function upsertWorkingState(runId, ws) {
@@ -978,14 +1258,14 @@ const StorageService = {
   upsertProject, listProjects,
   upsertThread,
   getAccountModels, listImageHistory, listImageFiles, listDocs, listThreads,
-  getImageFileNames, getDocIds, checkIntegrity,
+  getImageFileNames, getDocIds, auditAgentTrace, checkIntegrity,
   saveWorkflowRun, listWorkflowRuns,
   getKV, setKV, getAllKV, setKVMulti,
   clearAll, transaction,
   // v1.1.0（M1）：Agent Run 持久化
   createAgentRun, updateAgentRun, listAgentRuns, getAgentRun, listAgentRunTree,
    appendAgentEvent, listAgentEvents, listAgentEventsPage, listAgentTracePage,
-   upsertAgentRunMetrics, getAgentRunMetrics, aggregateAgentRunMetrics, recordModelCallMetric, listModelCallMetrics, listModelCallMetricsByRoot, exportAgentTrace,
+  upsertAgentRunMetrics, getAgentRunMetrics, aggregateAgentRunMetrics, recordModelCallMetric, listModelCallMetrics, listModelCallMetricsByRoot, listModelCallMetricsPage, listModelCallMetricsFiltered, searchLocal, exportAgentTrace,
   upsertWorkingState, getWorkingState,
   saveAgentCheckpoint, getCheckpoint, listCheckpoints, exportAgentRun, saveContextSummary, getLatestContextSummary,
   // v1.1.0（M3）：ChangeSet

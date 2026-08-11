@@ -38,7 +38,9 @@ const { classifyError } = require('../../core/agent-runtime/error-classifier');
 const { createAbortLifecycle } = require('../../core/agent-runtime/abort-lifecycle');
 const { TraceRecorder } = require('../../core/agent-runtime/trace-recorder');
 const { prefixFingerprint, normalizeCacheMetrics, mergeCacheMetrics } = require('../../core/agent-runtime/model-telemetry');
+const { calculateCost, mergeCosts } = require('../../core/agent-runtime/cost-ledger');
 const { createToolRuntime } = require('./tool-runtime');
+const { runAgent } = require('../../core/agent-runtime/run-agent');
 
 const MAX_STEPS = 96; // v1.1.0（Fix 3）：48→96，支持请求参数 maxSteps 覆盖（项目可配置 1-200）；预算耗尽前端可「继续任务」接力
 
@@ -70,22 +72,8 @@ function resolveLimits(body, maxSteps) {
 }
 
 // v2（P1-6）：粗估模型费用（每百万 token 美元，按模型前缀匹配；未命中用默认值）
-const MODEL_PRICE_TABLE = [
-  { re: /gpt-4o|o1|o3|o4/i, in: 2.5, out: 10 },
-  { re: /gpt-4/i, in: 20, out: 60 },
-  { re: /claude-3-7|claude-3-5/i, in: 3, out: 15 },
-  { re: /claude/i, in: 8, out: 40 },
-  { re: /deepseek-(reasoner|r1)/i, in: 0.55, out: 2.19 },
-  { re: /deepseek/i, in: 0.27, out: 1.1 },
-  { re: /glm|chatglm/i, in: 0.5, out: 2 },
-  { re: /qwen|通义/i, in: 0.8, out: 2.4 },
-  { re: /kimi/i, in: 0.6, out: 2.6 },
-  { re: /gemini/i, in: 1.25, out: 5 },
-];
-function estimateCost(model, inputTokens, outputTokens) {
-  const m = String(model || '');
-  const hit = MODEL_PRICE_TABLE.find((x) => x.re.test(m)) || { in: 0.3, out: 1.2 };
-  return Number(((inputTokens / 1e6) * hit.in + (outputTokens / 1e6) * hit.out).toFixed(4));
+function estimateCost(model, inputTokens, outputTokens, provider) {
+  return calculateCost({ provider, model, usage: { inputTokens, outputTokens }, cache: {} }).totalUsd;
 }
 const MAX_OUTPUT = 12000;     // 单条工具结果截断长度
 const APPROVE_TIMEOUT = 90 * 1000; // v1.1.0（M3+）：审批等待 90 秒（此前 5 分钟会让简单任务干等）
@@ -377,7 +365,7 @@ for (const tool of LEGACY_TOOL_DEFINITIONS) {
   fn.parameters.properties.rootId = { type: 'string', description: '可选：目标工作区文件夹 rootId；省略时使用主文件夹。只能使用 list_workspace_roots 返回的 rootId。' };
 }
 
-const TOOL_REGISTRY_VERSION = '1.1.2';
+const TOOL_REGISTRY_VERSION = '1.1.3';
 const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'todo_write', 'propose_memory']);
 const toolRuntime = createToolRuntime({
   version: TOOL_REGISTRY_VERSION,
@@ -393,7 +381,7 @@ const TOOL_NAMES = toolRuntime.toolNames;
 const AgentPrompt = require('../../core/models/agent-prompt');
 const SYSTEM_PROMPT = AgentPrompt.SYSTEM_PROMPT;
 const PROMPT_VERSION = String(AgentPrompt.PROMPT_VERSION || 'legacy/unknown');
-const RUNTIME_VERSION = '1.1.2';
+const RUNTIME_VERSION = '1.1.3';
 
 // ===== 本地访问控制 =====
 // 由主进程在 startAgentServer 时注入：启动令牌 + 唯一允许的来源（静态服务的源）。
@@ -1395,14 +1383,14 @@ async function runSubagent(cfg, ctx) {
         const r2Usage = r2 && r2.adapterUsage || {};
         const r2InputTokens = Number(r2Usage.inputTokens) || TokenEstimator.estimateTokens(messages);
         const r2OutputTokens = Number(r2Usage.outputTokens) || Math.ceil(String(r2 && (r2.content || r2.reasoning) || '').length / 4);
-        const r2Cost = estimateCost(ctx.model, r2InputTokens, r2OutputTokens);
+        const r2Cost = estimateCost(ctx.model, r2InputTokens, r2OutputTokens, ctx.providerRef);
         inputTokens += r2InputTokens; outputTokens += r2OutputTokens; reasoningTokens += Number(r2Usage.reasoningTokens) || 0; costUsd += r2Cost;
         const r2Cache = normalizeCacheMetrics({ inputTokens: r2InputTokens, outputTokens: r2OutputTokens, cacheReadTokens: r2Usage.cacheReported === true ? r2Usage.cacheReadTokens : null, cacheWriteTokens: r2Usage.cacheReported === true ? r2Usage.cacheWriteTokens : null, eligibleTokens: TokenEstimator.estimateTokens(messages[0] && messages[0].content || ''), source: r2Usage.cacheReported === true ? 'provider' : 'unknown', mode: 'unknown', prefixFingerprint: prefixFingerprint({ role: type, promptVersion: ctx.promptVersion, promptPrefix: messages[0] && messages[0].content || '', toolsetVersion: ctx.toolsetVersion, toolSchema: toolDefs, modelId: ctx.model, provider: ctx.providerRef, workspaceFingerprint: ctx.workspace && ctx.workspace.fingerprint }) });
         childTraceRecorder.llm({ callType: 'chat', role: type, modelId: ctx.model, provider: ctx.providerRef, status: 'completed', startedAt: callStartedAt, finishedAt: callFinishedAt, latencyMs: callFinishedAt - callStartedAt, inputTokens: r2InputTokens, outputTokens: r2OutputTokens, reasoningTokens: Number(r2Usage.reasoningTokens) || 0 });
         childTraceRecorder.cache(r2Cache);
         childCacheMetrics.push(r2Cache);
         if (ctx.runStore && typeof ctx.runStore.recordModelCallMetric === 'function') {
-          try { ctx.runStore.recordModelCallMetric({ id: 'mc_' + subId + '_' + steps + '_' + callStartedAt, runId: subId, rootRunId: ctx.rootRunId || ctx.runId, scope: 'agent', callType: 'chat', modelId: ctx.model, provider: ctx.providerRef, adapterUsage: Object.assign({}, r2Usage, { inputTokens: r2InputTokens, outputTokens: r2OutputTokens, reasoningTokens: Number(r2Usage.reasoningTokens) || 0, costUsd: r2Cost }), cache: r2Cache, costUsd: r2Cost, latencyMs: callFinishedAt - callStartedAt, status: 'completed', startedAt: callStartedAt, finishedAt: callFinishedAt }); } catch (_) {}
+          try { ctx.runStore.recordModelCallMetric({ id: 'mc_' + subId + '_' + steps + '_' + callStartedAt, runId: subId, rootRunId: ctx.rootRunId || ctx.runId, scope: 'agent', callType: 'chat', modelId: ctx.model, provider: ctx.providerRef, adapterUsage: Object.assign({}, r2Usage, { inputTokens: r2InputTokens, outputTokens: r2OutputTokens, reasoningTokens: Number(r2Usage.reasoningTokens) || 0, costUsd: r2Cost }), cache: r2Cache, costUsd: r2Cost, cost: { totalUsd: r2Cost, source: r2Cost == null ? 'unknown' : 'estimated', unknownReason: r2Cost == null ? 'price_or_token_unknown' : null }, latencyMs: callFinishedAt - callStartedAt, status: 'completed', startedAt: callStartedAt, finishedAt: callFinishedAt }); } catch (_) {}
         }
       } catch (e) {
         return finishSubagent({ ok: false, summary: '子代理总结失败：' + String(e.message || e), error: { code: 'subagent_llm_error', message: String(e.message || e), retryable: true } });
@@ -1422,14 +1410,14 @@ async function runSubagent(cfg, ctx) {
       const rUsage = r && r.adapterUsage || {};
       const rInputTokens = Number(rUsage.inputTokens) || TokenEstimator.estimateTokens(messages);
       const rOutputTokens = Number(rUsage.outputTokens) || Math.ceil(String(r && (r.content || r.reasoning) || '').length / 4);
-      const rCost = estimateCost(ctx.model, rInputTokens, rOutputTokens);
+      const rCost = estimateCost(ctx.model, rInputTokens, rOutputTokens, ctx.providerRef);
       inputTokens += rInputTokens; outputTokens += rOutputTokens; reasoningTokens += Number(rUsage.reasoningTokens) || 0; costUsd += rCost;
       const rCache = normalizeCacheMetrics({ inputTokens: rInputTokens, outputTokens: rOutputTokens, cacheReadTokens: rUsage.cacheReported === true ? rUsage.cacheReadTokens : null, cacheWriteTokens: rUsage.cacheReported === true ? rUsage.cacheWriteTokens : null, eligibleTokens: TokenEstimator.estimateTokens(messages[0] && messages[0].content || ''), source: rUsage.cacheReported === true ? 'provider' : 'unknown', mode: 'unknown', prefixFingerprint: prefixFingerprint({ role: type, promptVersion: ctx.promptVersion, promptPrefix: messages[0] && messages[0].content || '', toolsetVersion: ctx.toolsetVersion, toolSchema: toolDefs, modelId: ctx.model, provider: ctx.providerRef, workspaceFingerprint: ctx.workspace && ctx.workspace.fingerprint }) });
       childTraceRecorder.llm({ callType: 'chat', role: type, modelId: ctx.model, provider: ctx.providerRef, status: 'completed', startedAt: callStartedAt, finishedAt: callFinishedAt, latencyMs: callFinishedAt - callStartedAt, inputTokens: rInputTokens, outputTokens: rOutputTokens, reasoningTokens: Number(rUsage.reasoningTokens) || 0 });
       childTraceRecorder.cache(rCache);
       childCacheMetrics.push(rCache);
       if (ctx.runStore && typeof ctx.runStore.recordModelCallMetric === 'function') {
-        try { ctx.runStore.recordModelCallMetric({ id: 'mc_' + subId + '_' + steps + '_' + callStartedAt, runId: subId, rootRunId: ctx.rootRunId || ctx.runId, scope: 'agent', callType: 'chat', modelId: ctx.model, provider: ctx.providerRef, adapterUsage: Object.assign({}, rUsage, { inputTokens: rInputTokens, outputTokens: rOutputTokens, reasoningTokens: Number(rUsage.reasoningTokens) || 0, costUsd: rCost }), cache: rCache, costUsd: rCost, latencyMs: callFinishedAt - callStartedAt, status: 'completed', startedAt: callStartedAt, finishedAt: callFinishedAt }); } catch (_) {}
+        try { ctx.runStore.recordModelCallMetric({ id: 'mc_' + subId + '_' + steps + '_' + callStartedAt, runId: subId, rootRunId: ctx.rootRunId || ctx.runId, scope: 'agent', callType: 'chat', modelId: ctx.model, provider: ctx.providerRef, adapterUsage: Object.assign({}, rUsage, { inputTokens: rInputTokens, outputTokens: rOutputTokens, reasoningTokens: Number(rUsage.reasoningTokens) || 0, costUsd: rCost }), cache: rCache, costUsd: rCost, cost: { totalUsd: rCost, source: rCost == null ? 'unknown' : 'estimated', unknownReason: rCost == null ? 'price_or_token_unknown' : null }, latencyMs: callFinishedAt - callStartedAt, status: 'completed', startedAt: callStartedAt, finishedAt: callFinishedAt }); } catch (_) {}
       }
     } catch (e) {
       return finishSubagent({ ok: false, summary: '子代理模型调用失败：' + String(e.message || e), error: { code: 'subagent_llm_error', message: String(e.message || e), retryable: true } });
@@ -3215,6 +3203,7 @@ function handleAgent(req, res, body) {
   const traceRecorder = new TraceRecorder({ runId, emit });
   const providerId = (() => { try { return detectAdapter(model, apiBase); } catch (_) { return ref || 'unknown'; } })();
   const cacheSamples = [];
+  const costSamples = [];
   const errorBreakdown = {};
   const recordRuntimeError = (error, fallback) => {
     const normalized = classifyError(error, fallback);
@@ -3248,21 +3237,26 @@ function handleAgent(req, res, body) {
     const outputTokens = item.outputTokens == null ? (adapterUsage.outputTokens == null ? null : Number(adapterUsage.outputTokens)) : Number(item.outputTokens);
     const reasoningTokens = item.reasoningTokens == null ? (adapterUsage.reasoningTokens == null ? null : Number(adapterUsage.reasoningTokens)) : Number(item.reasoningTokens);
     const cache = item.cache || cacheForCall(adapterUsage, inputTokens, outputTokens, item.costUsd, item.messages);
+    const cost = item.cost || calculateCost({ provider: providerId, model, usage: { inputTokens, outputTokens, reasoningTokens }, cache });
+    costSamples.push(cost);
     const status = String(item.status || 'completed');
     if (status !== 'completed') recordRuntimeError(item.error || {}, { type: 'model_failure', code: 'llm_call_failed', message: '模型调用失败', recoverable: true });
     traceRecorder.llm({ callType: item.callType || 'chat', scope: 'agent', modelId: model, provider: providerId, requestId: item.requestId || '', status, startedAt, finishedAt, latencyMs: Math.max(0, finishedAt - startedAt), inputTokens, outputTokens, reasoningTokens, errorType: item.errorType || '' });
     traceRecorder.cache(cache);
     if (runStore && typeof runStore.recordModelCallMetric === 'function') {
-      try { runStore.recordModelCallMetric({ id: item.id || ('mc_' + runId + '_' + startedAt + '_' + Math.random().toString(36).slice(2, 6)), runId, rootRunId: resumeRootRunId || runId, scope: 'agent', callType: item.callType || 'chat', modelId: model, provider: providerId, requestId: item.requestId || '', inputTokens, outputTokens, reasoningTokens, adapterUsage: Object.assign({}, adapterUsage, { inputTokens, outputTokens, reasoningTokens, costUsd: item.costUsd }), cache, costUsd: item.costUsd == null ? null : Number(item.costUsd), latencyMs: Math.max(0, finishedAt - startedAt), queueWaitMs: item.queueWaitMs == null ? null : Number(item.queueWaitMs), status, errorType: item.errorType || '', startedAt, finishedAt }); } catch (_) {}
+      try { runStore.recordModelCallMetric({ id: item.id || ('mc_' + runId + '_' + startedAt + '_' + Math.random().toString(36).slice(2, 6)), runId, rootRunId: resumeRootRunId || runId, scope: 'agent', callType: item.callType || 'chat', modelId: model, provider: providerId, accountRef: ref, projectId: body.workspaceId || body.projectId || '', module: 'agent', requestId: item.requestId || '', inputTokens, outputTokens, reasoningTokens, adapterUsage: Object.assign({}, adapterUsage, { inputTokens, outputTokens, reasoningTokens, costUsd: item.costUsd }), cache, costUsd: cost.totalUsd, cost, attribution: { provider: providerId, accountRef: ref, model, module: 'agent', projectId: body.workspaceId || body.projectId || '', runId, rootRunId: resumeRootRunId || runId }, latencyMs: Math.max(0, finishedAt - startedAt), queueWaitMs: item.queueWaitMs == null ? null : Number(item.queueWaitMs), status, errorType: item.errorType || '', startedAt, finishedAt }); } catch (_) {}
     }
     return cache;
   };
   const persistRunMetrics = () => {
     const cache = mergeCacheMetrics(cacheSamples);
+    const cost = mergeCosts(costSamples);
     usage.cache = cache;
+    usage.cost = cost;
+    if (cost.totalUsd != null) usage.estimatedCost = cost.totalUsd;
     usage.budget = budgetManager.snapshot();
     if (runStore && typeof runStore.upsertAgentRunMetrics === 'function') {
-      try { runStore.upsertAgentRunMetrics({ runId, rootRunId: resumeRootRunId || runId, steps: usage.steps || 0, toolCalls: usage.toolCalls || 0, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, reasoningTokens: usage.reasoningTokens, cache, costUsd: usage.estimatedCost, latencyMs: Date.now() - runStartedAt, queueWaitMs: budgetManager.spent.queueWaitMs, processMs: budgetManager.spent.processMs, humanInterventions: usage.approvals || 0, errorBreakdown, source: 'runtime' }); } catch (_) {}
+      try { runStore.upsertAgentRunMetrics({ runId, rootRunId: resumeRootRunId || runId, steps: usage.steps || 0, toolCalls: usage.toolCalls || 0, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, reasoningTokens: usage.reasoningTokens, cache, cost, attribution: { provider: providerId, accountRef: ref, model, module: 'agent', projectId: body.workspaceId || body.projectId || '', runId, rootRunId: resumeRootRunId || runId }, costUsd: cost.totalUsd, latencyMs: Date.now() - runStartedAt, queueWaitMs: budgetManager.spent.queueWaitMs, processMs: budgetManager.spent.processMs, humanInterventions: usage.approvals || 0, errorBreakdown, source: 'runtime' }); } catch (_) {}
     }
     if (runStore && typeof runStore.updateAgentRun === 'function') {
       try { runStore.updateAgentRun(runId, { usage, budget: budgetManager.snapshot() }); } catch (_) {}
@@ -3600,9 +3594,12 @@ function handleAgent(req, res, body) {
         inTok = r.adapterUsage.inputTokens || inTok;
         outTok = r.adapterUsage.outputTokens || outTok;
       }
-      const callCost = estimateCost(model, inTok, outTok);
+      const callCost = estimateCost(model, inTok, outTok, providerId);
       const callCache = cacheForCall(r.adapterUsage, inTok, outTok, callCost, messages);
-      recordModelCall({ startedAt: callStartedAt, finishedAt: callFinishedAt, adapterUsage: r.adapterUsage, inputTokens: inTok, outputTokens: outTok, reasoningTokens: Number(r.adapterUsage && r.adapterUsage.reasoningTokens || 0), costUsd: callCost, cache: callCache, messages, status: 'completed' });
+      const callCostDetail = calculateCost({ provider: providerId, model, usage: { inputTokens: inTok, outputTokens: outTok, reasoningTokens: Number(r.adapterUsage && r.adapterUsage.reasoningTokens || 0) }, cache: callCache, providerCostUsd: r.adapterUsage && r.adapterUsage.costUsd });
+      callCache.estimatedCostUsd = callCostDetail.totalUsd;
+      callCache.estimatedSavedCostUsd = callCostDetail.savedUsd;
+      recordModelCall({ startedAt: callStartedAt, finishedAt: callFinishedAt, adapterUsage: r.adapterUsage, inputTokens: inTok, outputTokens: outTok, reasoningTokens: Number(r.adapterUsage && r.adapterUsage.reasoningTokens || 0), costUsd: callCostDetail.totalUsd, cost: callCostDetail, cache: callCache, messages, status: 'completed' });
       usage.tokens += inTok + outTok;
       usage.inputTokens = (usage.inputTokens || 0) + inTok;
       usage.outputTokens = (usage.outputTokens || 0) + outTok;
@@ -3611,7 +3608,7 @@ function handleAgent(req, res, body) {
         usage.cacheReadTokens = (usage.cacheReadTokens || 0) + Number(r.adapterUsage.cacheReadTokens || 0);
         usage.cacheWriteTokens = (usage.cacheWriteTokens || 0) + Number(r.adapterUsage.cacheWriteTokens || 0);
       }
-      usage.estimatedCost = estimateCost(model, usage.inputTokens, usage.outputTokens);
+      usage.estimatedCost = estimateCost(model, usage.inputTokens, usage.outputTokens, providerId);
       const modelBudget = recordBudget('llm_call', { durationMs: callFinishedAt - callStartedAt, inputTokens: inTok, outputTokens: outTok, costUsd: callCost }, { cache: callCache });
       if (!modelBudget.ok) { stopForBudget(modelBudget.error.message, modelBudget.error.code); break; }
       // v2（P1-1）：费用预算上限——达到即预算耗尽（复用多维预算模式），默认 0 不启用
@@ -4154,7 +4151,7 @@ function startAgentServer(port, opts) {
   });
 }
 
-module.exports = { startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, scanSkills, loadSkillGuides, findEnabledSkill, matchRule, needsApproval, sandboxBlocked, approvalMsg, parsePatch, applyPatchToContent, validateExpectedHashes, lineDiff };
+module.exports = { startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, runAgent, scanSkills, loadSkillGuides, findEnabledSkill, matchRule, needsApproval, sandboxBlocked, approvalMsg, parsePatch, applyPatchToContent, validateExpectedHashes, lineDiff };
 
 if (require.main === module) {
   startAgentServer(Number(process.env.PORT) || 3000);

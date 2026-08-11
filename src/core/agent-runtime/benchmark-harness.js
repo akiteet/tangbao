@@ -1,10 +1,13 @@
 'use strict';
 
 const fs = require('fs');
+const { runAgent } = require('./run-agent');
+const { ToolRegistry } = require('./tool-registry');
+const { calculateCost, mergeCosts } = require('./cost-ledger');
 
-const RUNTIME_VERSION = '1.1.2';
-const PROMPT_VERSION = '1.1.2';
-const TOOLSET_VERSION = '1.1.2';
+const RUNTIME_VERSION = '1.1.3';
+const PROMPT_VERSION = '1.1.3';
+const TOOLSET_VERSION = '1.1.3';
 
 const SUITES = Object.freeze({
   'multi-agent': [
@@ -20,6 +23,14 @@ const SUITES = Object.freeze({
   cache: [
     { id: 'cache-cold-warm', kind: 'cache', baseSteps: 5, baseTools: 4, cache: true },
     { id: 'cache-prefix-invalidation', kind: 'cache-invalidation', baseSteps: 5, baseTools: 4, cache: true },
+  ],
+  stability: [
+    { id: 'storage-migration-recovery', kind: 'storage-migration', baseSteps: 3, baseTools: 2 },
+    { id: 'provider-health-failure', kind: 'provider-health', baseSteps: 2, baseTools: 0, fault: 'provider_failure' },
+    { id: 'malformed-model-result', kind: 'malformed-result', baseSteps: 2, baseTools: 0, fault: 'malformed_result' },
+    { id: 'large-trace-pagination', kind: 'large-trace', baseSteps: 8, baseTools: 7 },
+    { id: 'multi-root-permission', kind: 'permission', baseSteps: 3, baseTools: 1 },
+    { id: 'manual-fallback', kind: 'manual-fallback', baseSteps: 3, baseTools: 1, fault: 'manual_fallback' },
   ],
 });
 
@@ -62,6 +73,8 @@ function makeCacheMetrics(input) {
     estimatedCostUsd: source.estimatedCostUsd == null ? null : round(source.estimatedCostUsd, 6),
     estimatedSavedCostUsd: source.estimatedSavedCostUsd == null ? null : round(source.estimatedSavedCostUsd, 6),
     source: String(source.source || 'unknown'),
+    unknownReason: source.unknownReason == null ? null : String(source.unknownReason),
+    dataOrigin: String(source.dataOrigin || 'unknown'),
     prefixFingerprint: String(source.prefixFingerprint || ''),
   };
 }
@@ -69,19 +82,33 @@ function makeCacheMetrics(input) {
 function mergeCacheMetrics(items) {
   const values = (Array.isArray(items) ? items : []).map(makeCacheMetrics);
   if (!values.length) return makeCacheMetrics({});
-  const sum = (key) => values.some((item) => item[key] == null) ? null : values.reduce((total, item) => total + item[key], 0);
-  const eligibleTokens = sum('eligibleTokens');
-  const cacheReadTokens = sum('cacheReadTokens');
+  const sumKnown = (key) => {
+    const known = values.map((item) => item[key]).filter((value) => value != null && Number.isFinite(Number(value)));
+    return known.length ? known.reduce((total, value) => total + Number(value), 0) : null;
+  };
+  const eligibleTokens = sumKnown('eligibleTokens');
+  const cacheReadTokens = sumKnown('cacheReadTokens');
+  const hitItems = values.filter((item) => item.eligibleTokens != null && item.cacheReadTokens != null
+    && ((item.source === 'provider' && item.dataOrigin === 'provider_usage') || item.dataOrigin === 'offline-mock'));
+  const hitEligible = hitItems.reduce((total, item) => total + Number(item.eligibleTokens), 0);
+  const hitRead = hitItems.reduce((total, item) => total + Number(item.cacheReadTokens), 0);
+  const hitUnknown = values.some((item) => item.source === 'unknown' || item.dataOrigin === 'unknown'
+    || (item.eligibleTokens != null && item.cacheReadTokens == null));
+  const fingerprints = [...new Set(values.map((item) => item.prefixFingerprint).filter(Boolean))];
+  const origins = new Set(values.map((item) => item.dataOrigin));
   return makeCacheMetrics({
     mode: values.some((item) => item.mode === 'unknown') ? 'unknown' : values[values.length - 1].mode,
     eligibleTokens,
-    inputTokens: sum('inputTokens'),
+    inputTokens: sumKnown('inputTokens'),
     cacheReadTokens,
-    cacheWriteTokens: sum('cacheWriteTokens'),
-    estimatedCostUsd: sum('estimatedCostUsd'),
-    estimatedSavedCostUsd: sum('estimatedSavedCostUsd'),
-    source: values.some((item) => item.source === 'unknown') ? 'unknown' : (values.some((item) => item.source === 'estimated') ? 'estimated' : 'provider'),
-    prefixFingerprint: values[values.length - 1].prefixFingerprint,
+    cacheWriteTokens: sumKnown('cacheWriteTokens'),
+    hitRate: !hitUnknown && hitEligible > 0 ? hitRead / hitEligible : null,
+    estimatedCostUsd: sumKnown('estimatedCostUsd'),
+    estimatedSavedCostUsd: sumKnown('estimatedSavedCostUsd'),
+    source: origins.has('offline-mock') ? 'estimated' : (values.some((item) => item.source === 'unknown') ? 'unknown' : (values.some((item) => item.source === 'estimated') ? 'estimated' : 'provider')),
+    unknownReason: values.map((item) => item.unknownReason).filter(Boolean)[0] || (fingerprints.length > 1 ? 'prefix_fingerprint_mixed' : null),
+    dataOrigin: origins.has('unknown') ? 'unknown' : (origins.has('offline-mock') ? 'offline-mock' : 'provider_usage'),
+    prefixFingerprint: fingerprints.length === 1 ? fingerprints[0] : '',
   });
 }
 
@@ -106,7 +133,7 @@ function createMockProvider(options) {
         inputTokens,
         outputTokens,
         latencyMs: 28 + Math.floor(random() * 16),
-        cache: makeCacheMetrics({ mode: task.cache ? (warm ? 'warm' : 'cold') : 'unknown', eligibleTokens: task.cache ? eligibleTokens : null, inputTokens, cacheReadTokens: task.cache ? cacheReadTokens : null, cacheWriteTokens: task.cache && !warm ? eligibleTokens : null, estimatedCostUsd: 0.0014, estimatedSavedCostUsd: task.cache && warm ? 0.0007 : (task.cache ? 0 : null), source: cacheSource, prefixFingerprint: 'offline-' + task.id }),
+        cache: makeCacheMetrics({ mode: task.cache ? (warm ? 'warm' : 'cold') : 'unknown', eligibleTokens: task.cache ? eligibleTokens : null, inputTokens, cacheReadTokens: task.cache ? cacheReadTokens : null, cacheWriteTokens: task.cache && !warm ? eligibleTokens : null, estimatedCostUsd: 0.0014, estimatedSavedCostUsd: task.cache && warm ? 0.0007 : (task.cache ? 0 : null), source: cacheSource, dataOrigin: task.cache ? 'offline-mock' : 'unknown', unknownReason: task.cache ? null : 'not_cache_eligible', prefixFingerprint: 'offline-' + task.id }),
         error: failed ? { type: 'tool_failure', code: 'mock_tool_failure', recoverable: true, recommendedAction: 'inspect_tool_output' } : null,
       };
     },
@@ -154,6 +181,7 @@ function runTask(task, options) {
   const provider = createMockProvider({ seed: (opts.seed || 1) + task.id.length, cacheWarm: opts.mode === 'replay' || task.kind === 'cache', fault: task.fault });
   const events = [];
   const cacheSamples = [];
+  const costSamples = [];
   let steps = 0;
   let toolCalls = 0;
   let inputTokens = 0;
@@ -172,6 +200,7 @@ function runTask(task, options) {
     outputTokens += call.outputTokens;
     latencyMs += call.latencyMs;
     cacheSamples.push(call.cache);
+    costSamples.push(runtimeCost(call.inputTokens, call.outputTokens, call.cache));
     events.push({ type: 'llm_call', inputTokens: call.inputTokens, outputTokens: call.outputTokens, latencyMs: call.latencyMs, status: call.ok ? 'completed' : 'failed' });
     events.push({ type: 'cache', payload: call.cache });
     if (i < task.baseTools) { toolCalls++; events.push({ type: 'tool_call', status: call.ok ? 'completed' : 'failed' }); }
@@ -196,15 +225,23 @@ function runTask(task, options) {
   }
   const queueWaitMs = task.queueWaitMs == null ? 0 : task.queueWaitMs;
   const cache = mergeCacheMetrics(cacheSamples);
+  const cost = mergeCosts(costSamples);
   const success = status === 'completed';
-  return { suite: opts.suite, task: task.id, status, success, steps, toolCalls, inputTokens, outputTokens, cache, costUsd: round((inputTokens * 0.000002 + outputTokens * 0.000006), 6), latencyMs: latencyMs + queueWaitMs, queueWaitMs, processMs: latencyMs, humanInterventions, recoveryRate, failures, errorBreakdown, trace: events };
+  return { suite: opts.suite, task: task.id, status, success, steps, toolCalls, inputTokens, outputTokens, cache, cost, costUsd: cost.totalUsd, latencyMs: latencyMs + queueWaitMs, queueWaitMs, processMs: latencyMs, humanInterventions, recoveryRate, failures, errorBreakdown, trace: events };
 }
 
 function summarize(results) {
   const rows = Array.isArray(results) ? results : [];
   const successCount = rows.filter((row) => row.success === true).length;
   const sum = (key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
-  const cache = mergeCacheMetrics(rows.map((row) => row.cache || {}));
+  const cacheRows = rows.map((row) => row.cache || {}).filter((cache) => cache.eligibleTokens != null && cache.source !== 'unknown');
+  const cache = cacheRows.length ? mergeCacheMetrics(cacheRows) : makeCacheMetrics({ source: 'unknown', dataOrigin: 'unknown', unknownReason: 'no_cache_usage' });
+  const unknownCacheCount = rows.filter((row) => !row.cache || row.cache.source === 'unknown' || row.cache.hitRate == null).length;
+  const costSources = rows.reduce((out, row) => {
+    const source = row.cost && row.cost.source || (row.costUsd == null ? 'unknown' : 'estimated');
+    out[source] = (out[source] || 0) + 1;
+    return out;
+  }, {});
   return {
     taskCount: rows.length,
     successRate: rows.length ? round(successCount / rows.length, 4) : 0,
@@ -213,13 +250,18 @@ function summarize(results) {
     toolCalls: sum('toolCalls'),
     inputTokens: sum('inputTokens'),
     outputTokens: sum('outputTokens'),
-    costUsd: round(rows.reduce((total, row) => total + (Number(row.costUsd) || 0), 0), 6),
+    costUsd: rows.some((row) => row.costUsd == null) ? null : round(rows.reduce((total, row) => total + Number(row.costUsd), 0), 6),
+    costSources,
     latencyP50: percentile(rows.map((row) => row.latencyMs), 0.5),
     latencyP95: percentile(rows.map((row) => row.latencyMs), 0.95),
     queueWaitMs: sum('queueWaitMs'),
     humanInterventions: sum('humanInterventions'),
     recoveryRate: rows.length ? round(rows.reduce((total, row) => total + (row.recoveryRate == null ? 0 : Number(row.recoveryRate)), 0) / rows.length, 4) : null,
     cache,
+    unknownCacheCount,
+    unknownMetricsCount: rows.filter((row) => row.costUsd == null || row.inputTokens == null || row.outputTokens == null).length,
+    budgetExhaustedCount: rows.filter((row) => row.status === 'budget_exhausted').length,
+    cancelledCount: rows.filter((row) => row.status === 'cancelled').length,
     errorBreakdown: rows.reduce((out, row) => { for (const [key, value] of Object.entries(row.errorBreakdown || {})) out[key] = (out[key] || 0) + Number(value || 0); return out; }, {}),
   };
 }
@@ -233,7 +275,9 @@ function runBenchmarkSuite(options) {
   const replay = mode === 'replay' ? loadReplayFile(opts.replayFile || '') : [];
   const results = tasks.map((task) => runTask(task, { suite, mode, seed, replayEvents: replay.length ? replay : null }));
   const report = {
-    reportVersion: 1,
+    reportVersion: 2,
+    schemaVersion: 16,
+    suiteVersion: 2,
     suite,
     mode: replay.length ? 'replay' : (mode === 'online' ? 'offline-fallback' : mode),
     seed,
@@ -241,11 +285,242 @@ function runBenchmarkSuite(options) {
     promptVersion: PROMPT_VERSION,
     toolsetVersion: TOOLSET_VERSION,
     model: mode === 'online' ? (opts.model || 'online-provider-unconfigured') : 'offline-mock',
+    harness: 'sync-mock-compatible',
     results,
     summary: summarize(results),
     warnings: mode === 'online' ? ['No online provider is executed by the local harness; use a configured canary for live runs.'] : [],
   };
   return report;
+}
+
+function waitWithSignal(ms, signal) {
+  const duration = Math.max(0, Number(ms) || 0);
+  if (!duration) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timer = setTimeout(done, duration);
+    const abort = () => {
+      clearTimeout(timer);
+      timer = null;
+      reject(signal && signal.reason || Object.assign(new Error('cancelled'), { type: 'cancelled', code: 'cancelled' }));
+    };
+    function done() {
+      if (signal) signal.removeEventListener('abort', abort);
+      resolve();
+    }
+    if (signal) {
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    }
+  });
+}
+
+function createRuntimeBenchmarkRegistry(task, counters) {
+  const state = counters || { toolCalls: 0, failures: 0 };
+  return new ToolRegistry({
+    version: TOOLSET_VERSION,
+    definitions: [{
+      name: 'benchmark_step',
+      version: '1.1.3',
+      description: 'Deterministic offline benchmark tool',
+      inputSchema: { type: 'object', properties: { step: { type: 'integer' } }, required: ['step'], additionalProperties: false },
+      risk: 'low',
+      requiredCapabilities: [],
+      allowedRoles: ['main'],
+      readOnly: true,
+      timeout: 250,
+      rootScope: 'workspace',
+      telemetryKind: 'tool_call',
+      handler: async (args, context) => {
+        state.toolCalls++;
+        await waitWithSignal(task.toolDelayMs || 0, context.signal);
+        if (task.fault === 'tool_failure' && state.failures === 0) {
+          state.failures++;
+          return { ok: false, error: { type: 'tool_failure', code: 'offline_tool_failure', message: 'injected offline tool failure', recoverable: true, recommendedAction: 'continue_with_explicit_fallback' } };
+        }
+        return { ok: true, step: Number(args.step) || 0, source: 'offline-mock' };
+      },
+    }],
+  });
+}
+
+function runtimeCache(task, warm) {
+  if (!task.cache) return { mode: 'unknown', source: 'unknown', dataOrigin: 'unknown', unknownReason: 'not_cache_eligible' };
+  const eligibleTokens = 160;
+  return {
+    mode: warm ? 'warm' : 'cold',
+    eligibleTokens,
+    inputTokens: 24,
+    cacheReadTokens: warm ? eligibleTokens : 0,
+    cacheWriteTokens: warm ? null : eligibleTokens,
+    source: 'estimated',
+    dataOrigin: 'offline-mock',
+    prefixFingerprint: 'offline-runtime-' + task.id,
+    estimatedSavedCostUsd: warm ? 0.00032 : 0,
+  };
+}
+
+const OFFLINE_PRICES = Object.freeze({
+  inputPer1k: 0.000001,
+  outputPer1k: 0.000003,
+  cacheReadPer1k: 0.0000002,
+  cacheWritePer1k: 0.0000015,
+  catalogVersion: 'offline-mock',
+});
+
+function runtimeCost(inputTokens, outputTokens, cache) {
+  return calculateCost({ provider: 'offline-mock', model: 'offline-mock', usage: { inputTokens, outputTokens }, cache, prices: OFFLINE_PRICES });
+}
+
+function stableBenchmarkValue(value, requestIndex) {
+  if (Array.isArray(value)) return value.map((item) => stableBenchmarkValue(item, requestIndex));
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'startedAt' || key === 'finishedAt' || key === 'elapsedMs') continue;
+    if (key === 'requestId') { out[key] = 'offline-request-' + requestIndex; continue; }
+    if (key === 'id' && typeof child === 'string' && /^(chat|mc|bench_)/.test(child)) { out[key] = 'offline-id-' + requestIndex; continue; }
+    if (key === 'latencyMs' || key === 'durationMs' || key === 'processMs') { out[key] = 0; continue; }
+    out[key] = stableBenchmarkValue(child, requestIndex);
+  }
+  return out;
+}
+
+async function runRuntimeBenchmarkTask(task, options) {
+  const opts = options || {};
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const counters = { toolCalls: 0, failures: 0 };
+  const metrics = [];
+  const storedEvents = [];
+  const storedRuns = new Map();
+  const runId = 'bench_' + task.id + '_' + String(opts.seed || 1337);
+  const registry = createRuntimeBenchmarkRegistry(task, counters);
+  const runStore = {
+    createAgentRun(run) { storedRuns.set(run.id, Object.assign({}, run)); },
+    updateAgentRun(id, patch) { if (storedRuns.has(id)) Object.assign(storedRuns.get(id), patch || {}); },
+    appendAgentEvent(id, type, payload, seq) { storedEvents.push({ id: id + ':' + seq, runId: id, seq, type, payload, createdAt: Date.now() }); },
+  };
+  let modelCalls = 0;
+  let toolsIssued = 0;
+  const warm = opts.mode === 'replay' || task.kind === 'cache' || task.kind === 'cache-invalidation';
+  const cancelTimer = task.fault === 'cancelled'
+    ? setTimeout(() => controller.abort({ type: 'cancelled', code: 'offline_cancelled', message: 'injected offline cancellation', recoverable: false }), 1)
+    : null;
+  const modelCall = async ({ signal, step }) => {
+    modelCalls++;
+    if (task.fault === 'provider_failure') throw { type: 'model_failure', code: 'offline_provider_failure', message: 'injected provider health failure', recoverable: true, recommendedAction: 'manual_fallback' };
+    if (task.fault === 'malformed_result') return null;
+    await waitWithSignal(task.fault === 'cancelled' ? 20 : 0, signal);
+    const queueWaitMs = step === 0 && task.queueWaitMs != null ? task.queueWaitMs : null;
+    if (toolsIssued < Number(task.baseTools || 0)) {
+      const callId = runId + '_tool_' + toolsIssued;
+      toolsIssued++;
+      return {
+        content: '',
+        toolCalls: [{ id: callId, name: 'benchmark_step', arguments: JSON.stringify({ step }) }],
+        usage: { inputTokens: 24, outputTokens: 6 },
+        cache: runtimeCache(task, warm),
+        cost: runtimeCost(24, 6, runtimeCache(task, warm)),
+        queueWaitMs,
+      };
+    }
+    return {
+      content: 'offline runtime result for ' + task.id,
+      usage: { inputTokens: 24, outputTokens: 8 },
+      cache: runtimeCache(task, warm),
+      cost: runtimeCost(24, 8, runtimeCache(task, warm)),
+      queueWaitMs,
+    };
+  };
+  const result = await runAgent({
+    runId,
+    rootRunId: runId,
+    prompt: task.id,
+    role: 'main',
+    context: task.kind === 'permission' ? { permission: () => ({ ok: false, error: { type: 'permission_failure', code: 'offline_root_scope_denied', message: 'injected root scope denial', recoverable: false } }) } : {},
+    maxSteps: Math.max(2, Number(task.baseSteps) || 2),
+    budget: Object.assign({ maxSteps: Math.max(2, Number(task.baseSteps) || 2) }, task.budget || {}),
+    modelId: 'offline-mock-model',
+    provider: 'offline-mock',
+    module: 'benchmark',
+    promptVersion: PROMPT_VERSION,
+    toolsetVersion: TOOLSET_VERSION,
+    runtimeVersion: RUNTIME_VERSION,
+  }, {
+    signal: controller.signal,
+    toolRegistry: registry,
+    modelCall,
+    runStore,
+    recordModelCallMetric: (metric) => metrics.push(metric),
+  });
+  if (cancelTimer) clearTimeout(cancelTimer);
+  const cache = result.usage && result.usage.cache ? result.usage.cache : makeCacheMetrics({ source: 'unknown', unknownReason: 'no_runtime_usage' });
+  const status = result.status === 'completed' ? 'completed' : result.status;
+  const errors = {};
+  if (result.error && result.error.type) errors[result.error.type] = 1;
+  if (counters.failures) errors.tool_failure = counters.failures;
+  const processMs = 2 + ((Number(opts.seed) || 1337) + String(task.id).length) % 7;
+  const stableTrace = storedEvents.map((event, index) => Object.assign({}, stableBenchmarkValue(event, index + 1), {
+    id: runId + ':event:' + (index + 1),
+    seq: index + 1,
+    createdAt: index + 1,
+  }));
+  return {
+    suite: opts.suite,
+    task: task.id,
+    status,
+    success: status === 'completed',
+    runId,
+    runtimeVersion: RUNTIME_VERSION,
+    promptVersion: PROMPT_VERSION,
+    toolsetVersion: TOOLSET_VERSION,
+    model: 'offline-mock',
+    steps: result.usage && result.usage.steps != null ? result.usage.steps : modelCalls,
+    toolCalls: result.usage && result.usage.toolCalls != null ? result.usage.toolCalls : counters.toolCalls,
+    inputTokens: result.usage ? result.usage.inputTokens : null,
+    outputTokens: result.usage ? result.usage.outputTokens : null,
+    cache,
+    cost: result.usage && result.usage.cost ? result.usage.cost : mergeCosts(metrics.map((metric) => metric.cost || {})),
+    costUsd: result.usage && result.usage.cost ? result.usage.cost.totalUsd : null,
+    latencyMs: processMs + (Number(task.queueWaitMs) || 0),
+    queueWaitMs: Number(task.queueWaitMs) || 0,
+    processMs,
+    humanInterventions: task.fault === 'manual_fallback' ? 1 : 0,
+    recoveryRate: task.fault === 'tool_failure' && counters.failures ? 1 : (task.fault === 'manual_fallback' ? 1 : null),
+    failures: Object.values(errors).reduce((sum, value) => sum + value, 0),
+    errorBreakdown: errors,
+    budget: stableBenchmarkValue(result.budget, 0),
+    trace: stableTrace,
+    traceEventCount: stableTrace.length,
+  };
+}
+
+async function runBenchmarkSuiteAsync(options) {
+  const opts = options || {};
+  const suite = String(opts.suite || 'multi-agent');
+  const mode = String(opts.mode || 'offline');
+  if (mode === 'replay') return runBenchmarkSuite(opts);
+  const tasks = SUITES[suite] || SUITES['multi-agent'];
+  const seed = Number(opts.seed || 1337);
+  const results = [];
+  for (const task of tasks) results.push(await runRuntimeBenchmarkTask(task, { suite, mode, seed }));
+  return {
+    reportVersion: 2,
+    schemaVersion: 16,
+    suiteVersion: 2,
+    suite,
+    mode,
+    seed,
+    runtimeVersion: RUNTIME_VERSION,
+    promptVersion: PROMPT_VERSION,
+    toolsetVersion: TOOLSET_VERSION,
+    model: 'offline-mock',
+    harness: 'run-agent-runtime',
+    durationMs: results.reduce((sum, item) => sum + (Number(item.latencyMs) || 0), 0),
+    results,
+    summary: summarize(results),
+    warnings: [],
+  };
 }
 
 function compareBenchmarkReports(baseline, current, limits) {
@@ -259,8 +534,14 @@ function compareBenchmarkReports(baseline, current, limits) {
     inputTokens: { baseline: before.inputTokens, current: after.inputTokens, change: ratio(before.inputTokens, after.inputTokens), pass: ratio(before.inputTokens, after.inputTokens) == null || ratio(before.inputTokens, after.inputTokens) <= maxMetricIncrease },
     costUsd: { baseline: before.costUsd, current: after.costUsd, change: ratio(before.costUsd, after.costUsd), pass: ratio(before.costUsd, after.costUsd) == null || ratio(before.costUsd, after.costUsd) <= maxMetricIncrease },
     latencyP95: { baseline: before.latencyP95, current: after.latencyP95, change: ratio(before.latencyP95, after.latencyP95), pass: ratio(before.latencyP95, after.latencyP95) == null || ratio(before.latencyP95, after.latencyP95) <= maxMetricIncrease },
+    cacheWarmHitRate: {
+      baseline: before.cache && before.cache.hitRate,
+      current: after.cache && after.cache.hitRate,
+      delta: before.cache && after.cache && before.cache.hitRate != null && after.cache.hitRate != null ? Number(after.cache.hitRate) - Number(before.cache.hitRate) : null,
+      pass: before.cache == null || after.cache == null || before.cache.hitRate == null || after.cache.hitRate == null || Number(before.cache.hitRate) - Number(after.cache.hitRate) <= maxSuccessDrop,
+    },
   };
   return { pass: Object.values(checks).every((check) => check.pass), baseline: before, current: after, checks, thresholds: { maxSuccessDrop, maxMetricIncrease } };
 }
 
-module.exports = { SUITES, seededRandom, makeCacheMetrics, mergeCacheMetrics, createMockProvider, replayEvents, loadReplayFile, runTask, summarize, runBenchmarkSuite, compareBenchmarkReports, percentile };
+module.exports = { SUITES, seededRandom, makeCacheMetrics, mergeCacheMetrics, createMockProvider, replayEvents, loadReplayFile, runTask, summarize, runBenchmarkSuite, runRuntimeBenchmarkTask, runBenchmarkSuiteAsync, compareBenchmarkReports, percentile };

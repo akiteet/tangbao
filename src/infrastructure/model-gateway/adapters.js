@@ -211,8 +211,14 @@ function numberOrZero(value) {
   return Number.isFinite(number) && number >= 0 ? number : 0;
 }
 
+function tokenOrNull(value) {
+  if (value == null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
 function normalizeUsage(adapter, json) {
-  const out = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  const out = { inputTokens: null, outputTokens: null, reasoningTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
   let cacheReported = false;
   if (adapter === 'anthropic') {
     const usage = json && json.usage || {};
@@ -220,34 +226,37 @@ function normalizeUsage(adapter, json) {
     const cacheWrite = usage.cache_creation_input_tokens != null
       ? usage.cache_creation_input_tokens
       : numberOrZero(cacheCreation.ephemeral_5m_input_tokens) + numberOrZero(cacheCreation.ephemeral_1h_input_tokens);
-    out.inputTokens = numberOrZero(usage.input_tokens);
-    out.outputTokens = numberOrZero(usage.output_tokens);
+    out.inputTokens = tokenOrNull(usage.input_tokens);
+    out.outputTokens = tokenOrNull(usage.output_tokens);
     cacheReported = usage.cache_read_input_tokens != null || usage.cache_creation_input_tokens != null || Object.keys(cacheCreation).length > 0;
-    out.cacheReadTokens = numberOrZero(usage.cache_read_input_tokens);
-    out.cacheWriteTokens = numberOrZero(cacheWrite);
+    out.cacheReadTokens = usage.cache_read_input_tokens != null ? numberOrZero(usage.cache_read_input_tokens) : null;
+    out.cacheWriteTokens = cacheReported ? numberOrZero(cacheWrite) : null;
   } else if (adapter === 'gemini') {
     const usage = json && json.usageMetadata || {};
-    out.inputTokens = numberOrZero(usage.promptTokenCount);
-    out.outputTokens = numberOrZero(usage.candidatesTokenCount);
-    out.reasoningTokens = numberOrZero(usage.thoughtsTokenCount);
+    out.inputTokens = tokenOrNull(usage.promptTokenCount);
+    out.outputTokens = tokenOrNull(usage.candidatesTokenCount);
+    out.reasoningTokens = tokenOrNull(usage.thoughtsTokenCount);
     cacheReported = usage.cachedContentTokenCount != null;
-    out.cacheReadTokens = numberOrZero(usage.cachedContentTokenCount);
+    out.cacheReadTokens = usage.cachedContentTokenCount != null ? numberOrZero(usage.cachedContentTokenCount) : null;
+    out.cacheWriteTokens = cacheReported ? 0 : null;
   } else if (adapter === 'openai-responses') {
     const usage = json && json.usage || {};
-    out.inputTokens = numberOrZero(usage.input_tokens);
-    out.outputTokens = numberOrZero(usage.output_tokens);
-    out.reasoningTokens = numberOrZero(usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens);
+    out.inputTokens = tokenOrNull(usage.input_tokens);
+    out.outputTokens = tokenOrNull(usage.output_tokens);
+    out.reasoningTokens = tokenOrNull(usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens);
     cacheReported = !!(usage.input_tokens_details && usage.input_tokens_details.cached_tokens != null);
-    out.cacheReadTokens = numberOrZero(usage.input_tokens_details && usage.input_tokens_details.cached_tokens);
+    out.cacheReadTokens = usage.input_tokens_details && usage.input_tokens_details.cached_tokens != null ? numberOrZero(usage.input_tokens_details.cached_tokens) : null;
+    out.cacheWriteTokens = cacheReported ? 0 : null;
   } else {
     const usage = json && json.usage || {};
     const details = usage.prompt_tokens_details || {};
-    out.inputTokens = numberOrZero(usage.prompt_tokens);
-    out.outputTokens = numberOrZero(usage.completion_tokens);
-    out.reasoningTokens = numberOrZero(usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens);
+    out.inputTokens = tokenOrNull(usage.prompt_tokens);
+    out.outputTokens = tokenOrNull(usage.completion_tokens);
+    out.reasoningTokens = tokenOrNull(usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens);
     cacheReported = details.cached_tokens != null || details.cache_read_input_tokens != null;
-    out.cacheReadTokens = numberOrZero(details.cached_tokens != null ? details.cached_tokens : details.cache_read_input_tokens);
-    out.cacheWriteTokens = numberOrZero(details.cache_write_tokens);
+    out.cacheReadTokens = (details.cached_tokens != null || details.cache_read_input_tokens != null)
+      ? numberOrZero(details.cached_tokens != null ? details.cached_tokens : details.cache_read_input_tokens) : null;
+    out.cacheWriteTokens = cacheReported ? numberOrZero(details.cache_write_tokens) : null;
   }
   Object.defineProperty(out, 'cacheReported', { value: cacheReported, enumerable: false, configurable: true });
   return out;
@@ -258,7 +267,7 @@ function mergeUsage(previous, incoming) {
   if (!incoming) return previous;
   const merged = Object.assign({}, previous, incoming);
   for (const key of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
-    if (incoming[key] === 0 && previous[key] > 0) merged[key] = previous[key];
+    if (incoming[key] == null && previous[key] != null) merged[key] = previous[key];
   }
   const cacheReported = previous.cacheReported === true || incoming.cacheReported === true;
   Object.defineProperty(merged, 'cacheReported', { value: cacheReported, enumerable: false, configurable: true });
