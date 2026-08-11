@@ -82,7 +82,7 @@ jobs:
       - name: Rebuild native dependencies for Electron
         run: npx electron-builder install-app-deps
       - name: Check Electron native ABI
-        run: npm run check:electron-abi
+        run: xvfb-run -a npm run check:electron-abi
       - name: Real renderer layout smoke
         run: xvfb-run -a npm run check:ui
 
