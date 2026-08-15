@@ -24,13 +24,13 @@
     if (scope === 'document' && App.router && App.doc) {
       close();
       App.doc.activeId = item.id;
-      App.router.go('doc');
+      App.router.go('doc', { force: true });
       return;
     }
     if (scope === 'workflow' && App.router && App.create) {
       close();
       App.create.tab = 'workflows';
-      App.router.go('create');
+      App.router.go('create', { force: true });
       return;
     }
     if (scope === 'skill' && App.ui && typeof App.ui.openSettings === 'function') {
@@ -55,7 +55,7 @@
         App.persist();
       }
     }
-    App.router.go('agent');
+    App.router.go('agent', { force: true });
     setTimeout(() => App.agent.showRunHistory({ openRunId: item.id }), 0);
   }
 

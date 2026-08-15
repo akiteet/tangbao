@@ -118,9 +118,9 @@ async function runAgent(input, dependencies) {
       budget: budget.snapshot(),
       modelId: request.modelId || '',
       providerRef: request.provider || '',
-      promptVersion: request.promptVersion || 'runtime/1.1.3',
-      toolsetVersion: request.toolsetVersion || 'registry/1.1.3',
-      runtimeVersion: request.runtimeVersion || 'runtime/1.1.3',
+      promptVersion: request.promptVersion || 'runtime/1.1.4',
+      toolsetVersion: request.toolsetVersion || 'registry/1.1.4',
+      runtimeVersion: request.runtimeVersion || 'runtime/1.1.4',
     });
   }
 

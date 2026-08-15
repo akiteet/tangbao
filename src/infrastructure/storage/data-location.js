@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const LOCATION_FILE = 'tangbao-location.json';
 const LOCATION_VERSION = 1;
 const MIGRATION_STATE_FILE = 'tangbao-migration.json';
+const PORTABLE_ROOT_NAME = 'tangbao-storage';
 
 // Keep application records and browser state, but leave Chromium caches behind.
 const MIGRATED_ENTRIES = [
@@ -31,6 +32,13 @@ const LEGACY_RECORD_ENTRIES = [
 
 function canonical(value) {
   return path.resolve(String(value || ''));
+}
+
+// All durable application records live under the active data root. Keeping
+// this boundary in one helper prevents sidecar stores from drifting back to
+// Electron's default userData directory after a location migration.
+function recordsRoot(activeRoot) {
+  return path.join(canonical(activeRoot), 'tangbao-data');
 }
 
 function pathKey(value) {
@@ -145,6 +153,11 @@ function migrationMappings(sourceRoot) {
   for (const name of MIGRATED_ENTRIES) add(name, '');
   for (const name of LEGACY_RECORD_ENTRIES) add(name, 'tangbao-data');
   return mappings;
+}
+
+function hasMigratableData(root) {
+  const source = canonical(root);
+  return MIGRATED_ENTRIES.concat(LEGACY_RECORD_ENTRIES).some((entry) => fs.existsSync(path.join(source, entry)));
 }
 
 function verifyStagedMigration(mappings, stageRoot, preserved) {
@@ -366,8 +379,9 @@ function resolveStartupLocation({ defaultRoot, packaged, executablePath }) {
   if (packaged && executablePath) {
     const executableDir = path.dirname(executablePath);
     const driveRoot = path.parse(executablePath).root;
+    const legacyPortableRoot = path.join(executableDir, 'tangbao-data');
     const candidates = [
-      path.join(executableDir, 'tangbao-data'),
+      path.join(executableDir, PORTABLE_ROOT_NAME),
       driveRoot ? path.join(driveRoot, 'Users', 'Public', 'tangbao-web-data') : '',
     ].filter(Boolean);
     for (const candidate of candidates) {
@@ -375,8 +389,16 @@ function resolveStartupLocation({ defaultRoot, packaged, executablePath }) {
       if (!checked.ok) continue;
       const migrated = migrateRoot(original, candidate);
       if (!migrated.ok) continue;
-      writeLocation(original, { rootPath: checked.target, sourceRoot: original, pending: false });
-      return { rootPath: checked.target, defaultRoot: original, migrated, pointer: readLocation(original) };
+      // Older portable builds used exe/tangbao-data as the userData root.
+      // Fill missing files from that root after the normalized migration;
+      // normalized data wins if both layouts contain the same file.
+      let legacyMigration = null;
+      if (pathKey(legacyPortableRoot) !== pathKey(candidate) && hasMigratableData(legacyPortableRoot)) {
+        legacyMigration = migrateRoot(legacyPortableRoot, candidate);
+        if (!legacyMigration.ok) continue;
+      }
+      writeLocation(original, { rootPath: checked.target, sourceRoot: original, pending: false, migrationId: (legacyMigration || migrated).migrationId });
+      return { rootPath: checked.target, defaultRoot: original, migrated: legacyMigration || migrated, pointer: readLocation(original) };
     }
   }
 
@@ -483,9 +505,12 @@ function cleanupLegacy({ defaultRoot, activeRoot, previewId, items } = {}) {
 module.exports = {
   LOCATION_FILE,
   MIGRATION_STATE_FILE,
+  PORTABLE_ROOT_NAME,
   MIGRATED_ENTRIES,
   LEGACY_RECORD_ENTRIES,
+  hasMigratableData,
   canonical,
+  recordsRoot,
   isSameOrNested,
   readLocation,
   writeLocation,

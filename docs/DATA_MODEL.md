@@ -1,7 +1,7 @@
 # 糖包数据模型（Data Model）
 
-> 本文档描述糖包 **v1.1.3** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
-> 配套阅读：[v1.1.3 发布说明](./CHANGELOG-v1.1.3.md)与[跨模块历史成果](./CROSS_MODULE.md)。
+> 本文档描述糖包 **v1.1.4** 的持久化结构，面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
+> 配套阅读：[v1.1.4 发布说明](./CHANGELOG-v1.1.4.md)与[跨模块历史成果](./CROSS_MODULE.md)。
 
 ---
 
@@ -40,7 +40,7 @@
 | `account_models` | account_id, name, context_window, caps, max_output, think_type | 账户模型清单与能力元数据 |
 | `providers` | module, account_id, api_base, model | 各模块当前使用的账户/模型 |
 | `agents` | id, name, description, system_prompt, icon, category | 糖创自定义智能体 |
-| `templates` | id, title, category, prompt, icon | 提示词模板库 |
+| `templates` | id, title, category, prompt, icon | 旧版提示词模板的历史兼容存储；当前界面不再提供模板库 |
 | `workflows` | id, name, steps, created_at | 多步骤工作流定义 |
 | `image_history` | id, prompt, style, size, n, created_at | 糖绘出图记录 |
 | `image_files` | id, history_id, seq, data, created_at | 图片二进制（base64 dataURL） |

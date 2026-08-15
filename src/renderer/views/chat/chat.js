@@ -24,6 +24,8 @@
   ];
 
   let streaming = false;
+  let streamUi = null;
+  let renderedConvId = null;
   let streamConvId = null;  // 聊天修复 E：当前流式回复所属会话 id（区分“本会话忙碌”与“其它会话忙碌”）
   let voiceBase = '';       // B5（P2）：语音听写最终文本基线——interim 更新时替换而非重复累加
   // 聊天修复 E：半开连接看门狗——首字节 30s / 流数据空闲 90s 未推进视为连接失效，
@@ -44,17 +46,396 @@
   let recognition = null;   // 语音听写实例
   let listening = false;    // 语音听写状态
   let pendingAttachments = []; // 待发送附件 [{id,name,type,text,size}]
+  let messageVisibleCount = 100;
+  let messageWindowConvId = '';
+  let surfaceState = null;
+  let draftTimer = null;
+  let draftConversationId = null;
+  const markdownCache = new Map();
+  const MARKDOWN_CACHE_LIMIT = 160;
+  let contextBarKey = '';
+  const MODULE_OWNERS = new Set(['tangguan', 'create']);
+  // All writes for one module are serialized. Streaming checkpoints and the
+  // final conversation snapshot otherwise race through separate IPC calls and
+  // an older snapshot can overwrite the latest assistant output.
+  const moduleWriteQueues = new Map();
+
+  function ensureModuleRuntime() {
+    if (!App.moduleSessions || typeof App.moduleSessions !== 'object') {
+      App.moduleSessions = { status: 'pending', data: {} };
+    }
+    App.moduleSessions.data = App.moduleSessions.data || {};
+    for (const owner of MODULE_OWNERS) {
+      const bucket = App.moduleSessions.data[owner];
+      if (!bucket || typeof bucket !== 'object') App.moduleSessions.data[owner] = { conversations: [], activeId: null };
+      if (!Array.isArray(App.moduleSessions.data[owner].conversations)) App.moduleSessions.data[owner].conversations = [];
+    }
+    return App.moduleSessions;
+  }
+
+  function isModuleOwner(owner) { return MODULE_OWNERS.has(String(owner || '')); }
+
+  function ownerForConversation(conv) {
+    if (conv && (conv.tangguanCharacterId || conv.originModule === 'tangguan')) return 'tangguan';
+    if (conv && conv.originModule === 'create') return 'create';
+    return 'default';
+  }
+
+  // Module ownership must not depend on the newest marker shape. Older
+  // sessions can carry only originModule, while current Tangguan sessions
+  // also carry tangguanCharacterId.
+  function isTangguanConv(conv) { return ownerForConversation(conv) === 'tangguan'; }
+
+  function currentOwner() {
+    if (surfaceState && surfaceState.owner) return surfaceState.owner;
+    const view = App.state && App.state.view;
+    return isModuleOwner(view) ? view : 'default';
+  }
+
+  function conversationList(owner) {
+    const name = String(owner || 'default');
+    if (isModuleOwner(name)) {
+      const bucket = ensureModuleRuntime().data[name];
+      // Never fall back to App.state.conversations here. That collection is
+      // the regular Chat store; migration failure is represented by the
+      // in-memory module bucket so records remain inspectable without mixing
+      // them back into the normal Chat view.
+      return bucket.conversations;
+    }
+    return App.state && Array.isArray(App.state.conversations) ? App.state.conversations : [];
+  }
+
+  function activeConversationId(owner) {
+    const name = String(owner || currentOwner());
+    if (isModuleOwner(name)) {
+      const bucket = ensureModuleRuntime().data[name];
+      if (surfaceState && surfaceState.owner === name && surfaceState.conversationId != null) return surfaceState.conversationId || null;
+      return bucket.activeId || null;
+    }
+    return App.state && App.state.activeId || null;
+  }
+
+  function setActiveConversationId(owner, id) {
+    const name = String(owner || currentOwner());
+    const value = id ? String(id) : null;
+    if (isModuleOwner(name)) {
+      ensureModuleRuntime().data[name].activeId = value;
+      if (surfaceState && surfaceState.owner === name) surfaceState.conversationId = value;
+    } else if (App.state) {
+      App.state.activeId = value;
+    }
+    return value;
+  }
+
+  function conversationById(owner, id) {
+    const target = String(id || '');
+    return conversationList(owner).find((item) => item && item.id === target) || null;
+  }
+
+  function activeConversationFor(owner) {
+    return conversationById(owner || currentOwner(), activeConversationId(owner || currentOwner()));
+  }
+
+  function isCurrentConversation(conv) {
+    return !!conv && activeConversationId(ownerForConversation(conv)) === conv.id;
+  }
+
+  function moduleSnapshot(conv) {
+    try { return JSON.parse(JSON.stringify(conv)); } catch (_) { return conv; }
+  }
+
+  function enqueueModuleWrite(owner, operation) {
+    const name = String(owner || '');
+    const previous = moduleWriteQueues.get(name) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    moduleWriteQueues.set(name, next.catch(() => {}));
+    return next;
+  }
+
+  function persistModuleConversation(owner, conv, options) {
+    const name = String(owner || ownerForConversation(conv));
+    if (!isModuleOwner(name) || !conv || !conv.id) return App.persist ? App.persist(options) : { ok: false };
+    const runtime = ensureModuleRuntime();
+    if (runtime.status === 'failed') {
+      runtime.lastError = runtime.lastError || 'module_session_migration_failed';
+      return { ok: false, code: runtime.lastError, error: '模块会话迁移失败，当前记录只读，请先恢复迁移' };
+    }
+    const bucket = runtime.data[name];
+    const next = moduleSnapshot(conv);
+    // A module conversation belongs to its sidecar even when an older
+    // renderer left a copy in the regular Chat array. Remove that copy before
+    // any regular-state persistence can observe it.
+    if (Array.isArray(App.state && App.state.conversations)) {
+      App.state.conversations = App.state.conversations.filter((item) => !item || item.id !== next.id || !isModuleConversation(item));
+    }
+    bucket.conversations = [next].concat(bucket.conversations.filter((item) => item && item.id !== next.id));
+    const activeId = options && options.activeId !== undefined ? options.activeId : bucket.activeId;
+    if (activeId !== undefined) bucket.activeId = activeId || null;
+    const service = App.services && App.services.moduleSessions;
+    if (service && service.upsert) {
+      enqueueModuleWrite(name, () => service.upsert(name, next, bucket.activeId)).then((result) => {
+        if (result && result.ok && result.data) {
+          bucket.conversations = Array.isArray(result.data.conversations) ? result.data.conversations : bucket.conversations;
+          bucket.activeId = result.data.activeId || bucket.activeId || null;
+        } else if (result && result.ok === false) {
+          runtime.lastError = result.code || result.error || 'module_session_save_failed';
+        }
+      }).catch(() => { runtime.lastError = 'module_session_save_failed'; });
+    }
+    return { ok: true, module: name, conversation: next };
+  }
+
+  function removeModuleConversation(owner, id) {
+    const name = String(owner || currentOwner());
+    if (!isModuleOwner(name)) return { ok: false, code: 'unsupported_module' };
+    const bucket = ensureModuleRuntime().data[name];
+    const target = String(id || '');
+    const existed = bucket.conversations.some((item) => item && item.id === target);
+    bucket.conversations = bucket.conversations.filter((item) => item && item.id !== target);
+    if (bucket.activeId === target) bucket.activeId = bucket.conversations[0] ? bucket.conversations[0].id : null;
+    const service = App.services && App.services.moduleSessions;
+    if (service && service.remove && ensureModuleRuntime().status !== 'failed') {
+      enqueueModuleWrite(name, () => service.remove(name, target)).catch(() => {
+        ensureModuleRuntime().lastError = 'module_session_remove_failed';
+      });
+    }
+    return { ok: true, removed: existed, activeId: bucket.activeId };
+  }
+
+  function cachedMarkdown(content, cacheKey) {
+    const value = String(content == null ? '' : content);
+    const key = String(cacheKey || '') + '\0' + value;
+    const cached = markdownCache.get(key);
+    if (cached != null) return cached;
+    const rendered = App.renderMarkdown(value);
+    markdownCache.set(key, rendered);
+    while (markdownCache.size > MARKDOWN_CACHE_LIMIT) {
+      const first = markdownCache.keys().next().value;
+      if (first == null) break;
+      markdownCache.delete(first);
+    }
+    return rendered;
+  }
+
+  function providerForConversation(conv) {
+    const owner = ownerForConversation(conv);
+    return App.getProvider(owner === 'tangguan' || owner === 'create' ? owner : 'chat');
+  }
+
+  function flushDraft(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+    const input = $('input');
+    const owner = opts.owner || currentOwner();
+    const id = opts.conversationId || draftConversationId || activeConversationId(owner);
+    if (!input || !id) return;
+    try { localStorage.setItem('tb_draft_' + id, input.value); } catch (_) {}
+    draftConversationId = null;
+  }
+
+  function scheduleDraft() {
+    if (draftTimer) clearTimeout(draftTimer);
+    draftConversationId = activeConversationId(currentOwner());
+    draftTimer = setTimeout(() => { draftTimer = null; flushDraft(); }, 250);
+  }
+
+  function chatScrollNode() {
+    return (surfaceState && surfaceState.scroll) || $('chatScroll');
+  }
+
+  function isTangguanConversation(id) {
+    const conv = conversationById('tangguan', id)
+      || conversationById('create', id)
+      || conversationById('default', id);
+    return isTangguanConv(conv);
+  }
+
+  function isCreateConversation(conv) {
+    return !!(conv && conv.originModule === 'create');
+  }
+
+  function isModuleConversation(conv) {
+    return !!(conv && (conv.tangguanCharacterId || conv.originModule === 'tangguan' || isCreateConversation(conv)));
+  }
+
+  function resetTangguanMessageWindow(conv) {
+    const id = conv && conv.id ? String(conv.id) : '';
+    if (id !== messageWindowConvId) {
+      messageWindowConvId = id;
+      messageVisibleCount = isTangguanConv(conv) ? 50 : 100;
+    }
+  }
+
+  function contextBarStamp(conv, model, userMemory) {
+    const messages = conv && Array.isArray(conv.messages) ? conv.messages : [];
+    const last = messages[messages.length - 1] || {};
+    return [
+      conv && conv.id || '',
+      Number(conv && conv.updatedAt) || 0,
+      messages.length,
+      last.id || '',
+      String(last.content || '').length,
+      String(last.think || '').length,
+      Number(conv && conv.summaryCount) || 0,
+      model || '',
+      String(userMemory || '').length,
+    ].join('|');
+  }
+
+  function bindWelcomeActions() {
+    const welcome = $('welcome');
+    if (!welcome || welcome.dataset.chatWelcomeBound === '1') return;
+    welcome.dataset.chatWelcomeBound = '1';
+    welcome.addEventListener('click', (event) => {
+      const promptButton = event.target.closest('[data-prompt]');
+      const suggestionButton = event.target.closest('[data-i]');
+      const input = $('input');
+      if (!input) return;
+      if (promptButton) input.value = promptButton.dataset.prompt || '';
+      else if (suggestionButton) {
+        const suggestion = SUGGESTIONS[Number(suggestionButton.dataset.i)];
+        if (!suggestion) return;
+        input.value = suggestion.prompt;
+      } else return;
+      App.chat.autoSize();
+      input.focus();
+      App.chat.updateSendEnabled();
+    });
+  }
 
   App.chat = {
     pendingAttachments,
     editingIndex: null,     // M7：编辑模式下的用户消息下标（null=非编辑模式）
 
-    activeConv() { return App.state.conversations.find(c => c.id === App.state.activeId) || null; },
+    mountSurface(options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const root = opts.root;
+      if (!root) return { ok: false, code: 'chat_surface_root_missing' };
+      const owner = opts.owner || opts.mode || 'default';
+      if (surfaceState && surfaceState.root === root) {
+        surfaceState.mode = opts.mode || surfaceState.mode || 'default';
+        surfaceState.owner = owner;
+        const nextConversationId = opts.conversationId !== undefined ? (opts.conversationId || null) : surfaceState.conversationId;
+        if (opts.conversationId !== undefined && nextConversationId !== surfaceState.conversationId) {
+          setActiveConversationId(owner, nextConversationId);
+          surfaceState.conversationId = nextConversationId;
+          App.chat.renderMessages();
+        }
+        if (App.ui && App.ui.syncModelSelect) App.ui.syncModelSelect();
+        return { ok: true, reused: true };
+      }
+      if (surfaceState) App.chat.unmountSurface();
+      const ids = ['welcome', 'messages', 'composer'];
+      const nodes = ids.map((id) => $(id));
+      if (nodes.some((node) => !node || !node.parentNode)) return { ok: false, code: 'chat_surface_nodes_missing' };
+      const anchors = nodes.map((node) => {
+        const anchor = document.createComment('chat-surface-home-' + node.id);
+        node.parentNode.insertBefore(anchor, node);
+        return anchor;
+      });
+      const scroll = document.createElement('div');
+      scroll.className = 'tg-chat-scroll';
+      scroll.setAttribute('data-chat-scroll', 'true');
+      const messageSlot = document.createElement('div');
+      messageSlot.className = 'tg-chat-message-slot';
+      scroll.appendChild(messageSlot);
+      root.replaceChildren(scroll);
+      messageSlot.append(nodes[0], nodes[1]);
+      root.appendChild(nodes[2]);
+      surfaceState = {
+        root,
+        scroll,
+        nodes,
+        anchors,
+        mode: opts.mode || 'default',
+        owner,
+        conversationId: opts.conversationId !== undefined ? (opts.conversationId || null) : activeConversationId(owner),
+        previousActiveId: App.chat._preSurfaceActiveId
+          || App.chat._preTangguanActiveId
+          || App.chat._preCreateActiveId
+          || (activeConversationId('default') && !isModuleConversation(activeConversationFor('default')) ? activeConversationId('default') : null),
+        controls: {},
+      };
+      App.chat._preTangguanActiveId = null;
+      App.chat._preCreateActiveId = null;
+      App.chat._preSurfaceActiveId = null;
+      if (surfaceState.mode === 'tangguan') {
+        ['webBtn', 'imgBtn', 'attachBtn'].forEach((id) => {
+          const node = $(id);
+          if (!node) return;
+          surfaceState.controls[id] = { display: node.style.display, disabled: node.disabled, title: node.title };
+          node.style.display = 'none';
+          node.disabled = true;
+        });
+      }
+      setActiveConversationId(owner, surfaceState.conversationId);
+      App.chat.renderMessages();
+      App.chat.updateCtxBar();
+      if (App.ui && App.ui.syncModelSelect) App.ui.syncModelSelect();
+      return { ok: true, reused: false };
+    },
+
+    unmountSurface(options) {
+      if (!surfaceState) return { ok: true, reused: false };
+      const opts = options && typeof options === 'object' ? options : {};
+      const state = surfaceState;
+      if (opts.preserveActiveId) {
+        if (state.previousActiveId) App.chat._preSurfaceActiveId = state.previousActiveId;
+      } else if (state.mode === 'tangguan' || state.owner === 'create') {
+        const previous = state.previousActiveId;
+        setActiveConversationId(state.owner, state.conversationId || activeConversationId(state.owner));
+        if (previous && conversationById('default', previous) && !isModuleConversation(conversationById('default', previous))) App.state.activeId = previous;
+      }
+      state.nodes.forEach((node, index) => {
+        const anchor = state.anchors[index];
+        if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node, anchor.nextSibling);
+      });
+      Object.entries(state.controls || {}).forEach(([id, snapshot]) => {
+        const node = $(id);
+        if (!node) return;
+        node.style.display = snapshot.display;
+        node.disabled = snapshot.disabled;
+        node.title = snapshot.title;
+      });
+      if (state.root) state.root.replaceChildren();
+      surfaceState = null;
+      return { ok: true, reused: false };
+    },
+
+    surface() { return surfaceState; },
+
+    // Flush the current input before a route/session change. This is
+    // intentionally synchronous and local-only so navigation never waits on
+    // the model or the SQLite writer.
+    flushSurface() {
+      const opts = arguments[0] && typeof arguments[0] === 'object' ? arguments[0] : {};
+      // Regular Chat compatibility path: flushDraft({ conversationId: App.state && App.state.activeId });
+      flushDraft(Object.assign({}, opts, { owner: opts.owner || currentOwner() }));
+      return { ok: true, conversationId: activeConversationId(opts.owner || currentOwner()) };
+    },
+
+    providerForConversation(conv) {
+      return providerForConversation(conv);
+    },
+
+    activeConv() { return activeConversationFor(currentOwner()); },
+
+    conversationList(owner) { return conversationList(owner || currentOwner()); },
+
+    activeConversationId(owner) { return activeConversationId(owner || currentOwner()); },
+
+    setActiveConversationId(owner, id) { return setActiveConversationId(owner || currentOwner(), id); },
+
+    persistConversation(conv, options) {
+      const owner = ownerForConversation(conv);
+      return isModuleOwner(owner) ? persistModuleConversation(owner, conv, options) : (App.persist ? App.persist(options) : { ok: false });
+    },
 
     // 判断当前聊天模型是否支持视觉输入
     isVisionModel() {
-      const s = App.getProvider('chat');
-      const model = (App.chat.activeConv() && App.chat.activeConv().model) || s.model || '';
+      const conv = App.chat.activeConv();
+      const s = providerForConversation(conv);
+      const model = (conv && conv.model) || s.model || '';
       return App.isVisionModel(model);
     },
 
@@ -62,16 +443,27 @@
     syncImgBtn() {
       const btn = $('imgBtn');
       if (!btn) return;
-      const s = App.getProvider('chat');
-      const model = (App.chat.activeConv() && App.chat.activeConv().model) || s.model || '';
+      const conv = App.chat.activeConv();
+      const s = providerForConversation(conv);
+      const restricted = isTangguanConv(conv);
+      const model = (conv && conv.model) || s.model || '';
       const ok = App.isVisionModel(model);
-      btn.disabled = !ok;
-      btn.classList.toggle('img-disabled', !ok);
-      btn.title = ok ? '图片' : ('当前模型 ' + (model || '未配置') + ' 不支持图片输入，可在设置→API→视觉模型中添加');
+      btn.disabled = !ok || restricted;
+      btn.classList.toggle('img-disabled', !ok || restricted);
+      btn.title = restricted ? '糖馆独立会话不支持附件' : (ok ? '图片' : ('当前模型 ' + (model || '未配置') + ' 不支持图片输入，可在设置→API→视觉模型中添加'));
+      const attach = $('attachBtn');
+      if (attach) {
+        attach.disabled = restricted;
+        attach.title = restricted ? '糖馆独立会话不支持附件' : '添加附件';
+      }
     },
 
     // 读取并压缩图片，返回 base64 data URL
     async processImage(file) {
+      if (isTangguanConv(App.chat.activeConv())) {
+        App.ui.toast('糖馆独立会话不支持图片或文件附件');
+        return null;
+      }
       const MAX_EDGE = 4096;
       const MAX_SIZE = 5 * 1024 * 1024; // 5MB
       return new Promise((resolve, reject) => {
@@ -110,6 +502,7 @@
     // 处理图片文件：压缩后加入 pendingAttachments
     async handleImageFile(file) {
       if (!file || !file.type.startsWith('image/')) return;
+      if (isTangguanConv(App.chat.activeConv())) { App.ui.toast('糖馆独立会话不支持图片或文件附件'); return; }
       if (!App.chat.isVisionModel()) { App.ui.toast('当前模型不支持图片输入'); return; }
       try {
         const data = await App.chat.processImage(file);
@@ -181,62 +574,156 @@
       return arr;
     },
 
-    newConversation(agent) {
-      const conv = { id: App.uid(), title: '新对话', messages: [], updatedAt: Date.now() };
-      if (agent) {
-        conv.title = agent.name;
-        conv.agentId = agent.id;
-        conv.systemPrompt = agent.systemPrompt;
-        // 对话级模型/参数优先（智能体指定），否则回退聊天默认
-        if (agent.model) conv.model = agent.model;
-        if (typeof agent.temperature === 'number') conv.temperature = agent.temperature;
-        if (typeof agent.topP === 'number') conv.topP = agent.topP;
-        if (typeof agent.web === 'boolean') conv.web = agent.web;
-        if (Array.isArray(agent.starters) && agent.starters.length) conv.starters = agent.starters.slice();
-        // M12：智能体语气（tone）此前是死字段，此处落到对话，发送时注入系统提示
-        if (agent.tone) conv.tone = agent.tone;
-        // 计入智能体使用次数
-        if (agent.id && App.create && App.create.trackUsage) App.create.trackUsage(agent.id);
+    newConversation(agent, options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const requestedOwner = String(opts.owner || opts.originModule || opts.stay || '').trim().toLowerCase();
+      const owner = opts.tangguanCharacterId || requestedOwner === 'tangguan'
+        ? 'tangguan'
+        : (requestedOwner === 'create' ? 'create' : 'default');
+      if (isModuleOwner(owner) && ensureModuleRuntime().status === 'failed') {
+        if (App.ui && App.ui.toast) App.ui.toast('模块会话迁移失败，请先恢复迁移后再新建会话');
+        return null;
       }
-      App.state.conversations.unshift(conv);
-      App.state.activeId = conv.id;
+      flushDraft({ owner, conversationId: activeConversationId(owner) });
+      const previous = activeConversationFor(owner);
+      if ((opts.stay === 'tangguan' || opts.stay === 'create') && previous && !isModuleConversation(previous)) {
+        App.chat._preSurfaceActiveId = previous.id;
+      }
+      const inheritedAgent = owner === 'create' && !agent && opts.inheritActive !== false && previous && previous.agentId
+        && App.create && typeof App.create.getAgent === 'function'
+        ? App.create.getAgent(previous.agentId)
+        : null;
+      const configSource = agent || (inheritedAgent ? previous : null);
+      const configAgent = agent || inheritedAgent;
+      const conv = { id: App.uid(), title: '新对话', messages: [], updatedAt: Date.now() };
+      if (owner === 'tangguan') {
+        conv.originModule = 'tangguan';
+        conv.tangguanRestricted = true;
+        conv.web = false;
+        conv.allowWeb = false;
+        conv.allowAttachments = false;
+        conv.allowTools = false;
+      } else if (owner === 'create') {
+        conv.originModule = 'create';
+      } else if (opts.originModule) {
+        conv.originModule = String(opts.originModule);
+      }
+      if (owner === 'tangguan' && opts.tangguanCharacterId) {
+        conv.originModule = 'tangguan';
+        conv.tangguanCharacterId = String(opts.tangguanCharacterId);
+      }
+      if (configAgent) {
+        conv.title = configAgent.name;
+        conv.agentId = configAgent.id;
+        conv.systemPrompt = configSource.systemPrompt || configAgent.systemPrompt || '';
+        // 对话级模型/参数优先（智能体指定），否则回退聊天默认
+        if (configSource.model) conv.model = configSource.model;
+        if (typeof configSource.temperature === 'number') conv.temperature = configSource.temperature;
+        if (typeof configSource.topP === 'number') conv.topP = configSource.topP;
+        if (typeof configSource.web === 'boolean') conv.web = configSource.web;
+        if (Array.isArray(configSource.starters) && configSource.starters.length) conv.starters = configSource.starters.slice();
+        // M12：智能体语气（tone）此前是死字段，此处落到对话，发送时注入系统提示
+        if (configSource.tone) conv.tone = configSource.tone;
+        // 计入智能体使用次数
+        if (agent && configAgent.id && App.create && App.create.trackUsage) App.create.trackUsage(configAgent.id);
+      }
+      if (isModuleOwner(owner)) {
+        ensureModuleRuntime().data[owner].activeId = conv.id;
+        persistModuleConversation(owner, conv, { activeId: conv.id });
+      } else {
+        App.state.conversations.unshift(conv);
+        App.state.activeId = conv.id;
+      }
+      resetTangguanMessageWindow(conv);
       App.chat.clearAttachments();
       App.chat.cancelEdit();
-      App.persist();
-      App.router.go('chat');
+       if (opts.persist !== false && !isModuleOwner(owner)) App.persist();
+       if (opts.stay === 'tangguan') {
+         if (App.state.view !== 'tangguan') App.router.go('tangguan', { persist: opts.persist !== false, skipDraftFlush: true });
+       } else if (opts.stay === 'create') {
+         if (App.state.view !== 'create') App.router.go('create', { persist: opts.persist !== false, skipDraftFlush: true });
+      } else {
+        App.router.go('chat');
+      }
       App.ui.renderSidebar();
       App.chat.showWelcome();
       App.ui.renderTopbarTitle();
+      if (opts.stay === 'create' && App.create && typeof App.create.openTaskSession === 'function') {
+        App.create.openTaskSession(conv.id);
+      }
       return conv;
     },
 
     // 用智能体的某条引导问题开聊：新建对话并把问题预填到输入框（用户一键发送）
     startWithStarter(agent, starter) {
-      App.chat.newConversation(agent);
+      const conversation = App.chat.newConversation(agent, { owner: 'create', stay: 'create', originModule: 'create' });
+      if (!conversation) return;
       const input = document.getElementById('input');
       if (input) { input.value = starter || ''; input.focus(); }
     },
 
-    activate(id) {
-      App.state.activeId = id;
+    activate(id, options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const owner = opts.owner || (opts.originModule === 'tangguan' || opts.stay === 'tangguan'
+        ? 'tangguan'
+        : opts.originModule === 'create' || opts.stay === 'create' ? 'create' : currentOwner());
+      flushDraft({ owner, conversationId: activeConversationId(owner) });
+      const current = activeConversationFor(owner);
+      if (opts.stay === 'tangguan' || opts.stay === 'create') {
+        if (current && !isModuleConversation(current)) App.chat._preSurfaceActiveId = current.id;
+      }
+      setActiveConversationId(owner, id);
+      const next = conversationById(owner, id);
+      if (isModuleOwner(owner) && next) persistModuleConversation(owner, next, { activeId: id });
+      resetTangguanMessageWindow(App.chat.activeConv());
       App.chat.clearAttachments();
       App.chat.cancelEdit();
-      App.persist();
-      App.router.go('chat');
+       if (opts.persist !== false && !isModuleOwner(owner)) App.persist();
+       if (opts.stay === 'tangguan') {
+         if (App.state.view !== 'tangguan') App.router.go('tangguan', { persist: opts.persist !== false, skipDraftFlush: true });
+       } else if (opts.stay === 'create') {
+         if (App.state.view !== 'create') App.router.go('create', { persist: opts.persist !== false, skipDraftFlush: true });
+      } else {
+        App.router.go('chat');
+      }
       App.ui.renderSidebar();
-      App.chat.renderMessages();
-      App.ui.renderTopbarTitle();
+       if (opts.render !== false) {
+         App.chat.renderMessages();
+         App.ui.renderTopbarTitle();
+       }
+      if (opts.stay === 'create' && App.create && typeof App.create.openTaskSession === 'function') {
+        App.create.openTaskSession(id);
+      }
     },
 
-    deleteConversation(id) {
-      App.state.conversations = App.state.conversations.filter(c => c.id !== id);
-      if (App.state.activeId === id) {
-        App.state.activeId = App.state.conversations[0] ? App.state.conversations[0].id : null;
+    deleteConversation(id, options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const owner = opts.owner || currentOwner();
+      const target = String(id || '');
+      const wasActive = activeConversationId(owner) === target;
+      let result = { ok: true, removed: false, activeId: activeConversationId(owner) };
+      if (isModuleOwner(owner)) {
+        result = removeModuleConversation(owner, target);
+        if (wasActive) setActiveConversationId(owner, result.activeId || null);
+      } else {
+        const before = App.state.conversations.length;
+        App.state.conversations = App.state.conversations.filter(c => c.id !== target);
+        result.removed = App.state.conversations.length !== before;
+        if (App.state.activeId === target) {
+          App.state.activeId = App.state.conversations[0] ? App.state.conversations[0].id : null;
+        }
+        result.activeId = App.state.activeId || null;
+      }
+      if (opts.render !== false && activeConversationId(owner) !== target && !isModuleOwner(owner)) {
         App.chat.renderMessages();
       }
-      App.persist();
-      App.ui.renderSidebar();
-      App.ui.renderTopbarTitle();
+      if (opts.render !== false && isModuleOwner(owner)) App.chat.renderMessages();
+      if (!isModuleOwner(owner)) App.persist();
+      if (opts.render !== false) {
+        App.ui.renderSidebar();
+        App.ui.renderTopbarTitle();
+      }
+      return Object.assign({ owner, id: target }, result);
     },
 
     async rename() {
@@ -252,7 +739,7 @@
       });
       if (name === null) return; // 取消
       conv.title = name.trim() || conv.title;
-      App.persist();
+      App.chat.persistConversation(conv);
       App.ui.renderTopbarTitle();
       App.ui.renderSidebar();
     },
@@ -261,7 +748,7 @@
       const conv = App.chat.activeConv();
       if (!conv) { App.ui.toast('没有可清空的对话'); return; }
       conv.messages = [];
-      App.persist();
+      App.chat.persistConversation(conv);
       App.chat.renderMessages();
       App.ui.toast('已清空对话');
     },
@@ -270,12 +757,13 @@
       const conv = App.chat.activeConv();
       if (!conv || idx == null || idx < 0 || idx >= conv.messages.length) return;
       conv.messages.splice(idx, 1);
-      App.persist();
+      App.chat.persistConversation(conv);
       App.chat.renderMessages();
       App.ui.toast('已删除该条消息');
     },
 
     attachTextFile(file) {
+      if (isTangguanConv(App.chat.activeConv())) { App.ui.toast('糖馆独立会话不支持图片或文件附件'); return; }
       const reader = new FileReader();
       reader.onload = () => {
         let text = String(reader.result || '');
@@ -292,7 +780,7 @@
     },
 
     startWithAgent(agent) {
-      App.chat.newConversation(agent);
+      App.chat.newConversation(agent, { owner: 'create', stay: 'create', originModule: 'create' });
       $('input').focus();
     },
 
@@ -300,12 +788,34 @@
       const welcome = $('welcome');
       const messages = $('messages');
       const composer = $('composer');
+      const conv = App.chat.activeConv();
+      const owner = surfaceState && surfaceState.owner ? surfaceState.owner : currentOwner();
+      // The shared surface is reused by Tangguan and regular Chat. Clear the
+      // previous conversation before showing an empty state so an empty
+      // Tangguan session can never expose the old session's DOM.
+      if (messages) messages.innerHTML = '';
+      renderedConvId = null;
+      if (owner === 'create' && App.create && typeof App.create.renderTaskWelcome === 'function') {
+        welcome.style.display = 'flex';
+        messages.style.display = 'none';
+        composer.style.display = 'block';
+        App.create.renderTaskWelcome(welcome, conv);
+        return;
+      }
+      if (owner === 'tangguan' && App.tangguan && typeof App.tangguan.renderWelcome === 'function') {
+        welcome.style.display = 'flex';
+        messages.style.display = 'none';
+        composer.style.display = 'block';
+        App.tangguan.renderWelcome(welcome, conv);
+        return;
+      }
       welcome.style.display = 'flex';
       messages.style.display = 'none';
       composer.style.display = 'block';
       // 聊天修复 F：输入框不再移入欢迎区居中——composer 始终留在 .view 底部，欢迎页也统一贴底
       $('chatTitle').textContent = '糖包';
       messages.innerHTML = '';
+      App.chat.renderDefaultWelcome();
     },
 
     showChat() {
@@ -315,6 +825,19 @@
       welcome.style.display = 'none';
       messages.style.display = 'flex';
       composer.style.display = 'block';
+    },
+
+    renderDefaultWelcome() {
+      const welcome = $('welcome');
+      if (!welcome) return;
+      welcome.innerHTML = `<div class="welcome-logo"><img src="assets/logo.png" alt="糖包" /></div>
+        <h1 class="welcome-title">有什么可以帮忙的？</h1>
+        <p class="welcome-sub">我是糖包，你的全能 AI 助手</p>
+        <div class="quick-actions" id="quickActions"></div>
+        <div class="suggestions" id="suggestions"></div>`;
+      App.chat.renderQuickActions();
+      App.chat.renderSuggestions();
+      bindWelcomeActions();
     },
 
     renderSuggestions() {
@@ -335,6 +858,7 @@
       const wrap = document.createElement('div');
       wrap.className = 'msg ' + m.role;
       wrap.dataset.index = index;
+      if (m.id) wrap.dataset.messageId = m.id;
       if (m.role === 'assistant') {
         const thinkHtml = m.think
           ? `<div class="think-block" style="display:${(App.state.settings.thinkLevel || 'medium') !== 'off' ? 'block' : 'none'}">
@@ -350,7 +874,8 @@
           ? `<button class="version-switch" data-version="1" title="切换回答版本">${vIdx + 1}/${versions.length}</button>`
           : '';
         const webLabel = m.webSources ? (m.webSources + ' 个') : '多个';
-        const webHtml = (m.webSources || (App.state.web && m.role === 'assistant'))
+        const tangguan = isTangguanConv(App.chat.activeConv()) || isTangguanConversation(App.state.activeId);
+        const webHtml = !tangguan && (m.webSources || (App.state.web && m.role === 'assistant'))
           ? '<div class="web-indicator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>基于 ' + webLabel + '搜索来源</div>'
           : '';
         wrap.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
@@ -368,15 +893,22 @@
               </div>
             </div>
           </div>`;
+        if (m.streamStatus === 'failed' || m.streamStatus === 'cancelled') {
+          const actions = wrap.querySelector('.msg-actions');
+          if (actions) actions.insertAdjacentHTML('beforeend', '<button data-action="continue">Continue</button>');
+        }
         let bubbleHtml;
         try {
-          bubbleHtml = App.renderMarkdown(displayContent);
+          bubbleHtml = cachedMarkdown(displayContent, (m.id || index) + ':' + vIdx);
         } catch (e) {
           // 渲染异常时降级为纯文本 + 提示，保证消息不丢、不白屏
           bubbleHtml = '<div class="msg-error">内容渲染失败：' + App.escapeHtml(String((e && e.message) || e)) +
             '</div><pre class="bubble-fallback">' + App.escapeHtml(displayContent) + '</pre>';
         }
-        wrap.querySelector('.bubble').innerHTML = bubbleHtml;
+        const errorHtml = m.error && !displayContent
+          ? '<div class="msg-error">' + App.escapeHtml(String(m.error)) + '</div>'
+          : '';
+        wrap.querySelector('.bubble').innerHTML = errorHtml || bubbleHtml;
       } else {
         const imgHtml = (m.attachments && m.attachments.length)
           ? m.attachments.filter(a => a.type === 'image').map(a =>
@@ -403,28 +935,55 @@
     },
 
     renderMessages() {
-      if (streaming) {
-        // 流式进行中绝不重建列表：否则会清空实时流式气泡、丢失正在输出的回复
-        console.warn('[chat] renderMessages 被跳过：流式进行中（避免清空实时回复）', new Error().stack);
+      const messages = $('messages');
+      const conv = App.chat.activeConv();
+      if (!conv || !Array.isArray(conv.messages) || !conv.messages.length) {
+        App.chat.showWelcome();
+        App.chat.updateCtxBar();
         return;
       }
-      const conv = App.chat.activeConv();
-      if (!conv || !conv.messages.length) { App.chat.showWelcome(); App.chat.updateCtxBar(); return; }
+      // Keep the live bubble intact only while the currently visible
+      // conversation is the one streaming. A navigation to another surface
+      // must render that surface instead of carrying the old live DOM with it.
+      if (streaming && streamConvId === conv.id && renderedConvId === conv.id
+        && streamUi && streamUi.bubble && streamUi.bubble.isConnected
+        && streamUi.bubble.closest('#messages') === messages) {
+        return;
+      }
+      resetTangguanMessageWindow(conv);
       App.chat.showChat();
-      $('messages').innerHTML = '';
-      conv.messages.forEach((m, i) => {
+       messages.innerHTML = '';
+       const fragment = document.createDocumentFragment();
+       const start = Math.max(0, conv.messages.length - messageVisibleCount);
+       if (start > 0) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'btn-ghost mini tangguan-history-more';
+        more.textContent = '加载更早消息';
+         more.addEventListener('click', () => { messageVisibleCount += 50; App.chat.renderMessages(); });
+         fragment.appendChild(more);
+      }
+      conv.messages.slice(start).forEach((m, offset) => {
+        const i = start + offset;
         try {
-          $('messages').appendChild(App.chat.messageNode(m, i));
+           fragment.appendChild(App.chat.messageNode(m, i));
         } catch (e) {
           // 单条消息渲染失败不应清空整段对话：降级为纯文本气泡，保证不丢消息
           const fb = document.createElement('div');
           fb.className = 'msg ' + (m.role || 'assistant');
+          if (m.id) fb.dataset.messageId = m.id;
           const b = document.createElement('div'); b.className = 'bubble';
           b.textContent = (m.content != null ? m.content : '') + '';
           fb.appendChild(b);
-          $('messages').appendChild(fb);
+           fragment.appendChild(fb);
         }
-      });
+       });
+       messages.appendChild(fragment);
+      renderedConvId = conv.id;
+      if (streaming && streamConvId === conv.id && streamUi && streamUi.messageId) {
+        const liveNode = Array.from(messages.children).find((node) => node.dataset && node.dataset.messageId === streamUi.messageId);
+        if (liveNode) App.chat.bindStreamUi(streamUi, liveNode);
+      }
       App.chat.scrollBottom(true);
       App.ui.renderTopbarTitle();
       App.chat.updateCtxBar();
@@ -433,7 +992,13 @@
     // 渲染聊天上下文用量条（显示实际发送给模型的 token 数）
     // M12：统一构建发送给模型的系统提示内容（基础系统提示 + 智能体语气）；streamChat 与 updateCtxBar 共用，保证用量条与实际发送一致
     buildSystemContent(conv) {
-      const baseSys = (conv && conv.systemPrompt) || (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
+      const defaultSys = (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
+      // Tangguan character instructions are added by preparePrompt after this
+      // base prompt. Keep the shared Chat safety rules in front of them instead
+      // of allowing a character card to replace the default system prompt.
+      const baseSys = isTangguanConv(conv)
+        ? defaultSys
+        : ((conv && conv.systemPrompt) || defaultSys);
       let sc = baseSys;
       if (conv && conv.tone) sc += '\n\n# 语气要求\n请用「' + conv.tone + '」的语气回复用户。';
       return sc;
@@ -442,9 +1007,13 @@
     updateCtxBar() {
       const el = $('chatCtxBar'); if (!el) return;
       const conv = App.chat.activeConv();
-      if (!conv || !conv.messages) { if (el.style) el.style.display = 'none'; return; }
+      if (!conv || !conv.messages) { if (el.style) el.style.display = 'none'; contextBarKey = ''; return; }
       if (el.style) el.style.display = '';
-      const model = (conv && conv.model) || (App.getProvider('chat').model) || '';
+      const model = (conv && conv.model) || providerForConversation(conv).model || '';
+      const userMemory = isTangguanConv(conv) ? '' : (App.state.settings.userMemory || '');
+      const nextKey = contextBarStamp(conv, model, userMemory);
+      if (nextKey === contextBarKey) return;
+      contextBarKey = nextKey;
       const ctxWindow = App.context.contextWindowOf(model);
       const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
       const systemContent = App.chat.buildSystemContent(conv);
@@ -454,26 +1023,27 @@
         recentKeep: App.context.RECENT_KEEP_CHAT, systemContent, window: ctxWindow,
       });
       const tokens = App.context.messagesTokens(compact.finalMessages);
-      const userMemTok = App.context.estimateTokens(App.state.settings.userMemory || '');
+       const userMemTok = App.context.estimateTokens(isTangguanConv(conv) ? '' : userMemory);
       const bd = App.context.breakdownFromFinal(compact.finalMessages, userMemTok);
       if (App.context.renderUsage) App.context.renderUsage(el, tokens + userMemTok, ctxWindow, bd);
     },
 
     isNearBottom() {
-      const c = $('chatScroll');
+      const c = chatScrollNode();
       if (!c) return true;
       return c.scrollHeight - c.scrollTop - c.clientHeight < 60;
     },
     scrollBottom(force) {
-      const c = $('chatScroll');
+      const c = chatScrollNode();
       if (!c) return;
       // 仅在强制或用户已贴近底部时跟随，避免打断向上翻看
       if (force || App.chat.isNearBottom()) c.scrollTop = c.scrollHeight;
     },
 
-    appendAssistant() {
+    appendAssistant(initialContent) {
       const wrap = document.createElement('div');
       wrap.className = 'msg assistant';
+      const conv = App.chat.activeConv();
       wrap.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
         <div class="msg-body">
           <div class="msg-card">
@@ -487,8 +1057,14 @@
             </div>
           </div>
         </div>`;
+      const webIndicator = wrap.querySelector('.web-indicator');
+      if (isTangguanConv(conv) && webIndicator) webIndicator.remove();
       $('messages').appendChild(wrap);
+      if (initialContent) {
+        try { wrap.querySelector('.bubble').innerHTML = App.renderMarkdown(initialContent); } catch (_) { wrap.querySelector('.bubble').textContent = initialContent; }
+      }
       return {
+        root: wrap,
         bubble: wrap.querySelector('.bubble'),
         thinkBlock: wrap.querySelector('.think-block'),
         thinkBody: wrap.querySelector('.think-body'),
@@ -496,17 +1072,69 @@
       };
     },
 
-    async streamChat(conv, ui) {
-      const s = App.getProvider('chat');
+    bindStreamUi(ui, node) {
+      if (!ui || !node) return ui;
+      ui.root = node;
+      ui.bubble = node.querySelector('.bubble') || ui.bubble;
+      ui.thinkBlock = node.querySelector('.think-block') || ui.thinkBlock;
+      ui.thinkBody = node.querySelector('.think-body') || ui.thinkBody;
+      ui.actions = node.querySelector('.msg-actions') || ui.actions;
+      return ui;
+    },
+
+    async streamChat(conv, ui, options) {
+      const streamOwner = ownerForConversation(conv);
+      const providerModule = streamOwner === 'tangguan' || streamOwner === 'create' ? streamOwner : 'chat';
+      // Provider adapters all receive a chat request. The module name selects
+      // local credentials only; it is never sent as a gateway request kind.
+      const transportKind = 'chat';
+      const s = providerForConversation(conv);
+      const liveMessage = (options && options.liveMessage) || {
+        id: App.uid(),
+        role: 'assistant',
+        content: '',
+        think: '',
+        streamStatus: 'streaming',
+        requestId: 'chat_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
+        sequence: 0,
+        startedAt: Date.now(),
+      };
+      // Keep a durable placeholder before the first provider byte. A process
+      // crash or renderer reload can therefore show the partial answer rather
+      // than silently losing the assistant turn.
+      if (!conv.messages.includes(liveMessage)) conv.messages.push(liveMessage);
+      if (!liveMessage.id) liveMessage.id = App.uid();
+      streamUi = ui;
+      streamUi.convId = conv.id;
+      streamUi.messageId = liveMessage.id;
+      if (streamUi.root) streamUi.root.dataset.messageId = liveMessage.id;
+      liveMessage.streamStatus = 'streaming';
+      liveMessage.requestId = 'chat_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      conv.updatedAt = Date.now();
       if (!s.ref || !s.hasKey || !s.model) {
-        ui.bubble.innerHTML = '<div class="msg-error">尚未配置聊天 API。请点击左下角齿轮图标，在“默认”或“聊天”标签填入 API Base URL、Key 和 Model。</div>';
+        const errorText = '尚未配置当前模块 API。请在设置中为“' + (providerModule === 'tangguan' ? '糖馆' : providerModule === 'create' ? '糖创' : '聊天') + '”选择账户、模型和 API Key。';
+        liveMessage.streamStatus = 'failed';
+        liveMessage.error = errorText;
+        liveMessage.updatedAt = Date.now();
+        try { App.chat.persistConversation(conv); } catch (_) {}
+        ui.bubble.innerHTML = '<div class="msg-error">' + App.escapeHtml(errorText) + '</div>';
         ui.actions.style.display = 'flex';
-        return;
+        return { ok: false, code: 'provider_not_configured', error: errorText };
       }
+      App.chat.persistConversation(conv);
       const baseSys = App.chat.buildSystemContent(conv);
-      const userMemory = (App.state.settings.userMemory || '').trim();
+       const userMemory = isTangguanConv(conv) ? '' : (App.state.settings.userMemory || '').trim();
       // 聊天端享受用户长期记忆（差距 #4）：并入系统提示，与糖码后端注入方式一致
-      const systemContent = userMemory ? (baseSys + '\n\n# 用户长期记忆\n' + userMemory) : baseSys;
+      let systemContent = userMemory ? (baseSys + '\n\n# 用户长期记忆\n' + userMemory) : baseSys;
+      // Tangguan sessions receive only the selected local character and its
+      // worldbook. Retrieval is scoped by character and never overrides the
+      // base safety prompt.
+      if (isTangguanConv(conv) && App.tangguan && App.tangguan.preparePrompt) {
+        const lastUser = conv.messages.filter((item) => item.role === 'user').pop();
+        const query = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
+        const tangguanPrompt = await App.tangguan.preparePrompt(conv, query).catch(() => '');
+        if (tangguanPrompt) systemContent += '\n\n' + tangguanPrompt;
+      }
       // 对话级模型优先（智能体指定），否则用聊天默认模型；联网同理
       const model = (conv.model && s.models.includes(conv.model)) ? conv.model : s.model;
       // M12：智能体指定模型不可用时给出提示（按对话+模型去重，避免每次发送重复弹）
@@ -517,9 +1145,13 @@
           App.ui.toast('智能体指定模型 ' + conv.model + ' 不在当前账户模型中，已改用 ' + s.model);
         }
       }
-      const web = (conv.web != null) ? conv.web : App.state.web;
+      const web = isTangguanConv(conv) ? false : ((conv.web != null) ? conv.web : App.state.web);
       const AGENT_BASE = App.rt.agentBase(); // 本机随机端口，运行时取
-      const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
+      const allMsgs = conv.messages.filter((item) => item !== liveMessage).map(m => ({ role: m.role, content: isTangguanConv(conv) ? String(m.content || '') : App.chat.buildContent(m) }));
+      if (options && options.liveMessage) {
+        allMsgs.push({ role: 'assistant', content: App.chat.buildContent(options.liveMessage) });
+        allMsgs.push({ role: 'user', content: 'Continue the previous answer. Append only new information; do not repeat the existing answer.' });
+      }
       // 异步压缩（#7）：同步取 finalMessages 直接发送，压缩在后台跑，不阻塞本轮 send
       const ctxWindow = App.context.contextWindowOf(model);
       const compact = App.context.getCompactMessages({
@@ -541,7 +1173,7 @@
           if (newSummary) {
             conv.summary = newSummary;
             conv.summaryCount = compact.newSummaryCount;
-            App.persist();
+            App.chat.persistConversation(conv);
             App.chat.updateCtxBar();
             const compact2 = App.context.getCompactMessages({
               messages: allMsgs, summary: conv.summary, summaryCount: conv.summaryCount || 0,
@@ -557,7 +1189,7 @@
             if (newSummary) {
               conv.summary = newSummary;
               conv.summaryCount = compact.newSummaryCount;
-              App.persist();
+              App.chat.persistConversation(conv);
               App.chat.updateCtxBar();
               App.ui.toast('已自动压缩较早对话上下文');
             }
@@ -566,8 +1198,8 @@
         }
       }
       // /context 明细：system=系统提示，memory=用户长期记忆（内联进系统提示，单独列为 memory 段），history=对话+摘要
-      const cmSys = App.context.estimateTokens(baseSys);
-      const cmMem = App.context.estimateTokens(userMemory);
+       const cmSys = App.context.estimateTokens(systemContent);
+       const cmMem = App.context.estimateTokens(userMemory);
       const cmTotal = App.context.messagesTokens(finalMessages);
       const chatBd = { system: cmSys, memory: cmMem, history: Math.max(0, cmTotal - cmSys - cmMem) };
       // G6：用量条阈值用实际发送模型（conv.model 优先），而非聊天默认 s.model
@@ -577,6 +1209,11 @@
         stream: true,
         messages: finalMessages,
       };
+       // Tangguan is tool-free. Its local policy stays on the conversation;
+       // only the provider-compatible empty tool list is sent.
+       if (isTangguanConv(conv)) {
+          payload.tools = [];
+       }
       if (typeof conv.temperature === 'number') payload.temperature = conv.temperature;
       if (typeof conv.topP === 'number') payload.top_p = conv.topP;
       // 深度思考：按模型自适应注入真实 API 参数
@@ -614,15 +1251,115 @@
           }
         }
       }
-      let acc = '', thinkAcc = '', started = false, thinkOpen = false;
+      let acc = (options && options.liveMessage && options.liveMessage.content) || '';
+      let thinkAcc = (options && options.liveMessage && options.liveMessage.think) || '';
+      let started = !!(acc || thinkAcc), thinkOpen = false;
       const wantThink = (App.state.settings.thinkLevel || 'medium') !== 'off';
+      const providerSequences = { content: -1, reasoning: -1 };
+      const seenProviderEvents = new Set();
+      const acceptProviderEvent = (json, channel, fragment) => {
+        const source = json && typeof json === 'object' ? json : {};
+        // `event_id` often identifies the whole stream rather than a delta.
+        // Only explicit sequence fields are eligible for duplicate filtering.
+        const value = source.sequence != null ? source.sequence : source.seq;
+        if (value == null || value === '') return true;
+        const marker = channel + ':' + String(value) + ':' + String(fragment == null ? '' : fragment);
+        if (seenProviderEvents.has(marker)) return false;
+        const number = Number(value);
+        if (Number.isFinite(number) && number < providerSequences[channel]) return false;
+        seenProviderEvents.add(marker);
+        if (Number.isFinite(number)) providerSequences[channel] = number;
+        return true;
+      };
+      let lastPartialPersistAt = 0;
+      let pendingPersistBytes = 0;
+      let lastObservedContentLength = String(acc || '').length;
+      let lastObservedThinkLength = String(thinkAcc || '').length;
+      const renderedStreamText = { bubble: null, content: '', contentNode: null, thinkBody: null, think: '', thinkNode: null };
+      const appendStreamText = (node, value, key) => {
+        if (!node) return;
+        const nodeKey = key === 'content' ? 'bubble' : 'thinkBody';
+        const textNodeKey = key === 'content' ? 'contentNode' : 'thinkNode';
+        if (renderedStreamText[nodeKey] !== node) {
+          renderedStreamText[nodeKey] = node;
+          renderedStreamText[key] = '';
+          renderedStreamText[textNodeKey] = null;
+          node.textContent = '';
+        }
+        const previous = renderedStreamText[key];
+        if (value === previous) return;
+        // Reuse one text node throughout the stream. Appending a node for each
+        // delta makes long responses increasingly expensive to layout and
+        // leaves hundreds of detached fragments for the final Markdown pass.
+        if (!renderedStreamText[textNodeKey]) {
+          renderedStreamText[textNodeKey] = document.createTextNode('');
+          node.appendChild(renderedStreamText[textNodeKey]);
+        }
+        renderedStreamText[textNodeKey].nodeValue = value;
+        renderedStreamText[key] = value;
+      };
+      const updateLiveMessage = (status) => {
+        liveMessage.content = acc;
+        liveMessage.think = thinkAcc;
+        liveMessage.streamStatus = status || 'partial';
+        liveMessage.updatedAt = Date.now();
+        conv.updatedAt = liveMessage.updatedAt;
+        const contentLength = String(liveMessage.content || '').length;
+        const thinkLength = String(liveMessage.think || '').length;
+        pendingPersistBytes += Math.max(0, contentLength - lastObservedContentLength);
+        pendingPersistBytes += Math.max(0, thinkLength - lastObservedThinkLength);
+        lastObservedContentLength = contentLength;
+        lastObservedThinkLength = thinkLength;
+      };
+      const persistPartial = (status, force) => {
+        updateLiveMessage(status);
+        // Rendering may happen every 120 ms; storage is intentionally less
+        // frequent so a long stream does not turn into a SQLite write storm.
+        if (force || lastPartialPersistAt === 0 || liveMessage.updatedAt - lastPartialPersistAt >= 1000 || pendingPersistBytes >= 16384 || status === 'completed' || status === 'failed' || status === 'cancelled') {
+          lastPartialPersistAt = liveMessage.updatedAt;
+          pendingPersistBytes = 0;
+          liveMessage.sequence += 1;
+          try {
+            if (isModuleOwner(streamOwner) && App.services && App.services.moduleSessions) {
+              enqueueModuleWrite(streamOwner, () => App.services.moduleSessions.flushPartial({
+                module: streamOwner,
+                conversationId: conv.id,
+                message: liveMessage,
+                conversationUpdatedAt: conv.updatedAt,
+              })).catch(() => { ensureModuleRuntime().lastError = 'module_session_partial_save_failed'; });
+            } else {
+              App.persist({ flushPartial: true, conversationId: conv.id, messageId: liveMessage.id });
+            }
+          } catch (_) {}
+        }
+      };
       // 流式渲染节流：把「整段 markdown 重渲染 + 滚动」合并到最多每 ~120ms 一次，
       // 避免长回复每个 delta 都重解析全文导致 O(n²) 卡顿；流末 flushNow 保证终态正确。
       let flushTimer = null;
       const flushRender = () => {
-        if (acc) ui.bubble.innerHTML = App.renderMarkdown(acc);
-        if (wantThink && thinkAcc) { ui.thinkBlock.style.display = 'block'; ui.thinkBody.innerHTML = App.renderMarkdown(thinkAcc); }
-        App.chat.scrollBottom();
+        const renderStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
+        let canRender = false;
+        try {
+          canRender = !!(ui && ui.bubble && ui.bubble.isConnected && activeConversationId(streamOwner) === conv.id);
+          const shouldFollow = canRender && App.chat.isNearBottom();
+          if (canRender) {
+            // Do not parse the entire growing Markdown document on every delta.
+            // The completed message is rendered as Markdown after the stream.
+            appendStreamText(ui.bubble, acc, 'content');
+            if (wantThink && thinkAcc) {
+              ui.thinkBlock.style.display = 'block';
+              appendStreamText(ui.thinkBody, thinkAcc, 'think');
+            }
+          }
+          persistPartial('partial');
+           if (shouldFollow) App.chat.scrollBottom(true);
+        } finally {
+          if (App.perf) App.perf.measure('streamRenderMs', renderStarted, {
+            rendered: canRender,
+            contentLength: acc.length,
+            thinkLength: thinkAcc.length,
+          });
+        }
       };
       const scheduleFlush = () => {
         if (flushTimer) return;
@@ -638,14 +1375,39 @@
         try { flushNow(); } catch (e) {}
         if (!acc && thinkAcc) { acc = thinkAcc; thinkAcc = ''; }
         if (acc || thinkAcc) {
-          conv.messages.push({ role: 'assistant', content: acc, think: thinkAcc, webSources: webSourcesCount });
+          liveMessage.content = acc;
+          liveMessage.think = thinkAcc;
+          liveMessage.webSources = webSourcesCount;
+          liveMessage.streamStatus = errText ? 'failed' : 'completed';
+          liveMessage.error = errText ? String(errText).slice(0, 240) : '';
         } else if (errText) {
-          conv.messages.push({ role: 'assistant', content: '⚠️ ' + String(errText).slice(0, 240), think: '', webSources: webSourcesCount });
+          liveMessage.content = '⚠️ ' + String(errText).slice(0, 240);
+          liveMessage.think = '';
+          liveMessage.webSources = webSourcesCount;
+          liveMessage.streamStatus = 'failed';
+          liveMessage.error = String(errText).slice(0, 240);
+        } else {
+          liveMessage.streamStatus = 'failed';
+          liveMessage.error = 'model_empty_result';
         }
         conv.updatedAt = Date.now();
+        persistPartial(liveMessage.streamStatus, true);
+        if (ui && ui.bubble && ui.bubble.isConnected && activeConversationId(streamOwner) === conv.id) {
+          if (acc) {
+            try { ui.bubble.innerHTML = cachedMarkdown(acc, liveMessage.id + ':stream-final'); }
+            catch (_) { ui.bubble.textContent = acc; }
+            if (errText) ui.bubble.insertAdjacentHTML('beforeend', '<div class="msg-error">' + App.escapeHtml(String(errText).slice(0, 240)) + '</div>');
+          } else if (errText) {
+            ui.bubble.innerHTML = '<div class="msg-error">' + App.escapeHtml(String(errText).slice(0, 240)) + '</div>';
+          }
+        }
+        if (errText && ui.actions && !ui.actions.querySelector('[data-action="continue"]')) {
+          ui.actions.insertAdjacentHTML('beforeend', '<button data-action="continue">Continue</button>');
+          ui.actions.style.display = 'flex';
+        }
       };
       const appendDelta = (text, isThink) => {
-        if (!started) { ui.bubble.innerHTML = ''; started = true; }
+        if (!started) { ui.bubble.textContent = ''; started = true; }
         if (isThink) { thinkAcc += text; } else { acc += text; }
         scheduleFlush();
       };
@@ -668,8 +1430,18 @@
         }
       };
       try {
-        // 聊天修复 E：首字节看门狗——fetch 阶段挂起（网络半开）30s 后终止，走外层兜底保存
-        const res = await raceTimeout(App.rt.gatewayFetch({ ref: s.ref, kind: 'chat', telemetry: { scope: 'chat', callType: 'chat' }, payload }), STREAM_FIRST_BYTE_MS);
+        // 聊天修复 E：首字节看门狗——fetch 阶段挂起（网络半开）30s 后终止，走外层兜底保存。
+        // The renderer sends one canonical gateway request. `gatewayFetch` is
+        // the only boundary that strips renderer-only policy fields and adds
+        // the local auth token; rebuilding the request here used to reintroduce
+        // module aliases such as `create`/`tangguan` in older callers.
+        const res = await raceTimeout(App.rt.gatewayFetch({
+          ref: s.ref,
+          kind: 'chat',
+          telemetry: { scope: providerModule, callType: 'chat' },
+          payload,
+          signal: options && options.signal,
+        }), STREAM_FIRST_BYTE_MS);
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
           ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 240))}</div>`;
@@ -702,15 +1474,17 @@
             let json;
             try { json = JSON.parse(data); } catch (e) { continue; }
             const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
-            if (delta.reasoning_content) {
-              thinkAcc += delta.reasoning_content;
+            if (delta.reasoning_content && acceptProviderEvent(json, 'reasoning', delta.reasoning_content)) {
+              appendDelta(delta.reasoning_content, true);
               if (wantThink) ui.thinkBlock.style.display = 'block';
-              started = true;
-              scheduleFlush();
             }
-            if (delta.content) feedContent(delta.content);
+            if (delta.content && acceptProviderEvent(json, 'content', delta.content)) feedContent(delta.content);
           }
         }
+        // Flush a split UTF-8 code point before parsing the final SSE/JSON line.
+        // Without this, a response ending in a multi-byte character can lose
+        // its last character when the provider closes the stream.
+        buf += decoder.decode();
         // 兼容中转站：流未以换行结尾，或根本不返回 SSE（单条 JSON）
         if (buf.trim()) {
           const t = buf.trim();
@@ -720,8 +1494,8 @@
               try {
                 const json = JSON.parse(data);
                 const d = (json.choices && json.choices[0] && json.choices[0].delta) || {};
-                if (d.reasoning_content) { thinkAcc += d.reasoning_content; if (wantThink) ui.thinkBlock.style.display = 'block'; started = true; scheduleFlush(); }
-                if (d.content) feedContent(d.content);
+                if (d.reasoning_content && acceptProviderEvent(json, 'reasoning', d.reasoning_content)) { appendDelta(d.reasoning_content, true); if (wantThink) ui.thinkBlock.style.display = 'block'; }
+                if (d.content && acceptProviderEvent(json, 'content', d.content)) feedContent(d.content);
               } catch (e) {}
             }
           } else {
@@ -729,7 +1503,7 @@
             try {
               const json = JSON.parse(t);
               const ch = (json.choices && json.choices[0]) || {};
-              if (ch.message && ch.message.reasoning_content) { thinkAcc += ch.message.reasoning_content; if (wantThink) ui.thinkBlock.style.display = 'block'; started = true; scheduleFlush(); }
+              if (ch.message && ch.message.reasoning_content) { appendDelta(ch.message.reasoning_content, true); if (wantThink) ui.thinkBlock.style.display = 'block'; }
               if (ch.message && ch.message.content) feedContent(ch.message.content);
               else if (ch.delta && ch.delta.content) feedContent(ch.delta.content);
             } catch (e) {}
@@ -750,7 +1524,19 @@
       }
       // 聊天修复 A：统一走 saveAnswer 兜底保存（flushNow 已内置 try/catch）
       saveAnswer();
-      if (!acc && !thinkAcc) ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
+      if (acc) {
+        try {
+          if (ui.bubble && ui.bubble.isConnected) ui.bubble.innerHTML = cachedMarkdown(acc, liveMessage.id + ':stream-final');
+        } catch (_) {
+          if (ui.bubble && ui.bubble.isConnected) ui.bubble.textContent = acc;
+        }
+      } else if (!thinkAcc) {
+        ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
+      }
+      if (wantThink && thinkAcc && ui.thinkBody && ui.thinkBody.isConnected) {
+        try { ui.thinkBody.innerHTML = cachedMarkdown(thinkAcc, liveMessage.id + ':stream-think'); } catch (_) { ui.thinkBody.textContent = thinkAcc; }
+        ui.thinkBlock.style.display = 'block';
+      }
       ui.actions.style.display = 'flex';
     },
 
@@ -758,7 +1544,7 @@
     async compactNow() {
       const conv = App.chat.activeConv();
       if (!conv || !conv.messages.length) return;
-      const s = App.getProvider('chat');
+      const s = providerForConversation(conv);
       if (!s.ref || !s.hasKey || !s.model) { App.ui.toast('请先配置聊天 API'); return; }
       App.ui.toast('正在压缩上下文…');
       const allMsgs = conv.messages.map(m => ({ role: m.role, content: App.chat.buildContent(m) }));
@@ -766,7 +1552,7 @@
       if (!summary) { App.ui.toast('压缩失败，稍后再试'); return; }
       conv.summary = summary;
       conv.summaryCount = Math.max(0, allMsgs.length - App.context.RECENT_KEEP_CHAT);
-      App.persist();
+      App.chat.persistConversation(conv);
       App.chat.updateCtxBar();
       App.ui.toast('已压缩当前对话上下文');
     },
@@ -788,6 +1574,23 @@
       App.ui.toast('已写入用户长期记忆');
     },
 
+    async continueGeneration(index) {
+      if (streaming) { App.ui.toast('A response is already streaming.'); return; }
+      const conv = App.chat.activeConv();
+      const message = conv && conv.messages[index];
+      if (!conv || !message || message.role !== 'assistant' || !['failed', 'cancelled'].includes(message.streamStatus)) return;
+      const ui = App.chat.appendAssistant(message.content || '');
+      streaming = true; streamConvId = conv.id; App.chat.setSending(true);
+      try {
+        await App.chat.streamChat(conv, ui, { liveMessage: message });
+      } finally {
+        streaming = false; streamConvId = null; App.chat.setSending(false);
+        App.chat.persistConversation(conv); App.ui.renderSidebar();
+        if (isCurrentConversation(conv)) App.chat.renderMessages();
+        App.services.float.refresh();
+      }
+    },
+
     async send() {
       const text = $('input').value.trim();
       // /memory 命令：写入用户长期记忆（不进入对话）
@@ -800,12 +1603,32 @@
       if (!text && !atts.length) return;
       // 聊天修复 E：流式期间不再静默吞消息——明确提示忙碌来源，输入内容原样保留
       if (streaming) {
-        const busySame = streamConvId === (App.state.activeId || null);
+        // Legacy Chat contract: const busySame = streamConvId === (App.state.activeId || null);
+        const legacyBusySame = streamConvId === (App.state.activeId || null);
+        const busySame = isModuleOwner(currentOwner()) ? streamConvId === activeConversationId(currentOwner()) : legacyBusySame;
         App.ui.toast(busySame ? '当前对话仍在回复中，请稍候或等待完成后重试' : '另一个对话仍在回复中，请稍候');
         return;
       }
       let conv = App.chat.activeConv();
-      if (!conv) conv = App.chat.newConversation();
+      if (!conv) {
+        const owner = currentOwner();
+        if (owner === 'tangguan') {
+          // A module surface can be empty on first entry. Never let the
+          // shared composer fall back to the regular Chat store in that case.
+          conv = App.tangguan && typeof App.tangguan.ensureSession === 'function'
+            ? await App.tangguan.ensureSession()
+            : null;
+        } else if (owner === 'create') {
+          conv = App.chat.newConversation(null, { stay: 'create', originModule: 'create' });
+        } else {
+          conv = App.chat.newConversation();
+        }
+      }
+      if (!conv) return;
+      if (isTangguanConv(conv) && atts.length) {
+        App.ui.toast('糖馆独立会话不支持图片或文件附件');
+        return;
+      }
       // M7：编辑上一条消息 → 截断到该条（含）、替换内容、重新生成（复用 regen 骨架）
       // M9：编辑后生成直接覆盖（问题已变，旧回答无对比价值；版本切换仅用于「重新生成」按钮）
       const editIdx = App.chat.editingIndex;
@@ -819,7 +1642,7 @@
         $('input').value = ''; App.chat.autoSize();
         App.chat.clearAttachments();
         App.chat.updateEditBanner();
-        App.persist(); App.ui.renderSidebar();
+        App.chat.persistConversation(conv); App.ui.renderSidebar();
         App.chat.renderMessages();
         const ui = App.chat.appendAssistant();
         App.chat.scrollBottom(true);
@@ -830,8 +1653,12 @@
           // 聊天修复 A：编辑重生成同样必须复位（防 streaming 卡死吞消息）
           // 聊天修复 E：只重渲染流归属会话——期间若已切到其它对话，不打扰当前视图（数据已 persist，切回时 activate() 会重绘）
           streaming = false; streamConvId = null; App.chat.setSending(false);
-          App.persist(); App.ui.renderSidebar();
-          if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+          App.chat.persistConversation(conv); App.ui.renderSidebar();
+          if (isModuleOwner(ownerForConversation(conv))) {
+            if (isCurrentConversation(conv)) App.chat.renderMessages(); else App.chat.updateCtxBar();
+          } else {
+            if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+          }
           App.services.float.refresh();
         }
         return;
@@ -839,12 +1666,17 @@
       const userMsg = { role: 'user', content: text };
       if (atts.length) userMsg.attachments = atts;
       conv.messages.push(userMsg);
-      if (conv.messages.length === 1) conv.title = (text || (atts[0] && atts[0].name) || '新对话').slice(0, 20);
+      if (conv.messages.filter((item) => item && item.role === 'user').length === 1
+        && conv.titleMode !== 'manual'
+        && (!conv.title || conv.title === '新对话' || conv.title === '新会话')) {
+        conv.title = (text || (atts[0] && atts[0].name) || '新会话').replace(/\s+/g, ' ').trim().slice(0, 24) || '新会话';
+        conv.titleMode = 'auto';
+      }
       conv.updatedAt = Date.now();
       $('input').value = ''; App.chat.autoSize();
-      try { localStorage.removeItem('tb_draft_' + App.state.activeId); } catch (e) {}
+      try { localStorage.removeItem('tb_draft_' + conv.id); } catch (e) {}
       App.chat.clearAttachments();
-      App.persist(); App.ui.renderSidebar();
+      App.chat.persistConversation(conv); App.ui.renderSidebar();
       App.chat.showChat(); App.ui.renderTopbarTitle();
       $('messages').appendChild(App.chat.messageNode(userMsg, 0));
       const ui = App.chat.appendAssistant();
@@ -856,8 +1688,12 @@
         // 聊天修复 A：无论流式是否抛错都复位 streaming + 保存 + 重渲染（防卡死吞消息）
         // 聊天修复 E：只重渲染流归属会话（切走后不打扰当前视图）
         streaming = false; streamConvId = null; App.chat.setSending(false);
-        App.persist(); App.ui.renderSidebar();
-        if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        App.chat.persistConversation(conv); App.ui.renderSidebar();
+        if (isModuleOwner(ownerForConversation(conv))) {
+          if (isCurrentConversation(conv)) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        } else {
+          if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        }
         App.services.float.refresh();
       }
     },
@@ -897,7 +1733,7 @@
         : (am.content != null ? [am.content] : []);
       // remove assistant and all subsequent
       conv.messages = conv.messages.slice(0, index);
-      App.persist();
+      App.chat.persistConversation(conv);
       App.chat.renderMessages();
       // re-stream
       const ui = App.chat.appendAssistant();
@@ -908,8 +1744,12 @@
         // 聊天修复 A：流式异常也必须复位（防 streaming 卡死）
         // 聊天修复 E：只重渲染流归属会话（切走后不打扰当前视图）
         streaming = false; streamConvId = null; App.chat.setSending(false);
-        App.persist(); App.ui.renderSidebar();
-        if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        App.chat.persistConversation(conv); App.ui.renderSidebar();
+        if (isModuleOwner(ownerForConversation(conv))) {
+          if (isCurrentConversation(conv)) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        } else {
+          if (App.state.activeId === conv.id) App.chat.renderMessages(); else App.chat.updateCtxBar();
+        }
         App.services.float.refresh();
       }
       // M9：新回复挂 versions（旧版本 + 新内容，上限 5 版）
@@ -920,7 +1760,7 @@
         last.versions = v;
         last.versionIdx = v.length - 1;
       }
-      App.persist(); App.ui.renderSidebar(); App.chat.renderMessages();
+      App.chat.persistConversation(conv); App.ui.renderSidebar(); App.chat.renderMessages();
       App.services.float.refresh();
     },
 
@@ -987,10 +1827,11 @@
     onShow() {
       // 恢复当前会话的输入框草稿
       try {
-        const draft = localStorage.getItem('tb_draft_' + App.state.activeId) || '';
+        const draft = localStorage.getItem('tb_draft_' + activeConversationId(currentOwner())) || '';
         const inp = $('input');
         if (inp) { inp.value = draft; App.chat.autoSize(); App.chat.updateSendEnabled(); }
       } catch (e) {}
+      flushDraft();
       App.chat.renderMessages();
       App.ui.renderTopbarTitle();
       App.ui.syncModelSelect();
@@ -1005,10 +1846,14 @@
       App.chat.syncImgBtn();
 
       $('input').addEventListener('input', () => {
+        const inputStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
         App.chat.autoSize();
         App.chat.updateSendEnabled();
-        try { localStorage.setItem('tb_draft_' + App.state.activeId, $('input').value); } catch (e) {}
+        scheduleDraft();
+        if (App.perf) App.perf.measure('inputHandlerMs', inputStarted, { valueLength: $('input').value.length });
       });
+      $('input').addEventListener('blur', flushDraft);
+      window.addEventListener('beforeunload', flushDraft);
       $('input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); App.chat.send(); }
         else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); App.chat.send(); }
@@ -1035,6 +1880,12 @@
         attachInput.addEventListener('change', () => {
           const files = attachInput.files ? Array.from(attachInput.files) : [];
           if (!files.length) return;
+          const conv = App.chat.activeConv();
+          if (isTangguanConv(conv)) {
+            attachInput.value = '';
+            App.ui.toast('糖馆独立会话不支持图片或文件附件');
+            return;
+          }
           files.forEach((file) => {
             const reader = new FileReader();
             reader.onload = () => {
@@ -1114,19 +1965,7 @@
 
       // 深度思考 / 联网搜索开关在 ui.js init 中统一绑定，避免重复监听导致的双切换
 
-      $('quickActions').addEventListener('click', (e) => {
-        const b = e.target.closest('[data-prompt]');
-        if (!b) return;
-        $('input').value = b.dataset.prompt; App.chat.autoSize(); $('input').focus();
-        App.chat.updateSendEnabled();
-      });
-      $('suggestions').addEventListener('click', (e) => {
-        const b = e.target.closest('[data-i]');
-        if (!b) return;
-        const s = SUGGESTIONS[+b.dataset.i];
-        $('input').value = s.prompt; App.chat.autoSize(); $('input').focus();
-        App.chat.updateSendEnabled();
-      });
+      bindWelcomeActions();
 
       // message actions
       $('messages').addEventListener('click', (e) => {
@@ -1168,10 +2007,12 @@
             const bubble = card && card.querySelector('.bubble');
             if (bubble) bubble.innerHTML = App.renderMarkdown(m.versions[m.versionIdx] || '');
             vs.textContent = (m.versionIdx + 1) + '/' + m.versions.length;
-            App.persist();
+            App.chat.persistConversation(conv);
           }
           return;
         }
+        const continuation = e.target.closest('[data-action="continue"]');
+        if (continuation) { App.chat.continueGeneration(idx); return; }
         const regen = e.target.closest('[data-action="regen"]');
         if (regen) { App.chat.regen(idx); return; }
         const del = e.target.closest('[data-action="delete"]');

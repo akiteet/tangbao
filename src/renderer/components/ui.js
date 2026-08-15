@@ -4,6 +4,21 @@
 
   const $ = (id) => document.getElementById(id);
   let editingModuleId = null; // 自定义模块编辑器状态：null=新增，有值=编辑该 id
+  const HISTORY_INITIAL_COUNT = 100;
+  const HISTORY_PAGE_SIZE = 100;
+
+  function conversationSearchStamp(conversation) {
+    const item = conversation || {};
+    const messages = Array.isArray(item.messages) ? item.messages : [];
+    const last = messages[messages.length - 1] || {};
+    return [
+      Number(item.updatedAt) || 0,
+      messages.length,
+      last.id || '',
+      String(last.content || '').length,
+      String(last.think || '').length,
+    ].join('|');
+  }
 
   function groupLabel(ts) {
     const d = new Date(ts), now = new Date();
@@ -32,25 +47,225 @@
     return raw || code || fallback || '数据目录操作失败。';
   }
 
+  async function persistAndVerify() {
+    const result = App.persist();
+    if (!result || result.ok === false) return result || { ok: false, code: 'state_persist_failed' };
+    const pending = App.__persistencePromise;
+    if (pending && typeof pending.then === 'function') {
+      try {
+        const response = await pending;
+        if (response && response.ok === false) return response;
+      } catch (error) {
+        return { ok: false, code: 'state_persist_failed', error: error && error.message ? error.message : String(error) };
+      }
+    }
+    const status = App.__persistence;
+    if (status && status.status === 'failed' && Number(status.revision) === Number(result.revision)) {
+      return { ok: false, code: status.code || 'state_persist_failed', error: status.error || '' };
+    }
+    return { ok: true, revision: result.revision };
+  }
+
+  function cloneValue(value) {
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
+  }
+
+  function accountModelNames(account) {
+    if (!account || typeof account !== 'object') return [];
+    const source = Array.isArray(account.models)
+      ? account.models
+      : (account.model ? [account.model] : []);
+    return source.map((item) => typeof item === 'string' ? item : item && item.name)
+      .filter(Boolean)
+      .map((item) => String(item));
+  }
+
+  const MODEL_MODULES = new Set(['chat', 'create', 'tangguan']);
+
+  function currentModelModule() {
+    const surface = App.chat && typeof App.chat.surface === 'function' ? App.chat.surface() : null;
+    const surfaceOwner = surface && String(surface.owner || '').toLowerCase();
+    if (MODEL_MODULES.has(surfaceOwner)) return surfaceOwner;
+    const view = App.state && String(App.state.view || '').toLowerCase();
+    return MODEL_MODULES.has(view) ? view : 'chat';
+  }
+
+  function moduleConversation(module) {
+    const conv = App.chat && typeof App.chat.activeConv === 'function' ? App.chat.activeConv() : null;
+    if (!conv) return null;
+    if (module === 'create') return conv.originModule === 'create' ? conv : null;
+    if (module === 'tangguan') return conv.originModule === 'tangguan' || !!conv.tangguanCharacterId ? conv : null;
+    return conv.originModule === 'create' || conv.originModule === 'tangguan' || conv.tangguanCharacterId ? null : conv;
+  }
+
   App.ui = {
     $,
     groupLabel,
+    _conversationSearchCache: new Map(),
+    _historyVisibleCount: HISTORY_INITIAL_COUNT,
+
+    imageCapabilitiesFor(model, options) {
+      const api = App.ImageCapabilities;
+      if (!api || typeof api.resolve !== 'function') return null;
+      const opts = options && typeof options === 'object' ? options : {};
+      const provider = App.getProvider ? App.getProvider('image') : {};
+      const targetModel = String(model || provider.model || '').trim();
+      const profile = opts.config || provider.profile || {};
+      const settings = App.state && App.state.settings ? App.state.settings : {};
+      return api.resolve(opts.apiBase || provider.apiBase || '', targetModel, {
+        config: profile,
+        store: settings.imageCapabilities || {},
+      });
+    },
+
+    learnImageCapabilities(errorText, model, options) {
+      const api = App.ImageCapabilities;
+      if (!api || typeof api.learnFromError !== 'function') return null;
+      const provider = App.getProvider ? App.getProvider('image') : {};
+      const settings = App.state && App.state.settings ? App.state.settings : {};
+      const next = api.learnFromError(options && options.apiBase || provider.apiBase || '', model || provider.model || '', errorText, {
+        config: options && options.config || provider.profile || {},
+        store: settings.imageCapabilities || {},
+      });
+      if (settings) settings.imageCapabilities = typeof api.serialize === 'function' ? api.serialize() : settings.imageCapabilities;
+      if (App.persist) App.persist();
+      return next;
+    },
+
+    moduleProviderMarkup(module) {
+      const name = String(module || 'chat');
+      const settings = App.state && App.state.settings ? App.state.settings : {};
+      const providers = settings.providers || {};
+      const selected = providers[name] && typeof providers[name] === 'object'
+        ? providers[name] : (providers.default || {});
+      const accounts = Array.isArray(settings.accounts) ? settings.accounts : [];
+      const configuredAccountId = String(selected.accountId || '__default__');
+      const accountId = configuredAccountId === '__default__' ? '__default__' : configuredAccountId;
+      const resolvedAccountId = accountId === '__default__' ? (settings.defaultAccountId || '') : accountId;
+      const accountOptions = [
+        `<option value="__default__"${accountId === '__default__' ? ' selected' : ''}>默认账户</option>`,
+        ...accounts.map((account) => `<option value="${App.escapeHtml(account.id || '')}"${account.id === accountId ? ' selected' : ''}>${App.escapeHtml(account.name || account.id || '未命名账户')}</option>`),
+      ];
+      if (selected.accountId === '__custom__') accountOptions.push(`<option value="__custom__" selected>自定义接口</option>`);
+      let modelNames = [];
+      if (selected.accountId === '__custom__') modelNames = selected.model ? [selected.model] : [];
+      else {
+        const account = accounts.find((item) => item && item.id === resolvedAccountId);
+        modelNames = accountModelNames(account);
+      }
+      let effectiveModel = '';
+      let effectiveModels = [];
+      try {
+        const effective = App.getProvider && App.getProvider(name);
+        if (effective) {
+          if (effective.model) effectiveModel = effective.model;
+          if (Array.isArray(effective.models)) effectiveModels = effective.models.filter(Boolean);
+        }
+      } catch (_) {}
+      // Older snapshots may have a module provider entry but no normalized
+      // account/model list yet. Use the resolved provider as a display-only
+      // fallback so Tangguan can still select the model immediately after boot.
+      if (!modelNames.length && effectiveModels.length) modelNames = effectiveModels;
+      const activeModel = selected.model && modelNames.includes(selected.model)
+        ? selected.model
+        : (effectiveModel && modelNames.includes(effectiveModel) ? effectiveModel : (modelNames[0] || selected.model || ''));
+      const modelOptions = modelNames.length
+        ? modelNames.map((model) => `<option value="${App.escapeHtml(model)}"${model === activeModel ? ' selected' : ''}>${App.escapeHtml(model)}</option>`).join('')
+        : '<option value="">未配置模型</option>';
+      return `<div class="module-provider-controls" data-module-provider="${App.escapeHtml(name)}"><select class="module-provider-account" data-module-provider-account title="选择账户">${accountOptions.join('')}</select><select class="module-provider-model" data-module-provider-model title="选择模型">${modelOptions}</select></div>`;
+    },
+
+    bindModuleProvider(root, module, onChange) {
+      const host = root || document;
+      const name = String(module || 'chat');
+      const provider = () => {
+        App.state.settings.providers = App.state.settings.providers || {};
+        return App.state.settings.providers[name] || (App.state.settings.providers[name] = { accountId: '__default__', apiBase: '', model: '' });
+      };
+      host.querySelectorAll(`[data-module-provider="${name}"]`).forEach((wrap) => {
+        const account = wrap.querySelector('[data-module-provider-account]');
+        const model = wrap.querySelector('[data-module-provider-model]');
+        if (account) account.addEventListener('change', () => {
+          const next = provider();
+          next.accountId = account.value || '__default__';
+          if (next.accountId !== '__custom__') next.apiBase = '';
+          const resolvedAccountId = next.accountId === '__default__'
+            ? (App.state.settings.defaultAccountId || '')
+            : next.accountId;
+          const selected = App.state.settings.accounts && App.state.settings.accounts.find((item) => item.id === resolvedAccountId);
+          const names = accountModelNames(selected);
+          next.model = next.accountId === '__custom__' ? next.model : (names[0] || '');
+          App.persist();
+          if (typeof onChange === 'function') onChange();
+        });
+        if (model) model.addEventListener('change', () => {
+          provider().model = model.value || '';
+          App.persist();
+          if (typeof onChange === 'function') onChange();
+        });
+      });
+    },
+
+    modelModule() {
+      return currentModelModule();
+    },
+
+    scheduleSidebarRender() {
+      if (App.ui._sidebarFrame) return;
+      const render = () => {
+        App.ui._sidebarFrame = 0;
+        App.ui.renderSidebar();
+      };
+      if (typeof window.requestAnimationFrame === 'function') App.ui._sidebarFrame = window.requestAnimationFrame(render);
+      else App.ui._sidebarFrame = setTimeout(render, 0);
+    },
 
     renderSidebar() {
       const list = $('historyList');
+      if (!list || !App.state) return;
       const q = ($('searchInput').value || '').trim().toLowerCase();
       // M7：全文搜索——q 非空时匹配标题 + 消息内容（含深度思考文本），命中对话显示命中条数徽标
-      let convs = App.state.conversations;
+      // Module sessions live in their own sidecars. The global Chat history is
+      // deliberately a regular-chat-only view, regardless of the current
+      // route, so a legacy snapshot can never leak Tangguan/Create records
+      // back into the normal sidebar.
+      const moduleConversation = (item) => !!(item && (
+        item.tangguanCharacterId
+        || item.originModule === 'tangguan'
+        || item.originModule === 'create'
+      ));
+      let convs = App.state.conversations.filter((item) => !moduleConversation(item));
       const hitsMap = {};
       if (q) {
+        const sourceConvs = convs;
         convs = [];
-        for (const c of App.state.conversations) {
+        for (const c of sourceConvs) {
           const titleHit = (c.title || '').toLowerCase().includes(q);
           let hits = 0;
           if (!titleHit) {
-            for (const m of (c.messages || [])) {
-              const hay = (((m.content || '') + ' ' + (m.think || '')) || '').toLowerCase();
-              if (hay.includes(q)) hits++;
+            const stamp = conversationSearchStamp(c);
+            const cached = App.ui._conversationSearchCache.get(c.id);
+            let haystack;
+            if (cached && cached.stamp === stamp) {
+              haystack = cached.text;
+            } else {
+              const messages = (Array.isArray(c.messages) ? c.messages : [])
+                .map((m) => String((m && m.content) || '') + ' ' + String((m && m.think) || ''))
+                .map((value) => value.toLowerCase());
+              haystack = (Array.isArray(c.messages) ? c.messages : [])
+                .map((m) => String((m && m.content) || '') + ' ' + String((m && m.think) || ''))
+                .join('\n')
+                .toLowerCase();
+              App.ui._conversationSearchCache.set(c.id, { stamp, text: haystack, messages });
+              while (App.ui._conversationSearchCache.size > 256) {
+                const first = App.ui._conversationSearchCache.keys().next().value;
+                if (first == null) break;
+                App.ui._conversationSearchCache.delete(first);
+              }
+            }
+            if (haystack.includes(q)) {
+              const cachedMessages = (App.ui._conversationSearchCache.get(c.id) || {}).messages || [];
+              for (const hay of cachedMessages) if (hay.includes(q)) hits++;
             }
           }
           if (titleHit || hits) { convs.push(c); if (hits) hitsMap[c.id] = hits; }
@@ -60,8 +275,10 @@
         list.innerHTML = `<div class="history-empty">${q ? '没有匹配的对话' : '暂无对话记录'}</div>`;
         return;
       }
+      const visibleCount = App.ui._historyVisibleCount || HISTORY_INITIAL_COUNT;
+      const visibleConvs = convs.slice(0, visibleCount);
       const groups = {};
-      for (const c of convs) {
+      for (const c of visibleConvs) {
         const k = groupLabel(c.updatedAt);
         (groups[k] = groups[k] || []).push(c);
       }
@@ -80,6 +297,9 @@
           </div>`;
         }
         html += '</div>';
+      }
+      if (convs.length > visibleConvs.length) {
+        html += `<button type="button" class="history-more" data-history-more>加载更多对话（还剩 ${convs.length - visibleConvs.length} 条）</button>`;
       }
       list.innerHTML = html;
     },
@@ -158,7 +378,14 @@
 
     syncWeb(on, notify) {
       App.state.web = on;
-      const b = $('webBtn'); if (b) b.classList.toggle('active', on);
+      const activeConversation = App.chat && App.chat.activeConv ? App.chat.activeConv() : null;
+      const restricted = !!(activeConversation && (activeConversation.tangguanCharacterId || activeConversation.originModule === 'tangguan'));
+      const b = $('webBtn');
+      if (b) {
+        b.classList.toggle('active', !!on && !restricted);
+        b.disabled = restricted;
+        b.title = restricted ? '糖馆独立会话已关闭联网' : '联网搜索';
+      }
       App.persist();
       if (notify) {
         if (!on) { App.ui.toast('已关闭联网搜索'); return; }
@@ -171,17 +398,20 @@
     syncModelSelect() {
       const btn = $('modelSelectBtn');
       const dd = $('modelDropdown');
-      const view = App.state.view || 'chat';
-      if (view !== 'chat') { if (btn) btn.hidden = true; if (dd) dd.hidden = true; return; } // 顶栏模型下拉仅供聊天
+      const module = currentModelModule();
+      if (!MODEL_MODULES.has(module)) { if (btn) btn.hidden = true; if (dd) dd.hidden = true; return; }
       if (btn) btn.hidden = false;
-      const p = App.getProvider('chat');
+      const p = App.getProvider(module);
       const models = (p.models && p.models.length) ? p.models : (p.model ? [p.model] : []);
       if (!models.length) { if (btn) btn.textContent = '未配置模型'; if (dd) dd.innerHTML = ''; return; }
-      if (btn) btn.textContent = p.model || models[0] || '选择模型';
+      const conv = moduleConversation(module);
+      const conversationModel = conv && conv.model && models.includes(conv.model) ? conv.model : '';
+      const activeModel = conversationModel || p.model || models[0] || '';
+      if (btn) btn.textContent = activeModel || '选择模型';
       if (dd) dd.innerHTML = models.map(m =>
-        `<button data-model="${App.escapeHtml(m)}" class="${m === p.model ? 'active' : ''}">${App.escapeHtml(m)}</button>`
+        `<button data-model="${App.escapeHtml(m)}" class="${m === activeModel ? 'active' : ''}">${App.escapeHtml(m)}</button>`
       ).join('');
-      App.chat.syncImgBtn();
+      if (App.chat && App.chat.syncImgBtn) App.chat.syncImgBtn();
     },
 
     applyAppearance() {
@@ -336,7 +566,12 @@
         if (!title || (q && !(title + ' ' + detail).toLowerCase().includes(q))) return;
         local.push({ id: 'local:' + scope + ':' + id, title, detail });
       };
-      for (const item of App.state.conversations || []) addLocal('conversation', item.id, item.title || '未命名会话', '会话');
+      const regularConversations = (App.state.conversations || []).filter((item) => !(item && (
+        item.tangguanCharacterId
+        || item.originModule === 'tangguan'
+        || item.originModule === 'create'
+      )));
+      for (const item of regularConversations) addLocal('conversation', item.id, item.title || '未命名会话', '会话');
       for (const item of App.state.settings.docs || []) addLocal('document', item.id, item.name, '文档');
       for (const item of App.state.projects || []) addLocal('project', item.id, item.name, '糖码项目');
       for (const item of App.state.agentThreads || []) addLocal('run', item.id, item.title, '糖码会话');
@@ -349,7 +584,11 @@
       const value = String(id || '');
       App.ui.closeCommandPalette();
       if (value.startsWith('local:conversation:')) {
-        App.chat.activate(value.slice('local:conversation:'.length));
+        const id = value.slice('local:conversation:'.length);
+        const conv = (App.state.conversations || []).find((item) => item && item.id === id);
+        const stay = conv && (conv.tangguanCharacterId || conv.originModule === 'tangguan')
+          ? 'tangguan' : conv && conv.originModule === 'create' ? 'create' : undefined;
+        App.chat.activate(id, stay ? { stay } : undefined);
         return;
       }
       if (value === 'settings' || value === 'data') {
@@ -774,7 +1013,7 @@
       const box = $('modelProfileList');
       if (!box) return;
       const modules = [
-        ['chat', '聊天'], ['agent', '糖码'], ['doc', '糖读'], ['image', '图片'], ['create', '糖创'],
+        ['chat', '聊天'], ['agent', '糖码'], ['doc', '糖读'], ['image', '图片'], ['create', '糖创'], ['tangguan', '糖馆'],
       ];
       box.innerHTML = modules.map(([id, label]) => {
         const provider = App.ui.modelProviderFor(id);
@@ -1432,14 +1671,14 @@
         btn.classList.remove('danger');
         App.state.settings.accounts = [];
         App.state.settings.defaultAccountId = '';
-        const modules = ['default', 'chat', 'agent', 'create', 'image', 'doc'];
+        const modules = ['default', 'chat', 'agent', 'create', 'tangguan', 'image', 'doc'];
         modules.forEach(m => { App.state.settings.providers[m] = { accountId: '__default__', apiBase: '', model: '' }; });
         // 账户与模块配置清空了，密钥库里对应的 Key 也要一并删掉（联网搜索 Key 属于另一块设置，不动）
         if (App.rt && App.rt.deleteSecretsByPrefix) {
           App.rt.deleteSecretsByPrefix('acc:');
           App.rt.deleteSecretsByPrefix('custom:');
         }
-        App.persist();
+        App.persist({ allowAccountReset: true });
         App.ui.refreshSettingsUI();
         App.ui.syncModelSelect();
         App.ui.toast('已清除所有账户与配置');
@@ -1504,6 +1743,9 @@
       const maxOutput = (v && typeof v === 'object' && v.maxOutput) ? v.maxOutput : '';
       const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
       const caps = (v && typeof v === 'object' && v.caps) ? v.caps : '';
+      const imageProtocol = (v && typeof v === 'object' && v.imageProtocol) ? v.imageProtocol : 'auto';
+      const imageSizeStrategy = (v && typeof v === 'object' && v.imageSizeStrategy) ? v.imageSizeStrategy : 'auto';
+      const imageSizes = (v && typeof v === 'object' && Array.isArray(v.imageSizes)) ? v.imageSizes.join(', ') : '';
       const input = document.createElement('input');
       input.type = 'text'; input.className = 'accModelRow';
       input.placeholder = '如 doubao-seed-1-6'; input.autocomplete = 'off';
@@ -1531,9 +1773,20 @@
       [['', '自动推断'], ['tool_vision', '工具+视觉'], ['tool', '工具+文本'], ['vision', '仅视觉'], ['text', '纯文本']]
         .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; capsSel.appendChild(o); });
       capsSel.value = caps;
+      const imageDetails = document.createElement('details');
+      imageDetails.className = 'model-image-options';
+      imageDetails.style.gridColumn = '2 / -1';
+      imageDetails.innerHTML = `<summary>图像协议与尺寸（可选）</summary><div class="model-image-options-body"><label>协议<select class="accModelImageProtocol"><option value="auto">自动</option><option value="openai-images">OpenAI Images</option><option value="sensenova-images">SenseNova Images</option></select></label><label>尺寸策略<select class="accModelImageSizeStrategy"><option value="auto">自动</option><option value="allow-list">合法尺寸列表</option><option value="custom">自定义尺寸</option></select></label><label>自定义尺寸<input class="accModelImageSizes" type="text" placeholder="1024x1024, 1792x1024" /></label></div>`;
+      const imageProtocolSel = imageDetails.querySelector('.accModelImageProtocol');
+      const imageStrategySel = imageDetails.querySelector('.accModelImageSizeStrategy');
+      const imageSizesInput = imageDetails.querySelector('.accModelImageSizes');
+      if (imageProtocolSel) imageProtocolSel.value = imageProtocol;
+      if (imageStrategySel) imageStrategySel.value = imageSizeStrategy;
+      if (imageSizesInput) imageSizesInput.value = imageSizes;
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'model-row-del'; btn.dataset.rm = '1'; btn.textContent = '×'; btn.title = '删除该模型';
       row.appendChild(handle); row.appendChild(input); row.appendChild(cwInput); row.appendChild(outputInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
+      row.appendChild(imageDetails);
       return row;
     },
 
@@ -1591,16 +1844,27 @@
         const outputInput = row.querySelector('.accModelOutput');
         const ttSel = row.querySelector('.accModelThink');
         const capsSel = row.querySelector('.accModelCaps');
+        const imageProtocolSel = row.querySelector('.accModelImageProtocol');
+        const imageStrategySel = row.querySelector('.accModelImageSizeStrategy');
+        const imageSizesInput = row.querySelector('.accModelImageSizes');
         const n = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
         if (!n) return;
         const cw = (ctxInput && ctxInput.value) ? parseInt(ctxInput.value, 10) : 128000;
         const maxOutput = (outputInput && outputInput.value) ? parseInt(outputInput.value, 10) : 0;
         const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
         const caps = (capsSel && capsSel.value) ? capsSel.value : '';
+        const imageProtocol = imageProtocolSel && imageProtocolSel.value ? imageProtocolSel.value : 'auto';
+        const imageSizeStrategy = imageStrategySel && imageStrategySel.value ? imageStrategySel.value : 'auto';
+        const imageSizes = imageSizesInput && imageSizesInput.value
+          ? imageSizesInput.value.split(/[\s,;]+/).filter((size) => /^\d{3,5}x\d{3,5}$/.test(size)).slice(0, 32)
+          : [];
         const previous = previousAccount && Array.isArray(previousAccount.models)
           ? previousAccount.models.find((item) => (typeof item === 'string' ? item : item && item.name) === n)
           : null;
         const m = { name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt };
+        if (imageProtocol !== 'auto') m.imageProtocol = imageProtocol;
+        if (imageSizeStrategy !== 'auto') m.imageSizeStrategy = imageSizeStrategy;
+        if (imageSizes.length) m.imageSizes = imageSizes;
         if (caps) m.caps = caps; // M6：能力预设
         if (maxOutput > 0) m.maxOutput = maxOutput;
         if (previous && typeof previous === 'object') {
@@ -1615,16 +1879,20 @@
       if (!name || !apiBase) { App.ui.toast('请填写名称和 API Base URL'); return; }
       if (!apiKey && !hasSaved) { App.ui.toast('请填写 API Key'); return; }
       if (!models.length) { App.ui.toast('请至少填写一个模型名称'); return; }
+      if (apiKey && (!App.rt || !App.rt.setSecret)) { App.ui.toast('密钥库不可用，原密钥未覆盖；请先修复数据存储'); return; }
       const s = App.state.settings;
       const accId = id || App.uid();
-      // 先确认密钥写入成功，再改变账户配置，避免出现“账户保存了但 Key 没有保存”。
-      if (apiKey && App.rt && App.rt.setSecret) {
-        const r = await App.rt.setSecret('acc:' + accId, apiKey);
-        if (!r || !r.ok) {
-          App.ui.toast('密钥保存失败：' + ((r && r.error) || '未知原因'));
-          return;
-        }
-      }
+      const before = cloneValue({ accounts: s.accounts, defaultAccountId: s.defaultAccountId, providers: s.providers });
+      const restore = async () => {
+        if (!before) return null;
+        s.accounts = before.accounts;
+        s.defaultAccountId = before.defaultAccountId;
+        s.providers = before.providers;
+        const result = await persistAndVerify();
+        App.ui.refreshSettingsUI();
+        App.ui.syncModelSelect();
+        return result;
+      };
       if (id) {
         const a = s.accounts.find(x => x.id === id);
         if (a) { Object.assign(a, { name, apiBase, models }); delete a.model; delete a.apiKey; }
@@ -1632,27 +1900,67 @@
         s.accounts.push({ id: accId, name, apiBase, models });
         if (!s.defaultAccountId) s.defaultAccountId = accId;
       }
-      App.persist();
+      // 配置先落盘并确认成功，避免密钥已经更新但账户配置因写盘失败而消失。
+      const persisted = await persistAndVerify();
+      if (!persisted || !persisted.ok) {
+        await restore();
+        App.ui.toast('账户保存失败，原账户配置已恢复：' + ((persisted && (persisted.error || persisted.code)) || '数据目录不可写'));
+        return { ok: false, code: persisted && persisted.code || 'account_state_write_failed', preserved: true };
+      }
+      // 只有账户配置确认落盘后才写入新 Key。若密钥写入失败，恢复整个账户快照。
+      if (apiKey && App.rt && App.rt.setSecret) {
+        const r = await App.rt.setSecret('acc:' + accId, apiKey);
+        if (!r || !r.ok) {
+          const restored = await restore();
+          App.ui.toast('密钥保存失败，' + (restored && restored.ok ? '原账户配置已恢复：' : '账户配置也未能确认恢复，请检查数据目录：') + ((r && (r.code || r.error)) || 'key_write_failed'));
+          return { ok: false, code: r && r.code || 'key_write_failed', preserved: !!(restored && restored.ok), nextAction: 'repair_secret_store' };
+        }
+        try { if (App.rt.syncEndpoints) await App.rt.syncEndpoints(); } catch (_) {}
+      }
       App.ui.refreshSettingsUI();
       App.ui.syncModelSelect();
       App.ui.closeAccountForm();
       App.ui.toast(id ? '账户已保存' : '已添加账户');
     },
 
-    deleteAccount(id) {
+    async deleteAccount(id) {
       const s = App.state.settings;
+      const before = cloneValue({ accounts: s.accounts, defaultAccountId: s.defaultAccountId, providers: s.providers });
+      const restore = async () => {
+        if (!before) return null;
+        s.accounts = before.accounts;
+        s.defaultAccountId = before.defaultAccountId;
+        s.providers = before.providers;
+        const result = await persistAndVerify();
+        App.ui.refreshSettingsUI();
+        App.ui.syncModelSelect();
+        return result;
+      };
       s.accounts = s.accounts.filter(a => a.id !== id);
       // 账户没了，它的 Key 也不该继续留在系统密钥库里
-      if (App.rt && App.rt.deleteSecret) App.rt.deleteSecret('acc:' + id);
       if (s.defaultAccountId === id) s.defaultAccountId = s.accounts.length ? s.accounts[0].id : '';
       // 清理引用了被删账户的模块选择
-      for (const m of ['default', 'chat', 'agent', 'create', 'image', 'doc']) {
+      for (const m of ['default', 'chat', 'agent', 'create', 'tangguan', 'image', 'doc']) {
         const p = s.providers[m];
         if (p && p.accountId === id) { p.accountId = '__default__'; p.model = ''; }
       }
-      App.persist();
+      const persisted = await persistAndVerify();
+      if (!persisted || !persisted.ok) {
+        await restore();
+        App.ui.toast('账户删除失败，原账户配置已恢复：' + ((persisted && (persisted.error || persisted.code)) || '数据目录不可写'));
+        return { ok: false, code: persisted && persisted.code || 'account_state_write_failed', preserved: true };
+      }
+      if (App.rt && App.rt.deleteSecret) {
+        const secretResult = await App.rt.deleteSecret('acc:' + id);
+        if (!secretResult || !secretResult.ok) {
+          const restored = await restore();
+          App.ui.toast('密钥删除失败，' + (restored && restored.ok ? '账户已恢复：' : '账户状态也未能确认恢复，请检查数据目录：') + ((secretResult && (secretResult.code || secretResult.error)) || 'key_delete_failed'));
+          return { ok: false, code: secretResult && secretResult.code || 'key_delete_failed', preserved: !!(restored && restored.ok), nextAction: 'retry_delete' };
+        }
+      }
       App.ui.refreshSettingsUI();
       App.ui.syncModelSelect();
+      return { ok: true };
     },
 
     setDefaultAccount(id) {
@@ -2081,7 +2389,10 @@
     init() {
       // sidebar interactions
       $('newChatBtn').addEventListener('click', () => App.chat.newConversation());
-      $('searchInput').addEventListener('input', () => App.ui.renderSidebar());
+      $('searchInput').addEventListener('input', () => {
+        App.ui._historyVisibleCount = HISTORY_INITIAL_COUNT;
+        App.ui.scheduleSidebarRender();
+      });
       $('collapseBtn').addEventListener('click', () => $('app').classList.add('collapsed'));
       $('expandBtn').addEventListener('click', () => $('app').classList.remove('collapsed'));
       $('themeBtn').addEventListener('click', () => App.ui.toggleTheme());
@@ -2147,6 +2458,12 @@
       $('historyList').addEventListener('click', (e) => {
         const del = e.target.closest('[data-del]');
         if (del) { e.stopPropagation(); App.chat.deleteConversation(del.dataset.del); return; }
+        const more = e.target.closest('[data-history-more]');
+        if (more) {
+          App.ui._historyVisibleCount = (App.ui._historyVisibleCount || HISTORY_INITIAL_COUNT) + HISTORY_PAGE_SIZE;
+          App.ui.scheduleSidebarRender();
+          return;
+        }
         const item = e.target.closest('[data-id]');
         if (item) App.chat.activate(item.dataset.id);
       });
@@ -2163,8 +2480,16 @@
           e.stopPropagation();
           const b = e.target.closest('[data-model]'); if (!b) return;
           const chosen = b.dataset.model;
-          const p = App.state.settings.providers.chat || App.state.settings.providers.default;
-          p.model = chosen;               // 记录当前选定模型名
+          const module = currentModelModule();
+          const providers = App.state.settings.providers || (App.state.settings.providers = {});
+          const p = providers[module] || (providers[module] = { accountId: '__default__', apiBase: '', model: '' });
+          p.model = chosen;
+          const conv = moduleConversation(module);
+          const effective = App.getProvider(module);
+          if (conv && conv.model && (!effective.models.length || effective.models.includes(chosen))) {
+            conv.model = chosen;
+            if (App.chat && App.chat.persistConversation) App.chat.persistConversation(conv);
+          }
           App.persist();
           App.ui.syncModelSelect();
           App.chat.syncImgBtn();

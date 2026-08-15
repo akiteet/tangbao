@@ -2,7 +2,7 @@
 (function () {
   window.App = window.App || {};
 
-  // 配置导入 / 导出：把账户、智能体、模板、工作流、提示词、外观、模块开关序列化为 JSON。
+  // 配置导入 / 导出；templates 仅为兼容旧配置保留，不再提供当前 UI 入口。
   App.config = {
     collect() {
       const s = App.state.settings;
@@ -90,7 +90,7 @@
           if (App.ui.applyAppearance) App.ui.applyAppearance();
           App.modules.renderNav();
           if (App.ui.refreshSettingsUI) App.ui.refreshSettingsUI();
-          if (App.router && App.router.go) App.router.go(App.state.view || 'chat');
+          if (App.router && App.router.go) App.router.go(App.state.view || 'chat', { force: true });
         } else {
           App.ui.toast('导入失败：' + ((res && res.error) || '未知错误'));
         }

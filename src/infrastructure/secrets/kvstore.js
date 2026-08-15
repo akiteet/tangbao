@@ -333,8 +333,11 @@ function deleteSecret(ref) {
     return { ok: false, code: loadCode || 'secret_store_unavailable', error: '密钥库无法读取，未执行删除' };
   }
   if (!(k in store)) return { ok: true, encrypted };
+  const previous = store[k];
   delete store[k];
-  return { ok: save(), encrypted };
+  const ok = save();
+  if (!ok) store[k] = previous;
+  return { ok, encrypted, code: ok ? undefined : 'secret_delete_write_failed' };
 }
 
 /** 批量删除：ref 前缀匹配（清空设置时用） */
@@ -345,11 +348,14 @@ function deleteByPrefix(prefix) {
     return { ok: false, code: loadCode || 'secret_store_unavailable', error: '密钥库无法读取，未执行删除' };
   }
   let hit = 0;
+  const previous = Object.create(null);
   for (const k of Object.keys(store)) {
-    if (k.startsWith(p)) { delete store[k]; hit++; }
+    if (k.startsWith(p)) { previous[k] = store[k]; delete store[k]; hit++; }
   }
   if (!hit) return { ok: true, removed: 0 };
-  return { ok: save(), removed: hit };
+  const ok = save();
+  if (!ok) Object.assign(store, previous);
+  return { ok, removed: hit, code: ok ? undefined : 'secret_delete_write_failed' };
 }
 
 function hasSecret(ref) {

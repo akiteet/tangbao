@@ -34,13 +34,31 @@ test('流式期间发送不再静默丢弃（明确提示并保留输入）', ()
   assert.ok(src.includes('streamConvId = null'), '流结束复位归属会话');
 });
 
-test('三处发送路径都记录流归属并在 finally 按归属渲染', () => {
+test('流式片段去重不会把共享 event_id 或同序号的不同正文误判为重复', () => {
   const src = read('src/renderer/views/chat/chat.js');
-  // 编辑重生成 + 普通发送 + regen 三处
+  assert.ok(src.includes('const value = source.sequence != null ? source.sequence : source.seq;'), '只使用显式片段序号');
+  assert.ok(src.includes("String(fragment == null ? '' : fragment)"), '去重键包含片段正文');
+  assert.ok(!src.includes(': source.event_id'), '不把 event_id 当作片段序号');
+});
+
+test('未配置账户也会保留可恢复的失败助手消息，流尾会刷新 UTF-8 和 Markdown', () => {
+  const src = read('src/renderer/views/chat/chat.js');
+  assert.ok(src.includes('if (!conv.messages.includes(liveMessage)) conv.messages.push(liveMessage);'), '先写入助手占位消息');
+  assert.ok(src.includes("code: 'provider_not_configured'"), '未配置账户使用稳定错误码');
+  assert.ok(src.includes('buf += decoder.decode();'), '流尾刷新 TextDecoder');
+  assert.ok(src.includes("cachedMarkdown(acc, liveMessage.id + ':stream-final')"), '流尾只做一次完整 Markdown 渲染');
+  assert.ok(src.includes('appendStreamText'), '流式阶段使用增量文本更新');
+});
+
+test('所有发送路径都记录流归属并在 finally 按归属渲染', () => {
+  const src = read('src/renderer/views/chat/chat.js');
+  // 编辑重生成 + 普通发送 + regen，以及中断后继续生成路径。
   const markCount = (src.match(/streaming = true; streamConvId = conv\.id; App\.chat\.setSending\(true\);/g) || []).length;
-  assert.equal(markCount, 3, '三处发送路径均记录 streamConvId');
+  assert.ok(markCount >= 3, '发送路径均记录 streamConvId');
   const renderCount = (src.match(/if \(App\.state\.activeId === conv\.id\) App\.chat\.renderMessages\(\); else App\.chat\.updateCtxBar\(\);/g) || []).length;
-  assert.equal(renderCount, 3, '三处 finally 均按归属会话渲染');
+  assert.ok(renderCount >= 3, '发送 finally 按归属会话渲染');
+  assert.ok(src.includes("const continuation = e.target.closest('[data-action=\"continue\"]');"), 'Continue 操作已接入消息事件委托');
+  assert.ok(src.includes('App.chat.continueGeneration(idx);'), 'Continue 使用当前消息索引');
 });
 
 test('账户下拉 change 立即写回 accountId 并持久化', () => {

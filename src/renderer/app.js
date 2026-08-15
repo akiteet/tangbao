@@ -1,6 +1,14 @@
 'use strict';
 (function () {
   window.App = window.App || {};
+  App.__bootReady = false;
+  App.moduleSessions = App.moduleSessions || {
+    status: 'pending',
+    data: {
+      tangguan: { conversations: [], activeId: null },
+      create: { conversations: [], activeId: null },
+    },
+  };
 
   function mergeFloatConversations(current, incoming) {
     const existing = Array.isArray(current) ? current : [];
@@ -25,17 +33,110 @@
     return order.map((id) => byId.get(id)).filter(Boolean);
   }
 
+  const isModuleConversation = (item) => !!(item && (
+    item.tangguanCharacterId
+    || item.originModule === 'tangguan'
+    || item.originModule === 'create'
+  ));
+
+  function mergeModuleSessions(primary, fallback) {
+    const list = Array.isArray(primary) ? primary.filter((item) => item && item.id) : [];
+    const byId = new Map(list.map((item) => [item.id, item]));
+    for (const item of Array.isArray(fallback) ? fallback : []) {
+      if (!item || !item.id) continue;
+      const previous = byId.get(item.id);
+      if (!previous || (Number(item.updatedAt) || 0) >= (Number(previous.updatedAt) || 0)) byId.set(item.id, item);
+    }
+    return Array.from(byId.values()).sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
+  }
+
+  function splitLegacyModuleSessions(conversations) {
+    const source = Array.isArray(conversations) ? conversations : [];
+    return {
+      normal: source.filter((item) => !isModuleConversation(item)),
+      tangguan: source.filter((item) => item && (item.tangguanCharacterId || item.originModule === 'tangguan')),
+      create: source.filter((item) => item && item.originModule === 'create'),
+    };
+  }
+
   function applyFloatStateSnapshot(payload) {
     const state = payload && payload.state && typeof payload.state === 'object' ? payload.state : payload;
     if (!state || typeof state !== 'object') return false;
-    const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(state), { persist: false }) : { ok: false };
+    const safeState = Object.assign({}, state);
+    const split = splitLegacyModuleSessions(safeState.conversations);
+    safeState.conversations = split.normal;
+    if (safeState.activeId && !safeState.conversations.some((item) => item && item.id === safeState.activeId)) {
+      safeState.activeId = safeState.conversations[0] ? safeState.conversations[0].id : null;
+    }
+    const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(safeState), { persist: false }) : { ok: false };
     if (!result || !result.ok) return false;
     if (App.chat && App.chat.onShow) App.chat.onShow();
     if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
     return true;
   }
 
+  async function initializeModuleSessions() {
+    const service = App.services && App.services.moduleSessions;
+    if (!service) return { ok: false, code: 'module_session_service_missing' };
+    const previousActiveId = App.state && App.state.activeId;
+    const migration = await service.migrateLegacy(App.state);
+    if (!migration || !migration.ok) {
+      // A failed copy must not leave the old module records in the regular Chat
+      // collection. Keep a memory-only partition so the user can still inspect
+      // them, while the original snapshot remains untouched for recovery.
+      const split = splitLegacyModuleSessions(App.state && App.state.conversations);
+      const data = {};
+      for (const module of ['tangguan', 'create']) {
+        const loaded = await Promise.resolve(service.load(module)).catch(() => null);
+        const sidecar = loaded && loaded.ok && loaded.data ? loaded.data : null;
+        const conversations = mergeModuleSessions(sidecar && sidecar.conversations, split[module]);
+        const activeId = sidecar && sidecar.activeId && conversations.some((item) => item.id === sidecar.activeId)
+          ? sidecar.activeId : (conversations[0] ? conversations[0].id : null);
+        data[module] = { conversations, activeId, revision: Number(sidecar && sidecar.revision) || 0 };
+      }
+      App.state.conversations = split.normal;
+      if (!split.normal.some((item) => item && item.id === App.state.activeId)) {
+        App.state.activeId = split.normal[0] ? split.normal[0].id : null;
+      }
+      App.moduleSessions.data = data;
+      App.moduleSessions.status = 'failed';
+      App.__moduleSessionRecovery = migration || { ok: false, code: 'module_session_migration_failed', sourcePreserved: true };
+      return Object.assign({}, migration || { ok: false, code: 'module_session_migration_failed' }, { data });
+    }
+    if (migration.state && Array.isArray(migration.state.conversations)) {
+      App.state.conversations = migration.state.conversations;
+      const normalIds = new Set(App.state.conversations.map((item) => item && item.id).filter(Boolean));
+      if (!normalIds.has(previousActiveId)) App.state.activeId = App.state.conversations[0] ? App.state.conversations[0].id : null;
+    }
+    const data = {};
+    let loadFailed = null;
+    for (const module of ['tangguan', 'create']) {
+      const loaded = await service.load(module);
+      if (!loaded || !loaded.ok || !loaded.data) {
+        loadFailed = loaded || { ok: false, code: 'module_session_load_failed', module };
+        const fallback = migration.sessions && migration.sessions[module];
+        data[module] = {
+          conversations: Array.isArray(fallback && fallback.conversations) ? fallback.conversations : [],
+          activeId: fallback && fallback.activeId || null,
+          revision: Number(fallback && fallback.revision) || 0,
+        };
+        continue;
+      }
+      data[module] = {
+        conversations: Array.isArray(loaded.data.conversations) ? loaded.data.conversations : [],
+        activeId: loaded.data.activeId || null,
+        revision: Number(loaded.data.revision) || 0,
+      };
+    }
+    App.moduleSessions.data = data;
+    App.moduleSessions.status = loadFailed ? 'failed' : 'active';
+    if (loadFailed) App.__moduleSessionRecovery = loadFailed;
+    if (migration.migrated || previousActiveId !== App.state.activeId) App.persist();
+    return { ok: !loadFailed, migration, data, error: loadFailed };
+  }
+
   async function boot() {
+    const bootStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
     try {
       // 0) 先取本地服务端口与启动令牌：端口由系统随机分配，任何本地请求都依赖它
       if (App.rt && App.rt.init) await App.rt.init();
@@ -105,7 +206,7 @@
               }
             } catch (e) { console.error('浮窗初始化状态失败：', e); }
             App.__floatReady = true;
-            App.router.go('chat');
+            App.router.go('chat', { force: true });
             setupFloatOpacity();
             setupFloatPin();
             if (App.chat && App.chat.onShow) App.chat.onShow();
@@ -124,6 +225,7 @@
 
       // 1) 载入本地持久化的状态（含旧版迁移）
       await App.loadState();
+      if (!floatMode) await initializeModuleSessions();
 
       // 1.5) 密钥：先取回主进程已存的密钥引用，再把 1.0.5 及更早版本残留在
       //      state.json / localStorage 里的明文 API Key 搬进系统密钥库。
@@ -153,6 +255,10 @@
       App.ui.applyAppearance();
       // 3) 绑定全局 UI 事件（侧边栏 / 顶栏 / 设置弹窗）
       App.ui.init();
+      if (App.__moduleSessionRecovery && App.__moduleSessionRecovery.ok === false) {
+        const recovery = App.__moduleSessionRecovery;
+        App.ui.notify('模块会话迁移失败', recovery.error || recovery.code || '原会话仍保留，请检查数据目录后重试');
+      }
       if (App.__stateRecovery) {
         const recovery = App.__stateRecovery;
         App.ui.notify(recovery.code === 'partial_state' ? '数据恢复不完整' : '已恢复账户配置', recovery.needsUserReview ? '部分状态缺失，请检查账户和数据目录' : '已从本地回退快照恢复缺失的账户配置');
@@ -172,7 +278,7 @@
       // 4) 绑定聊天视图事件并渲染欢迎区 / 建议
       App.chat.init();
       // 5) 进入模块视图：每次启动默认回到「糖包」聊天界面（v2 UX 决策：不记忆上次停留的模块）
-      App.router.go('chat');
+      App.router.go('chat', { force: true });
 
       // v2（统一热刷新）：一次性订阅技能变更广播（设置面板 + 糖码 / 菜单即时刷新）
       if (App.ui && App.ui.bindSkillChanged) App.ui.bindSkillChanged();
@@ -193,6 +299,7 @@
           if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
         });
       }
+      App.__bootReady = true;
     } catch (err) {
       console.error('糖包启动失败：', err);
       const t = document.getElementById('toast');
@@ -201,6 +308,8 @@
         t.hidden = false;
         t.classList.add('show');
       }
+    } finally {
+      if (App.perf) App.perf.measure('bootMs', bootStarted);
     }
   }
 

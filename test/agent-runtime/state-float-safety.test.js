@@ -42,6 +42,17 @@ test('state writes are atomic and stale revisions are ignored', () => {
   assert.match(preload, /flushStorageSync: \(json, revision\)/);
 });
 
+test('chat partial 只允许恢复 assistant，并可补回尚未进入完整快照的消息', () => {
+  const main = read('src/main/main.js');
+  const state = read('src/renderer/state/state.js');
+  assert.match(main, /const chatPartialRoot = \(\) => path\.join\(dataLocation\.recordsRoot\(app\.getPath\('userData'\)\), 'chat-partials'\)/);
+  assert.match(main, /const mergePartialMessage = \(target, incoming, messageId\)/);
+  assert.match(main, /if \(target && target\.role !== 'assistant'\) return null/);
+  assert.match(main, /if \(!message\) conversation\.messages\.push\(restored\)/);
+  assert.match(main, /if \(incomingMessage\.role && String\(incomingMessage\.role\) !== 'assistant'\)/);
+  assert.match(state, /role: 'assistant',\s*content: String\(message\.content \|\| ''\)/);
+});
+
 test('account model rows keep a visible model name column and scroll instead of collapsing', () => {
   const html = read('index.html');
   const styles = read('styles.css');
@@ -51,7 +62,7 @@ test('account model rows keep a visible model name column and scroll instead of 
   assert.match(styles, /\.model-row \.accModelRow \{[^}]*min-width:\s*150px/);
   assert.match(styles, /\.model-row \.accModelOutput \{[^}]*width:\s*88px[^}]*flex:\s*none/);
   assert.match(styles, /#accountModal \.account-form \{[^}]*overflow-x:\s*auto/);
-  assert.match(styles, /#accountModal \.modal \{\s*width:\s*820px;\s*max-width:\s*96vw/);
+  assert.match(styles, /#accountModal \.modal \{\s*width:\s*min\(1120px, 96vw\);\s*max-width:\s*96vw/);
 });
 
 test('incomplete disk state keeps accounts from the complete SQLite fallback', async () => {
@@ -178,4 +189,85 @@ test('account recovery snapshots restore metadata and streaming output survives 
   assert.equal(context.App.state.agentThreads[0]._liveAnswer, 'partial answer');
   assert.equal(context.App.state.agentThreads[0]._liveEvents[0].type, 'thinking');
   assert.equal(context.App.state.agentThreads[0]._pendingUser.content, 'continue');
+});
+
+test('a fresh empty account state is not reported as an incomplete recovery', async () => {
+  const state = read('src/renderer/state/state.js');
+  const disk = JSON.stringify({
+    conversations: [],
+    settings: {
+      accounts: [],
+      defaultAccountId: '',
+      providers: { default: { accountId: '__default__', apiBase: '', model: '' } },
+    },
+  });
+  const context = {
+    console,
+    setTimeout,
+    clearTimeout,
+    localStorage: {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    },
+    App: {
+      services: {
+        fs: {
+          loadStateJSON: async () => ({ ok: true, data: disk }),
+          loadStorage: async () => ({ ok: false }),
+          saveStateJSON: () => ({ ok: true }),
+        },
+      },
+      rt: {},
+    },
+    window: null,
+    addEventListener: () => {},
+  };
+  context.window = context;
+  vm.runInNewContext(state, context, { filename: 'state.js' });
+  const result = await context.App.loadState();
+  assert.equal(result.ok, true);
+  assert.equal(result.recovered, false);
+  assert.equal(context.App.__stateRecovery, null);
+});
+
+test('legacy snapshots append Tangguan without changing existing module order', () => {
+  const state = read('src/renderer/state/state.js');
+  const context = {
+    console,
+    setTimeout,
+    clearTimeout,
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    App: { services: {}, rt: {} },
+    window: null,
+    addEventListener: () => {},
+  };
+  context.window = context;
+  vm.runInNewContext(state, context, { filename: 'state.js' });
+  const result = context.App.loadStateFromRaw(JSON.stringify({
+    conversations: [],
+    settings: {
+      accounts: [],
+      defaultAccountId: '',
+      providers: { default: { accountId: '__default__' } },
+      enabledModules: ['chat', 'agent'],
+    },
+  }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(context.App.state.settings.enabledModules), ['chat', 'agent', 'tangguan']);
+});
+
+test('account mutations persist metadata before touching secrets and restore on either failure', () => {
+  const ui = read('src/renderer/components/ui.js');
+  const saveStart = ui.indexOf('async saveAccount()');
+  const savePersist = ui.indexOf('const persisted = await persistAndVerify();', saveStart);
+  const saveSecret = ui.indexOf("await App.rt.setSecret('acc:' + accId, apiKey)", saveStart);
+  const deleteStart = ui.indexOf('async deleteAccount(id)');
+  const deletePersist = ui.indexOf('const persisted = await persistAndVerify();', deleteStart);
+  const deleteSecret = ui.indexOf("await App.rt.deleteSecret('acc:' + id)", deleteStart);
+  assert.ok(saveStart >= 0 && savePersist > saveStart && saveSecret > savePersist, '编辑账户先落盘再写密钥');
+  assert.ok(deleteStart >= 0 && deletePersist > deleteStart && deleteSecret > deletePersist, '删除账户先落盘再删密钥');
+  assert.match(ui.slice(saveStart, saveSecret), /const restore = async \(\)/);
+  assert.match(ui.slice(saveSecret, deleteStart), /const restored = await restore\(\)/);
+  assert.match(ui.slice(deleteSecret), /const restored = await restore\(\)/);
 });

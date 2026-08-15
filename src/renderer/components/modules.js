@@ -8,6 +8,7 @@
     { id: 'image', label: '糖绘', icon: '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M5 18l5-5 4 4 3-3 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>' },
     { id: 'doc', label: '糖读', icon: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 3h8l4 4v14H6V3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v4h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>' },
     { id: 'create', label: '糖创', icon: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3l2.4 5.2L20 9l-4 4 1 6-5-2.8L7 19l1-6-4-4 5.6-.8L12 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>' },
+    { id: 'tangguan', label: '糖馆', icon: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 10h16M6 10v9M18 10v9M3 19h18M5 10l7-6 7 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 14h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>' },
     { id: 'agent', label: '糖码', icon: '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M7 9l3 3-3 3M13 15h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
   ];
   const DEFAULT_ICON = '<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>';
@@ -211,7 +212,7 @@
           frame.className = 'cv-iframe';
           frame.title = m.label;
           if (isExternalChild) {
-            frame.srcdoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui,-apple-system,sans-serif;color:#888;background:#f5f5f5}</style></head><body><div style="text-align:center"><p style="font-size:18px;margin:0 0 8px">已在糖包子窗口打开</p><p style="font-size:13px;margin:0">请留意糖包子窗口</p></div></body></html>';
+            frame.srcdoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;color:#888;background:#f5f5f5}</style></head><body><div style="text-align:center"><p style="font-size:18px;margin:0 0 8px">已在糖包子窗口打开</p><p style="font-size:13px;margin:0">请留意糖包子窗口</p></div></body></html>';
           } else {
             frame.src = src;
             frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-presentation');

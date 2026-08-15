@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const EXPECTED = '1.1.3';
+const EXPECTED = '1.1.4';
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'));
@@ -23,11 +23,11 @@ function main() {
 
   const required = [
     ['src/core/agent-runtime/benchmark-harness.js', "reportVersion: 2"],
-    ['src/core/agent-runtime/role-registry.js', "version: '1.1.3'"],
-    ['src/infrastructure/agent-runtime/agent-runtime-engine.js', "const RUNTIME_VERSION = '1.1.3'"],
-    ['.github/workflows/macos-release.yml', 'default: v1.1.3'],
-    ['README.md', 'v1.1.3'],
-    ['README.en.md', 'v1.1.3'],
+    ['src/core/agent-runtime/role-registry.js', "version: '1.1.4'"],
+    ['src/infrastructure/agent-runtime/agent-runtime-engine.js', "const RUNTIME_VERSION = '1.1.4'"],
+    ['.github/workflows/macos-release.yml', 'default: v1.1.4'],
+    ['README.md', 'v1.1.4'],
+    ['README.en.md', 'v1.1.4'],
   ];
   for (const [file, anchor] of required) {
     const content = fs.readFileSync(path.join(ROOT, file), 'utf8');

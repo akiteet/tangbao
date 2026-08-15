@@ -15,11 +15,11 @@
 
 ## Overview
 
-Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop workstation. Chat, coding, image generation, document analysis, and custom agents are unified in a single glassmorphism interface:
+Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop workstation. Chat, coding, image generation, document analysis, character workspaces, and task agents are unified in a single glassmorphism interface:
 
 - **Local-first & private** — API keys are encrypted by the OS keychain (Electron `safeStorage`) and resolved only in the main process; plaintext never touches disk. Conversations and settings are persisted in a local SQLite database and never pass through any third-party server.
 - **Unified multi-account / multi-model** — OpenAI, Doubao, Qwen, Claude, Gemini, and any OpenAI-compatible endpoint under one roof.
-- **Six modules in one** — Chat, Coding (Tangma), Image (Tangdraw), Documents (Tangread), Agents (Tangcreate), plus custom modules.
+- **Six built-in modules in one** — Chat, Coding (Tangma), Image (Tangdraw), Documents (Tangread), Agents (Tangcreate), and Characters (Tangguan), plus custom modules.
 - **No framework, fast** — vanilla HTML/CSS/JS with a glassmorphism UI; highlight.js and PDF.js are vendored for offline use.
 
 ## Features
@@ -30,14 +30,15 @@ Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop work
 | 🤖 | **Tangma · Coding Agent** | Local AI coding assistant: multi-project/session, tool calling, Plan mode, permission system, skills |
 | 🎨 | **Tangdraw · Image** | Text-to-image + image editing (reference upload), multiple styles and aspect ratios |
 | 📄 | **Tangread · Documents** | PDF / Word / PPT / TXT parsing, summaries, key points, translation, outlines |
-| 🧩 | **Tangcreate · Agents** | Custom AI personas, prompt template library, multi-step workflows |
+| 🧩 | **Tangcreate · Agents** | Preset/custom agents, isolated task sessions, multi-step workflows |
+| 🎭 | **Tangguan · Characters** | Character cards, isolated chats, character-scoped worldbooks and retrieval |
 | 🔌 | **Custom modules** | Embed your own apps or web pages via iframe / webview |
 
 **Data & privacy**: conversations and settings are stored in local SQLite (`better-sqlite3`); API keys are encrypted with the OS keychain. Nothing is collected or uploaded.
 
 ## Installation
 
-- **Install the app**: download `tangbao-1.1.3-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
+- **Install the app**: download `tangbao-1.1.4-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
 - **Run from source**:
 
 ```bash
@@ -49,17 +50,18 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 > `npm run server` is only for standalone debugging of the Tangma backend; regular use does not need it.
 >
-> **Package**: `npm run dist` → `dist/tangbao-1.1.3-setup.exe`
+> **Package**: `npm run dist` → `dist/tangbao-1.1.4-setup.exe`
 
 ## Configuration
 
-v1.1.3 keeps six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
+v1.1.4 keeps six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
 
 Click the gear icon in the bottom-left → **Settings**:
 
 1. **Add an account** → API Base URL + Key + model list (OpenAI-compatible endpoints supported).
 2. Each module can select its own account or custom model.
 3. Vision models are added under the "Vision models" tab (partial matching supported, e.g. `gpt-5` → `gpt-5.5`).
+4. Image model details can define the image protocol, size strategy, and custom sizes; `gpt-image-2` and `sensenova-u1-fast` start with the full common-ratio set and converge to a model-specific enumeration when the provider returns one.
 
 ## Tangma · Coding Agent
 
@@ -88,6 +90,7 @@ cp -r examples/skills/demo-code-review <project>/.workbuddy/skills/
 ## Data & Upgrade Notes
 
 - Data lives in the app data directory (SQLite + config); uninstalling/reinstalling does not delete it. It is recommended to back up before upgrading.
+- Tangguan character data and Tangguan/Tangcreate module sessions use versioned local sidecars; the first upgrade migrates legacy module sessions while ordinary Chat history stays in the main state.
 - Historical note: v1.0.5 → v1.0.6 cleared chat history during a storage migration. Since then the app has moved to stable SQLite persistence — upgrades no longer lose data.
 
 ## Development
@@ -99,8 +102,8 @@ tangbao/
 │   ├── preload/               # Safe IPC bridge
 │   ├── renderer/              # Main window SPA (views & components)
 │   ├── application/           # Renderer service layer (skills / shell / storage ...)
-│   ├── core/                  # Domain logic (model capabilities, permissions, completion gate, skills, workspaces)
-│   └── infrastructure/        # Infrastructure (SQLite storage, Tangma runtime, model gateway, secrets)
+│   ├── core/                  # Domain logic (model capabilities, permissions, completion gate, skills, Tangguan, workspaces)
+│   └── infrastructure/        # Infrastructure (SQLite, module sidecars, Tangguan indexes, Tangma runtime, gateway, secrets)
 ├── docs/                      # Documentation (SKILLS / DATA_MODEL / CHANGELOG / PROMPT_SYSTEM)
 ├── examples/skills/           # Skill templates & examples
 ├── index.html                 # Main window entry
@@ -108,11 +111,26 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (355 cases covering runtime / storage / permissions / skills / UI contracts)
+- **Tests**: `npm test` (464 cases; 459 pass, 5 skipped when the local SQLite ABI does not match, 0 failures)
+- **Release gates**: `npm run check:version`, `npm run check:storage`, `npm run check:perf`, `npm run check:electron-abi`, `npm run check:ui`, `npm run check:release`, and `npm run bench:offline`
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.3
+## v1.1.4
+
+- Tangguan character workspace: presets, AI draft preview, dirty-state protection, JSON import/export, and common Tavern/SillyTavern fields including `character_book.entries`.
+- Isolated module sessions: Tangguan character chats and Tangcreate task sessions stay in their own sidecar, with safe switching, deletion, and empty-state behavior.
+- Controlled character RAG: retrieval is limited to the active character's worldbook and ranked by keywords, tags, priority, recency, and token budget. Without real embeddings the app reports keyword mode and never introduces a global document index.
+- Capability-driven image generation: resolve protocol, legal sizes, response format, and size format by API base plus exact model; include SenseNova U1/U1 Fast, GPT Image, DALL-E, Wanx, URL responses, and provider error enumeration learning.
+- Custom image capabilities: account models can save protocol, size strategy, and `imageSizes`; `gpt-image-2`, `sensenova-u1-fast`, and unknown models expose a full common-ratio UI including `1:1`, `16:9`, `9:16`, `4:3`, and `3:4`, while queued, running, and retried tasks revalidate sizes.
+- Streaming reliability: create a recoverable assistant placeholder before the first byte, throttle sequence-aware partial saves, preserve partial output on failures/reloads, and restore old account state if persistence or secret writes fail.
+- Storage and compatibility: keep Schema v16; versioned sidecars/`kv_meta` hold module sessions, character data, and indexes with hash-verified migration and rollback. API keys stay out of card exports, backups, logs, traces, and search.
+- Performance and UI: add a bounded, disabled-by-default in-memory performance ring buffer; improve module switching, streaming rendering, sidebar search, long-list rendering, and narrow-window layouts, covered by four Electron smoke windows.
+- Release gates: version, storage, performance, Electron ABI, UI, offline benchmark, and platform packaging checks are part of the v1.1.4 closure.
+
+See [docs/CHANGELOG-v1.1.4.md](docs/CHANGELOG-v1.1.4.md) for the detailed release notes and upgrade guidance.
+
+## v1.1.3 (historical)
 
 - Stability loop: migration state, staged copy verification, rollback, recovery center, SQLite/state audits, backups, and quarantine cleanup previews.
 - Model and Cache management: Provider Health, model profiles, unified model-call metrics, and a user-triggered real Cache Probe. Missing provider Usage remains unknown.

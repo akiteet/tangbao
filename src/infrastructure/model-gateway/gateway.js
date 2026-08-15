@@ -23,6 +23,7 @@ const { normalizeModelUsage } = require('../../core/agent-runtime/model-telemetr
 const { beginModelCall, finishModelCall } = require('../../core/agent-runtime/model-call-recorder');
 const { calculateCost } = require('../../core/agent-runtime/cost-ledger');
 const TokenEstimator = require('../../core/models/tokenizer');
+const ImageCapabilities = require('../../core/models/image-capabilities');
 
 const KIND = {
   chat:       { path: '/chat/completions',  method: 'POST' },
@@ -31,7 +32,19 @@ const KIND = {
   models:     { path: '/models',            method: 'GET'  },
 };
 
+// Module ids are UI concepts. Accept them only as a compatibility alias at
+// the boundary and normalize them before endpoint validation and telemetry.
+const KIND_ALIASES = Object.freeze({
+  tangguan: 'chat',
+  create: 'chat',
+  workflow: 'chat',
+  'tangguan/chat': 'chat',
+  'create/chat': 'chat',
+});
+
 const MAX_BODY = 32 * 1024 * 1024; // 32MB：图生图会把参考图 base64 塞进 payload
+
+const MAX_ASSET_BODY = 16 * 1024 * 1024;
 
 let endpoints = new Map();      // ref -> apiBase
 let getSecret = () => '';
@@ -160,6 +173,66 @@ function buildUrl(base, kind) {
   return b + spec.path;
 }
 
+function normalizeKind(value) {
+  const source = value && typeof value === 'object'
+    ? (value.kind || value.type || value.requestType)
+    : value;
+  const requested = String(source || 'chat').trim().toLowerCase();
+  return KIND_ALIASES[requested] || requested || 'chat';
+}
+
+const RENDERER_POLICY_FIELDS = new Set([
+  'web',
+  'allowWeb',
+  'allowAttachments',
+  'allowTools',
+  'providerModule',
+  'requestKind',
+  'imageProtocol',
+  'imageSizeStrategy',
+  'imageSizeFormat',
+  'imageSizes',
+]);
+
+function sanitizeProviderPayload(value) {
+  // Module policy belongs to the renderer/runtime. Strip it recursively so a
+  // legacy caller cannot smuggle `web` (or another policy flag) through an
+  // extension object or nested provider options.
+  if (Array.isArray(value)) return value.map((item) => sanitizeProviderPayload(item));
+  if (!value || typeof value !== 'object') return value;
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (RENDERER_POLICY_FIELDS.has(key)) continue;
+    output[key] = sanitizeProviderPayload(item);
+  }
+  return output;
+}
+
+function adaptImagePayload(apiBase, rawPayload, payload) {
+  const source = rawPayload && typeof rawPayload === 'object' ? rawPayload : {};
+  const model = String((payload && payload.model) || source.model || '').trim();
+  const config = {
+    imageProtocol: source.imageProtocol,
+    imageSizeStrategy: source.imageSizeStrategy,
+    imageSizeFormat: source.imageSizeFormat,
+    imageSizes: source.imageSizes,
+  };
+  const capability = ImageCapabilities.resolve(apiBase, model, { config });
+  return { payload: ImageCapabilities.adaptPayload(payload, capability), capability };
+}
+
+function upstreamMessage(raw) {
+  const text = String(raw || '');
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && parsed.error && typeof parsed.error === 'object') {
+      return String(parsed.error.message || parsed.error.code || text);
+    }
+    if (parsed && (parsed.message || parsed.code)) return String(parsed.message || parsed.code);
+  } catch (_) {}
+  return text;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -192,11 +265,15 @@ async function handleGateway(req, res) {
     return;
   }
   const ref = String(body.ref || '').trim();
-  const kind = String(body.kind || 'chat').trim();
+  const kind = normalizeKind(body);
+  const rawPayload = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
+    ? body.payload : {};
+  let providerPayload = sanitizeProviderPayload(rawPayload);
   if (!KIND[kind]) { fail(res, 400, '不支持的请求种类：' + kind); return; }
   if (!ref) { fail(res, 400, '缺少密钥引用'); return; }
 
   const base = getEndpoint(ref);
+  if (kind === 'images') providerPayload = adaptImagePayload(base, rawPayload, providerPayload).payload;
   if (!base) { fail(res, 400, '未找到该来源的接口地址，请到设置里重新保存账户'); return; }
   const key = getSecret(ref);
   if (!key) { fail(res, 401, '该来源尚未配置 API Key，请到设置里填写'); return; }
@@ -207,13 +284,13 @@ async function handleGateway(req, res) {
   const bad = checkTarget(target);
   if (bad) { fail(res, 403, bad); return; }
 
-  const adapter = detectAdapter((body.payload && body.payload.model) || '', base);
+  const adapter = detectAdapter(providerPayload.model || '', base);
   const call = beginModelCall(Object.assign(telemetryMeta(body, kind, adapter), {
-    modelId: String(body.payload && body.payload.model || ''),
+    modelId: String(providerPayload.model || ''),
   }));
   const telemetry = Object.assign(telemetryMeta(body, kind, adapter), {
     kind,
-    model: String(body.payload && body.payload.model || ''),
+    model: String(providerPayload.model || ''),
     // Keep a local request id even when the provider returns its own id. The
     // historic requestId field remains provider-compatible for existing traces.
     localRequestId: call.requestId,
@@ -238,7 +315,7 @@ async function handleGateway(req, res) {
   try {
     // v4：非 OpenAI Chat 适配器走供应商原生流式，并在主进程转换为既有 OpenAI SSE 形状。
     if (kind === 'chat' && adapter !== 'openai') {
-      const payload = body.payload || {};
+      const payload = providerPayload;
       const req = buildRequest(adapter, {
         apiBase: base,
         apiKey: key,
@@ -257,7 +334,7 @@ async function handleGateway(req, res) {
          telemetry.errorType = classify(upA.status, '').type;
         const raw = await upA.text().catch(() => '');
         let upstreamMsg = '';
-        try { const j = JSON.parse(raw); upstreamMsg = (j && j.error && (j.error.message || j.error)) || raw; } catch (_) { upstreamMsg = raw; }
+        upstreamMsg = upstreamMessage(raw);
         const err = classify(upA.status, upstreamMsg);
         res.writeHead(upA.status, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: { type: err.type, message: err.message, status: err.status } }));
@@ -297,12 +374,12 @@ async function handleGateway(req, res) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + key,
-        'Accept': body.payload && body.payload.stream ? 'text/event-stream' : 'application/json',
+        'Accept': providerPayload.stream ? 'text/event-stream' : 'application/json',
       },
       signal: ctrl.signal,
     };
     if (spec.method !== 'GET') {
-      const outboundPayload = Object.assign({}, body.payload || {});
+      const outboundPayload = providerPayload;
       // OpenAI-compatible providers only send stream usage when explicitly asked.
       if (kind === 'chat' && adapter === 'openai' && outboundPayload.stream) {
         outboundPayload.stream_options = Object.assign({}, outboundPayload.stream_options || {}, { include_usage: true });
@@ -320,13 +397,15 @@ async function handleGateway(req, res) {
       telemetry.errorType = classify(up.status, '').type;
       const raw = await up.text().catch(() => '');
       let upstreamMsg = '';
-      try {
-        const j = JSON.parse(raw);
-        upstreamMsg = (j && j.error && (j.error.message || j.error)) || raw;
-      } catch (_) { upstreamMsg = raw; }
+      upstreamMsg = upstreamMessage(raw);
       const err = classify(up.status, upstreamMsg);
       res.writeHead(up.status, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: { type: err.type, message: err.message, status: err.status } }));
+      const imageCapabilities = kind === 'images'
+        ? ImageCapabilities.learnFromError(base, telemetry.model, raw)
+        : null;
+      const errorPayload = { type: err.type, message: err.message, status: err.status };
+      if (imageCapabilities && imageCapabilities.source === 'learned') errorPayload.details = { imageCapabilities };
+      res.end(JSON.stringify({ error: errorPayload }));
       return;
     }
 
@@ -335,7 +414,7 @@ async function handleGateway(req, res) {
       'Cache-Control': 'no-cache, no-transform',
     });
     telemetry.requestId = telemetry.requestId || String(up.headers.get('x-request-id') || '');
-    if (up.body && !(body.payload && body.payload.stream)) {
+    if (up.body && !providerPayload.stream) {
       const raw = await up.text();
       try { telemetry.usage = normalizeUsage(adapter, JSON.parse(raw)); } catch (_) {}
       if (!clientGone) res.end(raw);
@@ -623,4 +702,101 @@ function adapterCacheSupport(model, base) {
   return { openai: true, 'openai-responses': true, anthropic: true, gemini: true }[adapter] === true;
 }
 
-module.exports = { configure, setEndpoints, getEndpoint, handleGateway, probeCache, healthCheck, checkTarget, buildUrl, KIND };
+async function createEmbeddings(ref, model, texts, options) {
+  const base = getEndpoint(ref);
+  const key = getSecret(ref);
+  const targetModel = String(model || '').trim();
+  const inputs = (Array.isArray(texts) ? texts : [texts]).map((item) => String(item == null ? '' : item).slice(0, 12000)).filter(Boolean).slice(0, 128);
+  if (!base) throw jsonError(400, '未找到该来源的接口地址', 'model_failure');
+  if (!key) throw jsonError(401, '该来源尚未配置 API Key', 'permission_failure');
+  if (!targetModel || !inputs.length) throw jsonError(400, '缺少 Embedding 模型或输入', 'invalid_result');
+  const adapter = detectAdapter(targetModel, base);
+  const call = beginModelCall({ scope: 'tangguan', callType: options && options.callType || 'embedding_index', modelId: targetModel, provider: adapter, accountRef: ref, module: 'tangguan' });
+  const startedAt = Date.now();
+  let status = 'completed';
+  let errorType = '';
+  let usage = null;
+  const cache = {
+    mode: 'not_eligible',
+    source: 'unknown',
+    dataOrigin: 'not_applicable',
+    unknownReason: 'not_cache_eligible',
+    prefixFingerprint: '',
+  };
+  try {
+    let url = buildUrl(base, 'embeddings');
+    let headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    let body = { model: targetModel, input: inputs.length === 1 ? inputs[0] : inputs };
+    if (adapter === 'gemini') {
+      const root = String(base).replace(/\/v1beta\/?$/i, '').replace(/\/+$/, '');
+      url = root + '/v1beta/models/' + encodeURIComponent(targetModel.replace(/^models\//, '')) + ':batchEmbedContents?key=' + encodeURIComponent(key);
+      headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+      body = { requests: inputs.map((text) => ({ model: 'models/' + targetModel.replace(/^models\//, ''), content: { parts: [{ text }] } })) };
+    } else {
+      headers.Authorization = 'Bearer ' + key;
+    }
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw jsonError(response.status, 'Embedding Provider 返回 ' + response.status, 'model_failure');
+    usage = normalizeUsage(adapter, json);
+    const vectors = adapter === 'gemini'
+      ? (Array.isArray(json.embeddings) ? json.embeddings.map((item) => item && item.values || []) : [])
+      : (Array.isArray(json.data) ? json.data.sort((a, b) => Number(a.index || 0) - Number(b.index || 0)).map((item) => item && item.embedding || []) : []);
+    if (vectors.length !== inputs.length || vectors.some((vector) => !Array.isArray(vector) || !vector.length)) throw jsonError(502, 'Embedding Provider 未返回完整向量', 'invalid_result');
+    return { ok: true, vectors, usage, provider: adapter, model: targetModel, requestId: call.requestId, latencyMs: Date.now() - startedAt, dataOrigin: 'provider' };
+  } catch (error) {
+    status = 'failed';
+    errorType = error && error.type || 'infrastructure_failure';
+    throw error;
+  } finally {
+    finishModelCall(call, { usage, cache, status, errorType, finishedAt: Date.now(), queueWaitMs: Math.max(0, startedAt - call.startedAt) }, recordModelCallMetric);
+  }
+}
+
+function validateImageAssetUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return { ok: false, code: 'asset_url_protocol' };
+    const blocked = checkTarget(url);
+    if (blocked) return { ok: false, code: 'asset_url_blocked', error: blocked };
+    return { ok: true, url: url.href };
+  } catch (_) {
+    return { ok: false, code: 'asset_url_invalid' };
+  }
+}
+
+async function readImageAsset(value, options) {
+  const checked = validateImageAssetUrl(value);
+  if (!checked.ok) throw jsonError(400, checked.error || checked.code, 'permission_failure');
+  const opts = options && typeof options === 'object' ? options : {};
+  const maxBytes = Math.min(Math.max(Number(opts.maxBytes) || MAX_ASSET_BODY, 1024), MAX_ASSET_BODY);
+  const response = await fetch(checked.url, { redirect: 'error', signal: opts.signal });
+  if (!response.ok) throw jsonError(response.status, 'image asset request failed', 'model_failure');
+  const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (contentType && !contentType.startsWith('image/')) throw jsonError(415, 'image asset content type is not an image', 'invalid_result');
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (declared > maxBytes) throw jsonError(413, 'image asset is too large', 'invalid_result');
+  const chunks = [];
+  let total = 0;
+  if (response.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader();
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      const chunk = Buffer.from(part.value || []);
+      total += chunk.length;
+      if (total > maxBytes) { try { await reader.cancel(); } catch (_) {} throw jsonError(413, 'image asset is too large', 'invalid_result'); }
+      chunks.push(chunk);
+    }
+  } else {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) throw jsonError(413, 'image asset is too large', 'invalid_result');
+    chunks.push(buffer);
+    total = buffer.length;
+  }
+  const buffer = Buffer.concat(chunks, total);
+  const type = contentType || 'application/octet-stream';
+  return { ok: true, url: checked.url, contentType: type, bytes: buffer.length, buffer, dataUrl: 'data:' + type + ';base64,' + buffer.toString('base64') };
+}
+
+module.exports = { configure, setEndpoints, getEndpoint, handleGateway, probeCache, healthCheck, createEmbeddings, checkTarget, buildUrl, normalizeKind, sanitizeProviderPayload, adaptImagePayload, validateImageAssetUrl, readImageAsset, KIND };

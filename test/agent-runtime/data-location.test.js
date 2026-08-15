@@ -98,12 +98,63 @@ test('data location pointer can be replaced when a previous selection already ex
   }
 });
 
+test('packaged startup keeps portable root separate from the records directory', () => {
+  const root = tempRoot();
+  try {
+    const defaultRoot = path.join(root, 'default');
+    const executablePath = path.join(root, 'app', 'Tangbao.exe');
+    fs.mkdirSync(path.join(defaultRoot, 'tangbao-data'), { recursive: true });
+    fs.writeFileSync(path.join(defaultRoot, 'tangbao-data', 'state.json'), '{"portable":true}');
+
+    const startup = locations.resolveStartupLocation({ defaultRoot, packaged: true, executablePath });
+    const portableRoot = path.join(root, 'app', locations.PORTABLE_ROOT_NAME);
+    assert.equal(startup.rootPath, portableRoot);
+    assert.equal(fs.readFileSync(path.join(portableRoot, 'tangbao-data', 'state.json'), 'utf8'), '{"portable":true}');
+    assert.equal(fs.existsSync(path.join(portableRoot, 'tangbao-data', 'tangbao-data')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('packaged startup imports the legacy portable root without overwriting normalized data', () => {
+  const root = tempRoot();
+  try {
+    const defaultRoot = path.join(root, 'default');
+    const appRoot = path.join(root, 'app');
+    const executablePath = path.join(appRoot, 'Tangbao.exe');
+    const legacyRoot = path.join(appRoot, 'tangbao-data');
+    fs.mkdirSync(path.join(defaultRoot, 'tangbao-data'), { recursive: true });
+    fs.writeFileSync(path.join(defaultRoot, 'tangbao-data', 'shared.json'), 'normalized');
+    fs.mkdirSync(path.join(legacyRoot, 'tangbao-data'), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, 'tangbao-data', 'shared.json'), 'legacy');
+    fs.writeFileSync(path.join(legacyRoot, 'tangbao-data', 'old.json'), 'old');
+
+    const startup = locations.resolveStartupLocation({ defaultRoot, packaged: true, executablePath });
+    const portableRoot = path.join(appRoot, locations.PORTABLE_ROOT_NAME);
+    assert.equal(startup.rootPath, portableRoot);
+    assert.equal(fs.readFileSync(path.join(portableRoot, 'tangbao-data', 'shared.json'), 'utf8'), 'normalized');
+    assert.equal(fs.readFileSync(path.join(portableRoot, 'tangbao-data', 'old.json'), 'utf8'), 'old');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('data location rejects same and nested roots', () => {
   const root = tempRoot();
   try {
     assert.equal(locations.validateMove(root, root).code, 'same_location');
     assert.equal(locations.validateMove(root, path.join(root, 'child')).code, 'nested_location');
     assert.equal(locations.validateMove(path.join(root, 'child'), root).code, 'nested_location');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recordsRoot keeps sidecar data under the selected active root', () => {
+  const root = tempRoot();
+  try {
+    assert.equal(locations.recordsRoot(root), path.join(root, 'tangbao-data'));
+    assert.equal(locations.recordsRoot(path.join(root, 'nested')), path.join(root, 'nested', 'tangbao-data'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

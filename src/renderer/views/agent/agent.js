@@ -741,12 +741,12 @@
         if (kind === 'copy') {
           navigator.clipboard.writeText(text).then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
         } else if (kind === 'create' && canCreate) {
-          App.router.go('create');
+          App.router.go('create', { force: true });
           App.create.importPrompt(text);
           App.ui.toast('已发送到创作中心');
         } else if (kind === 'doc' && canDoc) {
           App.doc.importText(text, '糖码结果');
-          App.router.go('doc');
+          App.router.go('doc', { force: true });
           App.ui.toast('已发送到糖读');
         }
       });
@@ -2665,9 +2665,9 @@
       const cost = firstNumber(metrics && metrics.costUsd, usage.estimatedCost);
       const latency = firstNumber(metrics && metrics.latencyMs, live ? Date.now() - (live.startedAt || Date.now()) : null, run && run.finishedAt && run.startedAt ? run.finishedAt - run.startedAt : null);
       const queueWait = firstNumber(metrics && metrics.queueWaitMs);
-      const runtimeVersion = formatVersion(run && run.runtimeVersion, 'v1.1.3');
+      const runtimeVersion = formatVersion(run && run.runtimeVersion, 'v1.1.4');
       const rawToolset = String((run && run.toolsetVersion) || '');
-      const toolsetVersion = formatVersion(rawToolset.split(':')[0], 'v1.1.3');
+      const toolsetVersion = formatVersion(rawToolset.split(':')[0], 'v1.1.4');
       const role = (run && run.role) || 'main';
       const promptVersion = formatVersion(run && run.promptVersion, 'legacy');
       const runDetail = live
@@ -3453,7 +3453,7 @@
     jumpToRunThread() {
       const rs = App.agent._runState;
       if (!rs) return;
-      try { if (App.router && App.router.go) App.router.go('agent'); } catch (e) {}
+       try { if (App.router && App.router.go) App.router.go('agent', { force: true }); } catch (e) {}
       const curProj = App.state.activeProjectId;
       const curThr = App.state.activeThreadId;
       if (rs.projectId && rs.projectId !== curProj) { App.agent.switchProject(rs.projectId); return; }

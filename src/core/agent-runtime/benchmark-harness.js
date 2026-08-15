@@ -5,9 +5,9 @@ const { runAgent } = require('./run-agent');
 const { ToolRegistry } = require('./tool-registry');
 const { calculateCost, mergeCosts } = require('./cost-ledger');
 
-const RUNTIME_VERSION = '1.1.3';
-const PROMPT_VERSION = '1.1.3';
-const TOOLSET_VERSION = '1.1.3';
+const RUNTIME_VERSION = '1.1.4';
+const PROMPT_VERSION = '1.1.4';
+const TOOLSET_VERSION = '1.1.4';
 
 const SUITES = Object.freeze({
   'multi-agent': [
@@ -320,7 +320,7 @@ function createRuntimeBenchmarkRegistry(task, counters) {
     version: TOOLSET_VERSION,
     definitions: [{
       name: 'benchmark_step',
-      version: '1.1.3',
+      version: '1.1.4',
       description: 'Deterministic offline benchmark tool',
       inputSchema: { type: 'object', properties: { step: { type: 'integer' } }, required: ['step'], additionalProperties: false },
       risk: 'low',

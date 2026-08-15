@@ -26,6 +26,9 @@ const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
 const dataLocation = require('../infrastructure/storage/data-location');
 const legacySecretContext = require('../infrastructure/secrets/legacy-context');
+const TangguanCore = require('../core/tangguan/tangguan-store');
+const TangguanStore = require('../infrastructure/tangguan/tangguan-store');
+const ModuleSessions = require('../infrastructure/storage/module-sessions');
 
 // M5（#254）：自定义协议 tangbao-file:// —— 渲染进程不再直接持有本地文件绝对路径，
 // 改为「用户选文件 → 主进程发不透明 fileId → tangbao-file://<fileId> 读取」，收敛本地文件暴露面。
@@ -76,7 +79,7 @@ function secretStorePaths(activeRoot) {
   ].filter(Boolean).map((root) => dataLocation.canonical(root));
   const paths = [];
   for (const root of roots) {
-    paths.push(path.join(root, 'tangbao-data', 'secrets.json'));
+    paths.push(path.join(dataLocation.recordsRoot(root), 'secrets.json'));
     // 兼容 v1.0.5 及早期自定义目录直接存放 secrets.json 的布局。
     paths.push(path.join(root, 'secrets.json'));
     paths.push(path.join(root, 'tangbao-data.backup', 'secrets.json'));
@@ -91,15 +94,23 @@ if (app.isPackaged && startupUsesDefaultRoot && !startupHasLocationPointer) {
   const { dialog } = require('electron');
   let ok = false;
 
-  // 候选 1：exe 同级 tangbao-data/（非保护路径直接成功）
+  const portableRootName = dataLocation.PORTABLE_ROOT_NAME || 'tangbao-storage';
+
+  // Keep the userData root separate from the records directory. The latter is
+  // created as <portableRoot>/tangbao-data by the storage layer.
   try {
-    const dataDir = path.join(path.dirname(process.execPath), 'tangbao-data');
-    fs.mkdirSync(dataDir, { recursive: true });
-    app.setPath('userData', dataDir);
-    const probe = path.join(dataDir, '.write_test');
-    fs.writeFileSync(probe, 'ok');
-    fs.unlinkSync(probe);
-    ok = true;
+    const portableRoot = path.join(path.dirname(process.execPath), portableRootName);
+    const migrated = dataLocation.migrateRoot(defaultUserData, portableRoot);
+    if (migrated.ok) {
+      dataLocation.writeLocation(defaultUserData, {
+        rootPath: portableRoot,
+        sourceRoot: defaultUserData,
+        pending: false,
+        migrationId: migrated.migrationId,
+      });
+      app.setPath('userData', portableRoot);
+      ok = true;
+    }
   } catch (_) { /* 保护目录，进入后续候选 */ }
 
   // 候选 2：若在保护目录（Program Files / Windows），弹窗征得用户授权后重试
@@ -112,7 +123,7 @@ if (app.isPackaged && startupUsesDefaultRoot && !startupHasLocationPointer) {
           type: 'question',
           title: '糖包 — 数据目录',
           message: '需要在安装目录下创建数据文件夹来保存对话记录和设置。',
-          detail: '位置：' + path.join(exeDir, 'tangbao-data') + '\n\n' +
+          detail: '位置：' + path.join(exeDir, portableRootName, 'tangbao-data') + '\n\n' +
             '「确定」将尝试创建（可能需要管理员权限）。\n' +
             '「取消」将自动选择 D 盘其他位置。',
           buttons: ['确定', '取消'],
@@ -121,14 +132,19 @@ if (app.isPackaged && startupUsesDefaultRoot && !startupHasLocationPointer) {
         });
         if (answer === 0) {
           try {
-            const dataDir = path.join(exeDir, 'tangbao-data');
-            fs.mkdirSync(dataDir, { recursive: true });
-            app.setPath('userData', dataDir);
-            const probe = path.join(dataDir, '.write_test');
-            fs.writeFileSync(probe, 'ok');
-            fs.unlinkSync(probe);
-            ok = true;
-          } catch (e) { console.error('糖包 授权后仍无法创建数据目录：' + dataDir, e); }
+            const portableRoot = path.join(exeDir, portableRootName);
+            const migrated = dataLocation.migrateRoot(defaultUserData, portableRoot);
+            if (migrated.ok) {
+              dataLocation.writeLocation(defaultUserData, {
+                rootPath: portableRoot,
+                sourceRoot: defaultUserData,
+                pending: false,
+                migrationId: migrated.migrationId,
+              });
+              app.setPath('userData', portableRoot);
+              ok = true;
+            }
+          } catch (e) { console.error('糖包 授权后仍无法创建数据目录：' + path.join(exeDir, portableRootName, 'tangbao-data'), e); }
         }
       } catch (_) {}
     }
@@ -195,6 +211,38 @@ const LOCAL_TOKEN = crypto.randomBytes(32).toString('hex');
 let staticServer = null;
 let mainWindow = null;
 let latestStateRevision = 0;
+let tangguanStoreInstance = null;
+let tangguanStoreBackend = null;
+let tangguanStoreRoot = '';
+let moduleSessionStoreInstance = null;
+let moduleSessionStoreRoot = '';
+const tangguanImportPreviews = new Map();
+
+function getTangguanStore() {
+  const svc = getStorageService();
+  const activeRoot = dataLocation.canonical(app.getPath('userData'));
+  if (tangguanStoreInstance && tangguanStoreBackend === svc && tangguanStoreRoot === activeRoot) return tangguanStoreInstance;
+  const dataDir = dataLocation.recordsRoot(activeRoot);
+  tangguanStoreBackend = svc;
+  tangguanStoreRoot = activeRoot;
+  tangguanStoreInstance = TangguanStore.createStore({
+    getKV: svc && typeof svc.getKV === 'function' ? (key) => svc.getKV(key) : null,
+    setKV: svc && typeof svc.setKV === 'function' ? (key, value) => svc.setKV(key, value) : null,
+    filePath: path.join(dataDir, 'tangguan-library.json'),
+    indexPath: path.join(dataDir, 'tangguan-embeddings.index.json'),
+  });
+  return tangguanStoreInstance;
+}
+
+function getModuleSessionStore() {
+  const activeRoot = dataLocation.canonical(app.getPath('userData'));
+  if (moduleSessionStoreInstance && moduleSessionStoreRoot === activeRoot) return moduleSessionStoreInstance;
+  moduleSessionStoreRoot = activeRoot;
+  moduleSessionStoreInstance = ModuleSessions.createStore({
+    rootDir: dataLocation.recordsRoot(activeRoot),
+  });
+  return moduleSessionStoreInstance;
+}
 
 function extractStateRevision(payload, explicitRevision) {
   const explicit = Number(explicitRevision);
@@ -207,6 +255,19 @@ function extractStateRevision(payload, explicitRevision) {
 }
 
 function acceptStateRevision(payload, explicitRevision) {
+  let incoming = null;
+  try { incoming = typeof payload === 'string' ? JSON.parse(payload) : payload; } catch (_) {}
+  const incomingSettings = incoming && incoming.settings && typeof incoming.settings === 'object' ? incoming.settings : null;
+  const incomingAccounts = incomingSettings && Array.isArray(incomingSettings.accounts) ? incomingSettings.accounts : null;
+  // An accidental empty renderer snapshot must never erase a configured
+  // account set. The explicit clear-settings action carries a one-shot marker.
+  if (incomingAccounts && incomingAccounts.length === 0 && !(incoming && incoming._persistence && incoming._persistence.allowAccountReset === true)) {
+    try {
+      const current = readActiveStateObject();
+      const currentAccounts = current && current.settings && Array.isArray(current.settings.accounts) ? current.settings.accounts : [];
+      if (currentAccounts.length > 0) return { ok: false, code: 'account_loss_guard', reason: 'account_loss_guard', error: '拒绝用空账户快照覆盖已有账户' };
+    } catch (_) {}
+  }
   const revision = extractStateRevision(payload, explicitRevision);
   if (revision > 0 && latestStateRevision > 0 && revision < latestStateRevision) {
     return { ok: false, skipped: true, reason: 'stale_state_revision', revision, latestRevision: latestStateRevision };
@@ -233,6 +294,102 @@ function writeStateFileAtomic(file, content) {
     try { if (fd !== null) fs.closeSync(fd); } catch (_) {}
     try { if (fs.existsSync(temp)) fs.unlinkSync(temp); } catch (_) {}
     throw error;
+  }
+}
+
+const chatPartialRoot = () => path.join(dataLocation.recordsRoot(app.getPath('userData')), 'chat-partials');
+const chatPartialKey = (conversationId, messageId) => crypto.createHash('sha256')
+  .update(String(conversationId || '') + '\0' + String(messageId || ''))
+  .digest('hex');
+
+function chatPartialFile(conversationId, messageId) {
+  return path.join(chatPartialRoot(), chatPartialKey(conversationId, messageId) + '.json');
+}
+
+function writeChatPartialPatch(patch, revision) {
+  const conversationId = String(patch && patch.conversationId || '');
+  const messageId = String(patch && patch.messageId || '');
+  if (!conversationId || !messageId) throw new Error('partial_patch_invalid');
+  const value = { version: 1, revision: Number(revision) || 0, patch };
+  const file = chatPartialFile(conversationId, messageId);
+  writeStateFileAtomic(file, JSON.stringify(value));
+  return file;
+}
+
+function readChatPartialPatches(state) {
+  const root = chatPartialRoot();
+  if (!state || typeof state !== 'object' || !Array.isArray(state.conversations) || !fs.existsSync(root)) return state;
+  let entries = [];
+  try { entries = fs.readdirSync(root).filter((name) => name.endsWith('.json')); } catch (_) { return state; }
+  const baseRevision = Number(state._persistence && state._persistence.revision) || 0;
+  let maxRevision = baseRevision;
+  const textField = (value, max) => String(value == null ? '' : value).slice(0, max);
+  const mergePartialMessage = (target, incoming, messageId) => {
+    if (target && target.role !== 'assistant') return null;
+    const message = target || {
+      id: messageId,
+      role: 'assistant',
+      content: '',
+      think: '',
+      streamStatus: 'partial',
+      error: '',
+      webSources: null,
+      sequence: 0,
+      requestId: '',
+      startedAt: 0,
+      updatedAt: Date.now(),
+    };
+    message.id = messageId;
+    message.role = 'assistant';
+    message.content = textField(incoming.content, 4 * 1024 * 1024);
+    message.think = textField(incoming.think, 4 * 1024 * 1024);
+    message.streamStatus = ['streaming', 'partial', 'completed', 'failed', 'cancelled'].includes(String(incoming.streamStatus))
+      ? String(incoming.streamStatus) : 'partial';
+    message.error = textField(incoming.error, 1000);
+    message.webSources = Number.isFinite(Number(incoming.webSources)) ? Number(incoming.webSources) : null;
+    message.sequence = Math.max(0, Number(incoming.sequence) || 0);
+    message.requestId = textField(incoming.requestId, 200);
+    message.startedAt = Number(incoming.startedAt) || 0;
+    message.updatedAt = Number(incoming.updatedAt) || Date.now();
+    return message;
+  };
+  for (const name of entries) {
+    let value;
+    try { value = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')); } catch (_) { continue; }
+    const revision = Number(value && value.revision) || 0;
+    const patch = value && value.patch && typeof value.patch === 'object' ? value.patch : null;
+    if (!patch || revision <= baseRevision) continue;
+    const conversation = state.conversations.find((item) => item && item.id === String(patch.conversationId || ''));
+    if (!conversation) continue;
+    if (!Array.isArray(conversation.messages)) conversation.messages = [];
+    const message = conversation.messages.find((item) => item && item.id === String(patch.messageId || ''));
+    const incoming = patch.message && typeof patch.message === 'object' ? patch.message : null;
+    if (!incoming) continue;
+    const messageId = String(patch.messageId || '');
+    const restored = mergePartialMessage(message, incoming, messageId);
+    if (!restored) continue;
+    if (!message) conversation.messages.push(restored);
+    if (patch.conversationUpdatedAt) conversation.updatedAt = Number(patch.conversationUpdatedAt) || conversation.updatedAt;
+    maxRevision = Math.max(maxRevision, revision);
+  }
+  if (maxRevision > baseRevision) {
+    state._persistence = Object.assign({}, state._persistence || {}, { revision: maxRevision, savedAt: Date.now(), format: 1 });
+    latestStateRevision = Math.max(latestStateRevision, maxRevision);
+  }
+  return state;
+}
+
+function cleanupChatPartials(upToRevision) {
+  const root = chatPartialRoot();
+  if (!fs.existsSync(root)) return;
+  let entries = [];
+  try { entries = fs.readdirSync(root).filter((name) => name.endsWith('.json')); } catch (_) { return; }
+  for (const name of entries) {
+    const file = path.join(root, name);
+    try {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if ((Number(value && value.revision) || 0) <= Number(upToRevision || 0)) fs.unlinkSync(file);
+    } catch (_) { /* keep malformed partials for diagnostics */ }
   }
 }
 
@@ -649,6 +806,25 @@ function resolveWorkspace(id) {
   return { workspaceId: id, name: pub.name, cwd: pub.cwd, primaryRootId: pub.primaryRootId, roots: pub.roots.map(({ rootId, name, path: rootPath }) => ({ rootId, name, path: rootPath })), fingerprint: WorkspaceRoots.fingerprint(workspace) };
 }
 
+// Tangguan and Create conversations live in module sidecars. They never enter
+// the ordinary renderer state or the shared Chat history table.
+safeHandle('module-sessions:load', (_e, module) => getModuleSessionStore().read(module));
+safeHandle('module-sessions:list', (_e, module) => {
+  const result = getModuleSessionStore().read(module);
+  return result.ok ? { ok: true, module: result.module, conversations: result.data.conversations, activeId: result.data.activeId } : result;
+});
+safeHandle('module-sessions:get', (_e, module, id) => {
+  const result = getModuleSessionStore().read(module);
+  if (!result.ok) return result;
+  const conversation = result.data.conversations.find((item) => item && item.id === String(id || '')) || null;
+  return { ok: true, module: result.module, conversation };
+});
+safeHandle('module-sessions:save', (_e, module, conversation, activeId) => getModuleSessionStore().saveConversation(module, conversation, activeId));
+safeHandle('module-sessions:remove', (_e, module, id) => getModuleSessionStore().removeConversation(module, id));
+safeHandle('module-sessions:flushPartial', (_e, input) => getModuleSessionStore().flushPartial(input));
+safeHandle('module-sessions:migrateLegacy', (_e, state) => getModuleSessionStore().migrateLegacy(state));
+safeHandle('module-sessions:info', () => getModuleSessionStore().info());
+
 /* ---------- 密钥库 IPC（只有写入/删除/询问存在，没有读回明文的通道） ---------- */
 
 safeHandle('secrets:set', (e, ref, value) => secrets.setSecret(ref, value));
@@ -694,6 +870,27 @@ safeHandle('secrets:reset', () => {
 
 // 渲染进程同步「密钥引用 → API Base」映射表；网关据此决定往哪转发（渲染进程指定不了目标）
 safeHandle('gateway:setEndpoints', (e, list) => ({ ok: true, count: gateway.setEndpoints(list) }));
+
+// 图像响应中的远程 URL 只能通过网关受限读取，渲染进程不直接承担跨域下载。
+safeHandle('image:fetchAsset', async (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  if (!opts.url) return { ok: false, code: 'image_asset_url_missing' };
+  try {
+    const result = await gateway.readImageAsset(opts.url, { maxBytes: opts.maxBytes });
+    return {
+      ok: true,
+      dataUrl: result.dataUrl,
+      contentType: result.contentType,
+      bytes: result.bytes,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      code: error && error.type || 'image_asset_fetch_failed',
+      error: error && error.message ? error.message : String(error),
+    };
+  }
+});
 
 safeHandle('cache:probe', async (_e, input) => {
   try {
@@ -760,6 +957,263 @@ safeHandle('search:query', async (_e, input) => {
 });
 
 // 渲染进程（主题切换时）用来同步系统标题栏叠加层的颜色，使浅/深色模式下控件都清晰
+// Tangguan is a local library. Character cards and worldbook entries are
+// stored in kv_meta (with a JSON sidecar fallback), never in the secret store.
+safeHandle('tangguan:presets', () => ({ ok: true, presets: TangguanCore.PRESETS.map((item) => ({ id: item.id, label: item.label, summary: item.summary || '', patch: item.patch })) }));
+safeHandle('tangguan:getMatureMode', () => {
+  try { return { ok: true, matureMode: getTangguanStore().getMatureMode() }; }
+  catch (error) { return { ok: false, code: 'tangguan_mature_mode_read_failed', matureMode: false, error: error.message || String(error) }; }
+});
+safeHandle('tangguan:setMatureMode', (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : { enabled: input === true };
+    return getTangguanStore().setMatureMode(opts.enabled === true, opts.confirmed === true);
+  } catch (error) { return { ok: false, code: 'tangguan_mature_mode_write_failed', matureMode: false, error: error.message || String(error) }; }
+});
+safeHandle('tangguan:listCharacters', (_e, input) => {
+  try { return getTangguanStore().listCharacters(input || {}); }
+  catch (error) { return { ok: false, code: 'tangguan_list_failed', items: [], total: 0, nextCursor: null, error: error.message || String(error) }; }
+});
+safeHandle('tangguan:getCharacter', (_e, id) => {
+  try { return getTangguanStore().getCharacter(id && typeof id === 'object' ? id.id : id); }
+  catch (error) { return { ok: false, code: 'tangguan_get_failed', character: null, memories: [], error: error.message || String(error) }; }
+});
+safeHandle('tangguan:saveCharacter', (_e, input) => {
+  try { const opts = input && typeof input === 'object' ? input : {}; return getTangguanStore().saveCharacter(opts.character || opts, opts.expectedRevision); }
+  catch (error) { return { ok: false, code: 'tangguan_save_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:toggleFavorite', (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    return getTangguanStore().toggleFavorite(opts.id, opts.favorite, opts.expectedRevision);
+  } catch (error) { return { ok: false, code: 'tangguan_favorite_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:touchCharacter', (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    return getTangguanStore().touchCharacter(opts.id, opts.expectedRevision);
+  } catch (error) { return { ok: false, code: 'tangguan_usage_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:cloneCharacter', (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    return getTangguanStore().cloneCharacter(opts.id, opts.expectedRevision);
+  } catch (error) { return { ok: false, code: 'tangguan_clone_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:deleteCharacter', (_e, input) => {
+  try { const opts = input && typeof input === 'object' ? input : {}; return getTangguanStore().deleteCharacter(opts.id || input, opts.expectedRevision); }
+  catch (error) { return { ok: false, code: 'tangguan_delete_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:previewImport', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    let filePath = String(opts.filePath || '');
+    if (!filePath) {
+      const picked = await dialog.showOpenDialog(mainWindow, { title: 'Import character card', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
+      if (picked.canceled || !picked.filePaths || !picked.filePaths.length) return { ok: false, canceled: true };
+      filePath = picked.filePaths[0];
+    }
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > TangguanCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tangguan_import_too_large', error: 'Character card JSON must be no larger than 5MB.' };
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const preview = TangguanCore.inspectImport(parsed);
+    if (preview.tooLarge) return { ok: false, code: 'tangguan_card_too_large', error: 'Character card JSON must be no larger than 256KB.', bytes: preview.bytes, maxBytes: preview.maxBytes };
+    const previewId = 'tgp_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
+    tangguanImportPreviews.set(previewId, { bundle: parsed, expiresAt: Date.now() + 10 * 60 * 1000 });
+    for (const [key, value] of tangguanImportPreviews) if (!value || value.expiresAt < Date.now()) tangguanImportPreviews.delete(key);
+    return { ok: true, preview: true, previewId, character: preview.character, memories: preview.memories, warnings: preview.warnings, mature: preview.mature };
+  } catch (error) { return { ok: false, code: 'tangguan_import_preview_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:importCharacter', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    if (opts.previewId) {
+      const pending = tangguanImportPreviews.get(String(opts.previewId));
+      if (!pending || pending.expiresAt < Date.now()) return { ok: false, code: 'tangguan_import_preview_expired', error: 'Import preview expired. Please choose the file again.' };
+      tangguanImportPreviews.delete(String(opts.previewId));
+      return getTangguanStore().importBundle(pending.bundle, opts.expectedRevision);
+    }
+    let filePath = String(opts.filePath || '');
+    if (!filePath) {
+      const picked = await dialog.showOpenDialog(mainWindow, { title: '导入角色卡', properties: ['openFile'], filters: [{ name: '角色卡 JSON', extensions: ['json'] }] });
+      if (picked.canceled || !picked.filePaths || !picked.filePaths.length) return { ok: false, canceled: true };
+      filePath = picked.filePaths[0];
+    }
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > TangguanCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tangguan_import_too_large', error: 'Character card JSON must be no larger than 5MB.' };
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const preview = TangguanCore.inspectImport(parsed);
+    if (preview.tooLarge) return { ok: false, code: 'tangguan_card_too_large', error: 'Character card JSON must be no larger than 256KB.', bytes: preview.bytes, maxBytes: preview.maxBytes };
+    return getTangguanStore().importBundle(parsed, opts.expectedRevision);
+  } catch (error) { return { ok: false, code: 'tangguan_import_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:previewWorldbookImport', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    const characterId = String(opts.characterId || '');
+    if (!characterId || !getTangguanStore().getCharacter(characterId).ok) return { ok: false, code: 'tangguan_character_not_found' };
+    let filePath = String(opts.filePath || '');
+    if (!filePath) {
+      const picked = await dialog.showOpenDialog(mainWindow, { title: '导入世界书', properties: ['openFile'], filters: [{ name: '世界书 JSON', extensions: ['json'] }] });
+      if (picked.canceled || !picked.filePaths || !picked.filePaths.length) return { ok: false, canceled: true };
+      filePath = picked.filePaths[0];
+    }
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > TangguanCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tangguan_import_too_large', error: 'Worldbook JSON must be no larger than 5MB.' };
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const detail = getTangguanStore().getCharacter(characterId);
+    const inspected = TangguanCore.inspectWorldbookImport(parsed, characterId, {
+      character: detail.character,
+      memories: detail.memories,
+    });
+    if (!inspected.importedCount) {
+      return {
+        ok: false,
+        code: 'tangguan_worldbook_empty',
+        error: 'No valid worldbook entries found.',
+        sourceCount: inspected.sourceCount,
+        skippedCount: inspected.skippedCount,
+        warnings: inspected.warnings,
+      };
+    }
+    if (inspected.tooLarge) {
+      return {
+        ok: true,
+        preview: true,
+        canImport: false,
+        characterId,
+        count: inspected.importedCount,
+        sourceCount: inspected.sourceCount,
+        skippedCount: inspected.skippedCount,
+        bytes: inspected.bytes,
+        maxBytes: inspected.maxBytes,
+        warnings: inspected.warnings,
+      };
+    }
+    const previewId = 'tgw_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
+    tangguanImportPreviews.set(previewId, { worldbook: parsed, characterId, expiresAt: Date.now() + 10 * 60 * 1000 });
+    for (const [key, value] of tangguanImportPreviews) if (!value || value.expiresAt < Date.now()) tangguanImportPreviews.delete(key);
+    return {
+      ok: true,
+      preview: true,
+      previewId,
+      characterId,
+      memories: inspected.memories,
+      count: inspected.importedCount,
+      sourceCount: inspected.sourceCount,
+      skippedCount: inspected.skippedCount,
+      warnings: inspected.warnings,
+    };
+  } catch (error) {
+    const code = error instanceof SyntaxError ? 'tangguan_worldbook_invalid_json' : 'tangguan_worldbook_preview_failed';
+    return { ok: false, code, error: error.message || String(error) };
+  }
+});
+safeHandle('tangguan:importWorldbook', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    const pending = tangguanImportPreviews.get(String(opts.previewId || ''));
+    if (!pending || pending.expiresAt < Date.now() || pending.characterId !== String(opts.characterId || '')) return { ok: false, code: 'tangguan_import_preview_expired', error: 'Import preview expired. Please choose the file again.' };
+    tangguanImportPreviews.delete(String(opts.previewId));
+    return getTangguanStore().importWorldbook(pending.characterId, pending.worldbook, opts.expectedRevision);
+  } catch (error) { return { ok: false, code: 'tangguan_worldbook_import_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:exportCharacter', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    const item = getTangguanStore().getCharacter(opts.id || input);
+    if (!item.ok || !item.character) return { ok: false, code: 'tangguan_character_not_found' };
+    const picked = await dialog.showSaveDialog(mainWindow, { title: '导出角色卡', defaultPath: (item.character.name || 'character') + '.json', filters: [{ name: '角色卡 JSON', extensions: ['json'] }] });
+    if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+    writeStateFileAtomic(picked.filePath, JSON.stringify(TangguanCore.exportBundle(item.character, item.memories), null, 2));
+    return { ok: true, filePath: picked.filePath };
+  } catch (error) { return { ok: false, code: 'tangguan_export_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:listMemory', (_e, input) => {
+  try { const opts = input && typeof input === 'object' ? input : {}; return getTangguanStore().listMemory(opts.characterId, opts); }
+  catch (error) { return { ok: false, code: 'tangguan_memory_list_failed', items: [], error: error.message || String(error) }; }
+});
+safeHandle('tangguan:saveMemory', (_e, input) => {
+  try { const opts = input && typeof input === 'object' ? input : {}; return getTangguanStore().saveMemory(opts.characterId, opts.memory || {}, opts.expectedRevision); }
+  catch (error) { return { ok: false, code: 'tangguan_memory_save_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:deleteMemory', (_e, input) => {
+  try { const opts = input && typeof input === 'object' ? input : {}; return getTangguanStore().deleteMemory(opts.characterId, opts.memoryId, opts.expectedRevision); }
+  catch (error) { return { ok: false, code: 'tangguan_memory_delete_failed', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:retrieveContext', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    const store = getTangguanStore();
+    let mode = 'keyword';
+    let dataOrigin = 'local-worldbook';
+    let unknownReason = null;
+    let retrievalOptions = { tokenBudget: opts.tokenBudget, limit: opts.limit };
+    if (opts.semantic === true) {
+      if (!opts.ref || !opts.model) unknownReason = 'embedding_provider_not_selected';
+      else {
+        const index = store.getEmbeddingIndex(opts.characterId, opts.model);
+        if (!index.ok) unknownReason = index.code || 'embedding_index_unavailable';
+        else {
+          try {
+            const embedded = await gateway.createEmbeddings(String(opts.ref), String(opts.model), [String(opts.query || '')], { callType: 'embedding_query' });
+            if (embedded && embedded.ok && Array.isArray(embedded.vectors) && embedded.vectors[0]) {
+              retrievalOptions = Object.assign(retrievalOptions, { queryVector: embedded.vectors[0], vectors: index.vectors });
+              mode = 'hybrid';
+              dataOrigin = 'provider';
+            } else unknownReason = 'embedding_result_unknown';
+          } catch (error) { unknownReason = error && error.code || 'embedding_provider_failed'; }
+        }
+      }
+    }
+    const result = store.retrieveContext(opts.characterId, opts.query, retrievalOptions);
+    return Object.assign(result, { mode, dataOrigin, unknownReason, context: TangguanCore.formatContext(result) });
+  } catch (error) { return { ok: false, code: 'tangguan_retrieve_failed', items: [], context: '', error: error.message || String(error) }; }
+});
+safeHandle('tangguan:rebuildIndex', async (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  if (String(opts.mode || 'keyword') === 'semantic') {
+    try {
+      if (!opts.ref || !opts.model) return { ok: false, code: 'tangguan_embedding_provider_missing', error: 'Choose an account and embedding model first.' };
+      const store = getTangguanStore();
+      const detail = store.getCharacter(opts.characterId);
+      if (!detail.ok || !detail.character) return { ok: false, code: 'tangguan_character_not_found' };
+      const memories = Array.isArray(detail.memories) ? detail.memories.filter((item) => item && item.enabled !== false && item.content) : [];
+      if (!memories.length) return { ok: false, code: 'tangguan_memory_empty', error: 'Add at least one worldbook entry first.' };
+      const embedded = await gateway.createEmbeddings(String(opts.ref), String(opts.model), memories.map((item) => [item.title, item.content, ...(item.keywords || [])].filter(Boolean).join('\\n')), { callType: 'embedding_index' });
+      const vectors = {};
+      memories.forEach((item, index) => { if (embedded.vectors[index]) vectors[item.id] = embedded.vectors[index]; });
+      const rebuilt = store.rebuildEmbeddingIndex(opts.characterId, { modelId: opts.model, vectors, source: embedded.dataOrigin || 'provider' });
+      return Object.assign({ ok: true, characterId: String(opts.characterId || ''), mode: 'semantic', dataOrigin: embedded.dataOrigin || 'provider', model: String(opts.model), count: memories.length }, rebuilt);
+    } catch (error) { return { ok: false, code: error && error.code || 'tangguan_rebuild_failed', error: error.message || String(error) }; }
+  }
+  return { ok: true, characterId: String(opts.characterId || ''), mode: 'keyword', requestedMode: String(opts.mode || 'keyword'), dataOrigin: 'local-worldbook', message: '关键词索引无需重建' };
+});
+safeHandle('tangguan:generateDraft', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    if (!opts.ref || !opts.model) return { ok: false, code: 'tangguan_draft_provider_missing', error: '请先选择账户和模型' };
+    const response = await fetch(`http://127.0.0.1:${appPort}/gateway`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + LOCAL_TOKEN },
+      body: JSON.stringify({ ref: String(opts.ref), kind: 'chat', payload: { model: String(opts.model), stream: false, response_format: { type: 'json_object' }, messages: [
+        { role: 'system', content: 'Return only one valid JSON object for a local character card. Allowed keys: name, tagline, description, personality, scenario, greeting, firstMessage, exampleDialogue, systemPrompt, tags, matureAllowed. No Markdown, no code fences, no claims about saving. If a field is requested, improve only that field while keeping the other fields concise.' },
+        { role: 'user', content: String(opts.brief || '').slice(0, 4000) },
+      ] }, telemetry: { scope: 'tangguan', callType: 'tangguan_character_draft' } }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) return { ok: false, code: 'tangguan_draft_provider_failed', error: body && body.error && body.error.message ? body.error.message : '模型请求失败' };
+    const choice = body && body.choices && body.choices[0] && body.choices[0].message;
+    const raw = choice && (choice.content || choice.reasoning_content);
+    if (typeof raw !== 'string' || !raw.trim()) return { ok: false, code: 'tangguan_draft_invalid_json', error: 'The model returned no JSON draft.' };
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (_) { return { ok: false, code: 'tangguan_draft_invalid_json', error: 'The model returned invalid JSON; nothing was saved.' }; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, code: 'tangguan_draft_invalid_json', error: 'The model draft is not a JSON object.' };
+    const normalized = TangguanCore.normalizeCharacter(parsed);
+    delete normalized.id; delete normalized.createdAt; delete normalized.updatedAt;
+    return { ok: true, draft: normalized, costNotice: true };
+  } catch (error) { return { ok: false, code: 'tangguan_draft_failed', error: error.message || String(error) }; }
+});
+
 safeOn('set-titlebar-overlay', (e, opts) => {
   if (mainWindow && typeof mainWindow.setTitleBarOverlay === 'function') {
     try { mainWindow.setTitleBarOverlay(opts); } catch (_) {}
@@ -887,6 +1341,7 @@ safeHandle('fs:writeState', async (e, jsonStr, revision) => {
     // 安全检查：最终路径必须在 userData 子树内
     if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
     writeStateFileAtomic(file, jsonStr || '');
+    cleanupChatPartials(gate.revision);
     return { ok: true, revision: gate.revision };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -894,6 +1349,56 @@ safeHandle('fs:writeState', async (e, jsonStr, revision) => {
 });
 
 // 读取应用状态文件（与端口无关，作为 localStorage 的权威回退源）
+// 流式聊天的显式中间态落盘：只写 state.json，不触发 SQLite 全量写穿。
+safeHandle('chat:flushPartial', async (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    if (opts.patch && typeof opts.patch === 'object') {
+      const patch = opts.patch;
+      const conversationId = String(patch.conversationId || '');
+      const messageId = String(patch.messageId || '');
+      const incomingMessage = patch.message && typeof patch.message === 'object' ? patch.message : null;
+      if (!conversationId || !messageId || !incomingMessage) return { ok: false, code: 'partial_patch_invalid' };
+      if (conversationId.length > 160 || messageId.length > 160) return { ok: false, code: 'partial_patch_invalid' };
+      if (incomingMessage.role && String(incomingMessage.role) !== 'assistant') return { ok: false, code: 'partial_patch_invalid' };
+      const gate = acceptStateRevision({ partial: true }, opts.revision);
+      if (!gate.ok) return gate;
+      const textField = (value, max) => String(value == null ? '' : value).slice(0, max);
+      const safePatch = {
+        conversationId,
+        messageId,
+        message: {
+          content: textField(incomingMessage.content, 4 * 1024 * 1024),
+          think: textField(incomingMessage.think, 4 * 1024 * 1024),
+          streamStatus: ['streaming', 'partial', 'completed', 'failed', 'cancelled'].includes(String(incomingMessage.streamStatus)) ? String(incomingMessage.streamStatus) : 'partial',
+          error: textField(incomingMessage.error, 1000),
+          webSources: Number.isFinite(Number(incomingMessage.webSources)) ? Number(incomingMessage.webSources) : null,
+          sequence: Math.max(0, Number(incomingMessage.sequence) || 0),
+          requestId: textField(incomingMessage.requestId, 200),
+          startedAt: Number(incomingMessage.startedAt) || 0,
+          updatedAt: Number(incomingMessage.updatedAt) || Date.now(),
+        },
+        conversationUpdatedAt: Number(patch.conversationUpdatedAt) || Date.now(),
+      };
+      writeChatPartialPatch(safePatch, gate.revision);
+      return { ok: true, revision: gate.revision, durable: 'chat-partial', partial: true, conversationId, messageId };
+    }
+    const json = typeof opts.stateJson === 'string' ? opts.stateJson : (typeof opts.json === 'string' ? opts.json : '');
+    if (!json) return { ok: false, code: 'partial_state_missing' };
+    const gate = acceptStateRevision(json, opts.revision);
+    if (!gate.ok) return gate;
+    const userData = app.getPath('userData');
+    const dir = path.join(userData, 'tangbao-data');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'state.json');
+    if (!file.startsWith(userData + path.sep)) return { ok: false, code: 'path_denied' };
+    writeStateFileAtomic(file, json);
+    return { ok: true, revision: gate.revision, durable: 'state.json', conversationId: String(opts.conversationId || ''), messageId: String(opts.messageId || '') };
+  } catch (error) {
+    return { ok: false, code: 'partial_state_write_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
 safeHandle('fs:readState', async () => {
   try {
     const userData = app.getPath('userData');
@@ -901,7 +1406,8 @@ safeHandle('fs:readState', async () => {
     // 安全检查：最终路径必须在 userData 子树内
     if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
     if (!fs.existsSync(file)) return { ok: true, data: null };
-      const data = fs.readFileSync(file, 'utf8');
+      const state = readChatPartialPatches(JSON.parse(fs.readFileSync(file, 'utf8')));
+      const data = JSON.stringify(state, null, 2);
       latestStateRevision = Math.max(latestStateRevision, extractStateRevision(data));
       return { ok: true, data };
   } catch (err) {
@@ -992,6 +1498,7 @@ function storageInfo() {
   info.audit = svc && storageFileRepo ? auditFileRepo(svc, storageFileRepo) : { orphanImages: [], orphanDocuments: [], trace: { ok: false, orphanEvents: [], invalidEvents: [], duplicateSequences: [] } };
   info.audit.stateConsistency = auditStateConsistency(svc);
   info.backups = listStorageBackups();
+  info.moduleSessions = getModuleSessionStore().info();
   return info;
 }
 
@@ -1913,7 +2420,7 @@ function buildChildErrorPage(status, statusText, originalUrl) {
   const html = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
     + '<title>加载失败 ' + esc(status) + '</title><style>'
     + 'body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
-    + 'background:#1e1e2e;color:#cdd6f4;font-family:system-ui,"Microsoft YaHei",sans-serif}'
+     + 'background:#1e1e2e;color:#cdd6f4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif}'
     + '.b{max-width:560px;padding:32px;text-align:center}'
     + '.c{font-size:44px;font-weight:700;color:#f38ba8;margin:0 0 12px}'
     + '.m{font-size:15px;line-height:1.7;margin:0 0 18px}'
