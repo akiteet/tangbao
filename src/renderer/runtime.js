@@ -180,12 +180,49 @@
 
     // 统一的模型调用入口。渲染进程只给 ref（密钥引用）+ kind（路径白名单）+ payload，
     // 目标地址和密钥都由主进程解析，前端既指定不了转发目标，也接触不到密钥。
+    normalizeGatewayKind(kind) {
+      const aliases = { tangguan: 'chat', create: 'chat', workflow: 'chat', 'tangguan/chat': 'chat', 'create/chat': 'chat' };
+      const source = kind && typeof kind === 'object'
+        ? (kind.kind || kind.type || kind.requestType)
+        : kind;
+      const value = String(source || 'chat').trim().toLowerCase();
+      return aliases[value] || value || 'chat';
+    },
+
+    sanitizeGatewayPayload(value) {
+      // Renderer-only policy flags must never reach a provider, including from
+      // legacy module callers that still attach them to nested options.
+      const policyFields = new Set(['web', 'allowWeb', 'allowAttachments', 'allowTools', 'providerModule', 'requestKind']);
+      const clean = (item) => {
+        if (Array.isArray(item)) return item.map(clean);
+        if (!item || typeof item !== 'object') return item;
+        const output = {};
+        Object.entries(item).forEach(([key, value]) => {
+          if (!policyFields.has(key)) output[key] = clean(value);
+        });
+        return output;
+      };
+      return clean(value && typeof value === 'object' ? value : {});
+    },
+
+    gatewayRequest(opts) {
+      const o = opts || {};
+      return {
+        ref: o.ref,
+        // Tangguan/Create are module owners, not provider protocols. The
+        // request body must always use the canonical chat gateway kind.
+        kind: rt.normalizeGatewayKind(o.kind || o.type || o.requestType),
+        payload: rt.sanitizeGatewayPayload(o.payload),
+        telemetry: o.telemetry || undefined,
+      };
+    },
+
     gatewayFetch(opts) {
       const o = opts || {};
       return fetch(rt.gatewayUrl(), {
         method: 'POST',
         headers: rt.authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ ref: o.ref, kind: o.kind || 'chat', payload: o.payload || {}, telemetry: o.telemetry || undefined }),
+        body: JSON.stringify(rt.gatewayRequest(o)),
         signal: o.signal,
       });
     },

@@ -15,16 +15,6 @@
     { id: 'teacher', name: '学习导师', icon: '📚', desc: '分步骤讲解知识点', category: 'learn', recommended: false, systemPrompt: '你是一位耐心的学习导师。请用通俗易懂的语言分步骤讲解知识点，并给出示例。', model: '', temperature: 0.6, topP: 1, web: false, tone: '亲切', tags: ['学习'], starters: ['用通俗语言讲讲相对论', '帮我制定一个学习计划的步骤'] },
   ];
 
-  const CATEGORIES = [
-    { key: 'all', label: '全部' },
-    { key: 'write', label: '写作' },
-    { key: 'translate', label: '翻译' },
-    { key: 'code', label: '代码' },
-    { key: 'career', label: '职场' },
-    { key: 'learn', label: '学习' },
-    { key: 'custom', label: '自定义' },
-  ];
-
   const TONES = [
     { v: '', label: '跟随默认' },
     { v: '专业', label: '专业' },
@@ -38,46 +28,234 @@
 
   function shortModel(m) { return m || ''; }
 
-  function fallbackCopy(text, done) {
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy'); ta.remove();
-      if (done) done();
-    } catch (e) { App.ui.toast('复制失败'); }
+  let taskSessionOpen = false;
+  let taskSessionConversationId = '';
+  let libraryTab = 'presets';
+  let libraryCollapsed = false;
+  let createResizeFrame = 0;
+  let lastCreateDesktop = null;
+
+  function taskSessionDrawer() {
+    // Legacy DOM contract retained for extensions: createTaskDrawer.
+    return $('createTaskDrawer');
+  }
+
+  function mountTaskSessionSurface() {
+    const host = $('createSessionPane');
+    const surface = $('createChatSurface');
+    if (!surface || !taskSessionOpen) return false;
+    if (host) host.hidden = false;
+    if (App.chat && App.chat.mountSurface) {
+      App.chat.mountSurface({
+        root: surface,
+        owner: 'create',
+        mode: 'create',
+        conversationId: taskSessionConversationId || (App.chat.activeConversationId ? App.chat.activeConversationId('create') : null),
+      });
+      if (App.chat.syncImgBtn) App.chat.syncImgBtn();
+    }
+    return true;
+  }
+
+  function closeTaskSession() {
+    taskSessionOpen = false;
+    taskSessionConversationId = '';
+    const surface = App.chat && App.chat.surface ? App.chat.surface() : null;
+    if (surface && surface.owner === 'create' && App.chat.unmountSurface) App.chat.unmountSurface();
+    const host = $('createSessionPane');
+    if (host) host.hidden = true;
+  }
+
+  function createConversationList() {
+    return App.chat && typeof App.chat.conversationList === 'function'
+      ? App.chat.conversationList('create')
+      : [];
+  }
+
+  function createSessionTitle(conv) {
+    const title = String(conv && conv.title || '').trim();
+    if (conv && conv.titleMode === 'manual' && title) return title;
+    const firstUser = Array.isArray(conv && conv.messages)
+      ? conv.messages.find((item) => item && item.role === 'user' && String(item.content || '').trim())
+      : null;
+    if (firstUser) return String(firstUser.content).replace(/\s+/g, ' ').trim().slice(0, 28) || '新会话';
+    return title && title !== '新对话' ? title : '新会话';
+  }
+
+  function createTabbedLibraryMarkup(content) {
+    const presetActive = libraryTab === 'presets';
+    return `<div class="create-library-head"><div><b>糖创</b><small>任务型智能体与工作流</small></div><button type="button" class="icon-btn create-library-collapse-btn" data-create-library-toggle aria-label="收起糖创库" title="收起糖创库">‹</button></div>
+      <div class="create-library-tabs">
+        <button type="button" class="${presetActive ? 'active' : ''}" data-create-library-tab="presets">预设</button>
+        <button type="button" class="${!presetActive ? 'active' : ''}" data-create-library-tab="sessions">会话</button>
+        <button type="button" class="create-library-collapsed-tab" data-create-library-tab="presets" data-create-library-expand aria-label="展开预设">预设</button>
+        <button type="button" class="create-library-collapsed-tab" data-create-library-tab="sessions" data-create-library-expand aria-label="展开会话">会话</button>
+      </div>
+      <div class="create-library-content">${content}</div>`;
+  }
+
+  function createLibraryMarkup(content, options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    if (opts.tabs !== false) return createTabbedLibraryMarkup(content);
+    const title = opts.title || '糖创';
+    const subtitle = opts.subtitle || '任务型智能体与工作流';
+    const expandLabel = opts.expandLabel || title;
+    return `<div class="create-library-head"><div><b>${esc(title)}</b><small>${esc(subtitle)}</small></div><button type="button" class="icon-btn create-library-collapse-btn" data-create-library-toggle aria-label="收起${esc(title)}" title="收起${esc(title)}">‹</button><button type="button" class="create-library-collapsed-tab" data-create-library-expand aria-label="展开${esc(title)}">${esc(expandLabel)}</button></div>
+      <div class="create-library-content">${content}</div>`;
+  }
+
+  function wrapCreateGenericLibrary(root, options) {
+    if (!root) return;
+    root.innerHTML = createLibraryMarkup(root.innerHTML, Object.assign({ tabs: false }, options || {}));
+    bindCreateLibraryControls(root);
+  }
+
+  function bindCreateLibraryControls(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-create-library-tab]').forEach((button) => {
+      button.addEventListener('click', () => {
+        libraryTab = button.dataset.createLibraryTab === 'sessions' ? 'sessions' : 'presets';
+        if (button.hasAttribute('data-create-library-expand')) libraryCollapsed = false;
+        App.create.render();
+      });
+    });
+    root.querySelectorAll('[data-create-library-toggle]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (window.innerWidth > 900) {
+          libraryCollapsed = !libraryCollapsed;
+          App.create.render();
+        }
+      });
+    });
+  }
+
+  async function renameCreateSession(id) {
+    const conv = createConversationList().find((item) => item && item.id === String(id || ''));
+    if (!conv) return;
+    const value = await App.ui.promptModal({ title: '重命名会话', label: '会话名称', value: createSessionTitle(conv), maxLength: 120 });
+    if (value == null) return;
+    const title = String(value).trim();
+    if (!title) { App.ui.toast('会话名称不能为空'); return; }
+    conv.title = title;
+    conv.titleMode = 'manual';
+    conv.updatedAt = Date.now();
+    App.chat.persistConversation(conv);
+    App.create.render();
+  }
+
+  function deleteCreateSession(id) {
+    const conv = createConversationList().find((item) => item && item.id === String(id || ''));
+    if (!conv || !window.confirm('\u5220\u9664\u6b64\u4f1a\u8bdd\uff1f\u5220\u9664\u540e\u65e0\u6cd5\u6062\u590d\u3002')) return false;
+    const activeId = App.chat.activeConversationId ? App.chat.activeConversationId('create') : null;
+    const result = App.chat.deleteConversation(conv.id, { owner: 'create' });
+    if (activeId === conv.id) taskSessionConversationId = result && result.activeId ? result.activeId : '';
+    App.create.render();
+    return !!(result && result.ok !== false);
+  }
+
+  function clearCreateSession(id) {
+    const conv = createConversationList().find((item) => item && item.id === String(id || ''));
+    if (!conv || !window.confirm('清空此会话的全部消息？此操作不可撤销。')) return;
+    conv.messages = [];
+    conv.updatedAt = Date.now();
+    App.chat.persistConversation(conv);
+    App.create.render();
+  }
+
+  function exportCreateSession(id) {
+    const conv = createConversationList().find((item) => item && item.id === String(id || ''));
+    if (!conv || !App.ui || !App.ui._convToMarkdown) return;
+    const markdown = App.ui._convToMarkdown(conv);
+    const safeName = String(createSessionTitle(conv) || 'create-session').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${safeName || 'create-session'}.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    App.ui.toast('会话已导出');
+  }
+
+  function bindCreateSessionActions(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-create-session-open]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = button.dataset.createSessionOpen;
+        taskSessionConversationId = String(id || '');
+        taskSessionOpen = true;
+        App.chat.activate(id, { owner: 'create', stay: 'create', persist: false, render: false });
+        App.create.render();
+      });
+    });
+    root.querySelectorAll('[data-create-session-rename]').forEach((button) => {
+      button.addEventListener('click', () => renameCreateSession(button.dataset.createSessionRename));
+    });
+    root.querySelectorAll('[data-create-session-delete]').forEach((button) => {
+      button.addEventListener('click', () => deleteCreateSession(button.dataset.createSessionDelete));
+    });
+    root.querySelectorAll('[data-create-session-clear]').forEach((button) => {
+      button.addEventListener('click', () => clearCreateSession(button.dataset.createSessionClear));
+    });
+    root.querySelectorAll('[data-create-session-export]').forEach((button) => {
+      button.addEventListener('click', () => exportCreateSession(button.dataset.createSessionExport));
+    });
   }
 
   App.create = {
     stateSearch: '',
-    stateCat: 'all',
-    stateSort: 'default',
-    stateTag: '',
     tab: 'agents',
     editingId: null,
 
     onShow() {
+      if (!App.create._resizeBound) {
+        App.create._resizeBound = true;
+        lastCreateDesktop = window.innerWidth > 900;
+        window.addEventListener('resize', () => {
+          if (App.state.view !== 'create' || createResizeFrame) return;
+          createResizeFrame = requestAnimationFrame(() => {
+            createResizeFrame = 0;
+            const desktop = window.innerWidth > 900;
+            if (desktop !== lastCreateDesktop) {
+              lastCreateDesktop = desktop;
+              App.create.render();
+            }
+          });
+        });
+      }
       App.create.render();
-      const t = $('chatTitle');
-      if (t) t.textContent = '糖创';
     },
 
     /* ============ 顶层渲染：子标签 ============ */
     render() {
       const wrap = $('createView');
       if (!wrap) return;
+      const surface = App.chat && App.chat.surface ? App.chat.surface() : null;
+      if (surface && surface.owner === 'create' && App.chat.unmountSurface) {
+        App.chat.unmountSurface({ preserveActiveId: true });
+      }
+      if (!taskSessionConversationId && App.chat && App.chat.activeConversationId) taskSessionConversationId = App.chat.activeConversationId('create') || '';
+      // Create owns its session surface. A catalog refresh (tab/account/model
+      // changes) must not collapse the active conversation back into Chat.
+      taskSessionOpen = true;
+      wrap.classList.toggle('create-library-is-collapsed', libraryCollapsed && window.innerWidth > 900);
       wrap.innerHTML = `
-        <div class="module-header">
-          <h2>糖创</h2>
-          <p>选择或打造专属智能体，用模板与多步工作流高效创作</p>
-        </div>
         <div class="create-shell">
           <div class="create-tabs" id="createTabs">
-            <button class="create-tab${App.create.tab === 'agents' ? ' active' : ''}" data-tab="agents">智能体</button>
-            <button class="create-tab${App.create.tab === 'templates' ? ' active' : ''}" data-tab="templates">模板库</button>
+            <button class="create-tab${App.create.tab === 'agents' ? ' active' : ''}" data-tab="agents">任务智能体</button>
             <button class="create-tab${App.create.tab === 'workflows' ? ' active' : ''}" data-tab="workflows">工作流</button>
           </div>
-          <div id="createContent"></div>
+          <div class="create-workspace">
+            <section class="create-catalog" id="createContent"></section>
+            <section class="create-session-pane" id="createSessionPane" aria-label="糖创会话">
+              <header class="create-session-header">
+                <div><b>任务会话</b><small>任务型智能体与工作流的独立对话</small></div>
+                <div class="create-session-actions"><button type="button" class="btn-ghost" data-create-new-session>新会话</button></div>
+              </header>
+              <div class="create-chat-surface" id="createChatSurface"></div>
+            </section>
+          </div>
         </div>`;
       $('createTabs').addEventListener('click', (e) => {
         const b = e.target.closest('[data-tab]');
@@ -85,66 +263,89 @@
         App.create.tab = b.dataset.tab;
         App.create.render();
       });
-      if (App.create.tab === 'templates') App.create.renderTemplates();
-      else if (App.create.tab === 'workflows') App.create.renderWorkflows();
-      else App.create.renderAgents();
+      if (App.create.tab === 'workflows') App.create.renderWorkflows();
+      else App.create.renderLibrary();
+      const newSession = wrap.querySelector('[data-create-new-session]');
+      // Legacy close hook name retained for module extensions: data-create-task-close.
+      if (newSession) newSession.addEventListener('click', () => App.create.newSession());
+      if (!App.create._taskEscBound) {
+        App.create._taskEscBound = true;
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && App.state.view === 'create' && taskSessionOpen) closeTaskSession();
+        });
+      }
+      if (taskSessionOpen) mountTaskSessionSurface();
+      if (App.ui && App.ui.syncModelSelect) App.ui.syncModelSelect();
+    },
+
+    openTaskSession(id) {
+      taskSessionConversationId = String(id || (App.chat.activeConversationId ? App.chat.activeConversationId('create') : '') || '');
+      taskSessionOpen = true;
+      if (!mountTaskSessionSurface()) App.create.render();
+      if (App.ui && App.ui.syncModelSelect) App.ui.syncModelSelect();
+    },
+
+    closeTaskSession,
+
+    getAgent(id) {
+      const target = String(id || '');
+      if (!target) return null;
+      return [...PRESET_AGENTS, ...(App.state.settings.agents || [])].find((item) => item && item.id === target) || null;
+    },
+
+    newSession() {
+      const conv = App.chat.newConversation(null, { owner: 'create', stay: 'create', originModule: 'create', inheritActive: true });
+      if (conv) {
+        taskSessionConversationId = conv.id;
+        libraryTab = 'sessions';
+        App.create.render();
+      }
+      return conv;
+    },
+
+    renderTaskWelcome(welcome, conv) {
+      if (!welcome) return;
+      const agent = conv && conv.agentId ? [...PRESET_AGENTS, ...(App.state.settings.agents || [])].find((item) => item.id === conv.agentId) : null;
+      welcome.innerHTML = `<div class="create-task-welcome"><div class="create-task-mark">创</div><h2>${esc(agent ? agent.name : (conv && conv.title) || '任务会话')}</h2><p>这里是糖创的任务型会话；模型、提示词和工作流上下文只在糖创内继续。</p></div>`;
     },
 
     /* ============ 智能体 tab ============ */
+    renderLibrary() {
+      if (libraryTab === 'sessions') App.create.renderSessions();
+      else App.create.renderAgents();
+    },
+
     renderAgents() {
       const c = $('createContent');
       if (!c) return;
-      const tags = App.create.allTags();
-      c.innerHTML = `
-        <div class="create-sec">
-          <div class="create-toolbar">
-            <input type="text" class="create-search" id="createSearch" placeholder="搜索智能体…" value="${esc(App.create.stateSearch)}" />
-            <div class="toolbar-row">
-              <div class="cat-pills" id="catPills">
-                ${CATEGORIES.map(cat => `<button class="cat-pill${cat.key === App.create.stateCat ? ' active' : ''}" data-cat="${cat.key}">${cat.label}</button>`).join('')}
-              </div>
-              <select class="create-sort" id="createSort">
-                <option value="default"${App.create.stateSort === 'default' ? ' selected' : ''}>默认排序</option>
-                <option value="usage"${App.create.stateSort === 'usage' ? ' selected' : ''}>最常用</option>
-                <option value="name"${App.create.stateSort === 'name' ? ' selected' : ''}>名称</option>
-              </select>
-            </div>
-            ${tags.length ? `<div class="tag-pills" id="tagPills">
-              <button class="tag-pill${App.create.stateTag === '' ? ' active' : ''}" data-tag="">全部标签</button>
-              ${tags.map(t => `<button class="tag-pill${App.create.stateTag === t ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}
-            </div>` : ''}
-          </div>
-        </div>
-        <div class="agent-grid" id="agentGrid"></div>`;
+      c.innerHTML = createLibraryMarkup(`<div class="create-sec"><div class="create-toolbar"><input type="text" class="create-search" id="createSearch" placeholder="搜索任务智能体…" value="${esc(App.create.stateSearch)}" /></div></div><div class="agent-grid" id="agentGrid"></div>`);
 
       const search = $('createSearch');
       if (search) search.addEventListener('input', (e) => {
         App.create.stateSearch = e.target.value.trim().toLowerCase();
-        App.create.renderGrid(); // 仅刷新网格，保留输入框焦点
+        App.create.renderGrid();
       });
-      $('catPills').addEventListener('click', (e) => {
-        const pill = e.target.closest('[data-cat]');
-        if (!pill) return;
-        App.create.stateCat = pill.dataset.cat;
-        App.create.renderAgents();
-      });
-      $('createSort').addEventListener('change', (e) => { App.create.stateSort = e.target.value; App.create.renderAgents(); });
-      const tagPills = $('tagPills');
-      if (tagPills) tagPills.addEventListener('click', (e) => {
-        const pill = e.target.closest('[data-tag]');
-        if (!pill) return;
-        App.create.stateTag = pill.dataset.tag;
-        App.create.renderAgents();
-      });
+      bindCreateLibraryControls(c);
       App.create.renderGrid();
+    },
+
+    renderSessions() {
+      const c = $('createContent');
+      if (!c) return;
+      const activeId = App.chat.activeConversationId ? App.chat.activeConversationId('create') : '';
+      const sessions = createConversationList().slice().sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+      const content = sessions.length
+        ? `<div class="create-session-list tg-session-list">${sessions.map((conv) => `<div class="create-session-row tg-session-row${conv.id === activeId ? ' active' : ''}" data-create-session-row="${esc(conv.id)}"><button type="button" class="create-session-open tg-session-open" data-create-session-open="${esc(conv.id)}"><b>${esc(createSessionTitle(conv))}</b><small>${Array.isArray(conv.messages) ? conv.messages.length : 0} 条消息</small></button><div class="create-session-row-actions tg-session-actions"><button type="button" class="btn-ghost mini" data-create-session-rename="${esc(conv.id)}">重命名</button><button type="button" class="btn-ghost mini" data-create-session-delete="${esc(conv.id)}">删除</button><button type="button" class="btn-ghost mini" data-create-session-clear="${esc(conv.id)}">清空</button><button type="button" class="btn-ghost mini" data-create-session-export="${esc(conv.id)}">导出</button></div></div>`).join('')}</div>`
+        : '<div class="create-empty">还没有糖创会话。打开一个预设，或直接新建会话。</div>';
+      c.innerHTML = createLibraryMarkup(content);
+      bindCreateLibraryControls(c);
+      bindCreateSessionActions(c);
     },
 
     renderGrid() {
       const grid = $('agentGrid');
       if (!grid) return;
       const kw = App.create.stateSearch;
-      const cat = App.create.stateCat;
-      const tag = App.create.stateTag;
       const usage = App.state.settings.agentUsage || {};
       const custom = App.state.settings.agents || [];
       let all = [
@@ -153,22 +354,18 @@
       ];
       let filtered = all.filter(a => {
         const hitKw = !kw || (a.name + ' ' + (a.desc || '')).toLowerCase().includes(kw);
-        const hitCat = cat === 'all' || (a.category || 'custom') === cat;
-        const hitTag = !tag || (a.tags || []).includes(tag);
-        return hitKw && hitCat && hitTag;
+        return hitKw;
       });
-      if (App.create.stateSort === 'usage') filtered.sort((x, y) => ((usage[y.id] || 0) - (usage[x.id] || 0)));
-      else if (App.create.stateSort === 'name') filtered.sort((x, y) => x.name.localeCompare(y.name, 'zh'));
 
       if (!filtered.length) {
-        grid.innerHTML = '<div class="create-empty">没有匹配的智能体，换个关键词或分类试试～</div>';
+        grid.innerHTML = '<div class="create-empty">没有匹配的任务智能体，换个关键词或分类试试～</div>';
         return;
       }
       grid.innerHTML = filtered.map(a => App.create.agentCard(a)).join('') +
         `<button class="agent-card add-agent" id="addAgentBtn">
            <span class="agent-icon">➕</span>
-           <span class="agent-name">新建智能体</span>
-           <span class="agent-desc">自定义角色与提示词</span>
+            <span class="agent-name">新建任务智能体</span>
+            <span class="agent-desc">自定义任务设定与提示词</span>
          </button>`;
 
       grid.querySelectorAll('[data-agent]').forEach(card => card.addEventListener('click', () => {
@@ -253,7 +450,7 @@
       App.state.settings.agents.push(copy);
       App.persist();
       App.create.render();
-      App.ui.toast('已克隆为自定义智能体');
+      App.ui.toast('已克隆为自定义任务智能体');
     },
 
     /* ---------- 新建 / 编辑 弹窗 ---------- */
@@ -271,7 +468,7 @@
       const isEdit = !!agent;
       const el = (k, d) => (agent && agent[k] != null ? agent[k]
         : (prefill && prefill[k] != null ? prefill[k] : d));
-      const chatProv = App.getProvider('chat');
+      const chatProv = App.getProvider('create');
       const chatModels = (chatProv.models && chatProv.models.length) ? chatProv.models : (chatProv.model ? [chatProv.model] : []);
       const modelOpts = `<option value="">跟随默认</option>` + chatModels.map(m =>
         `<option value="${esc(m)}"${m === el('model', '') ? ' selected' : ''}>${esc(m)}</option>`).join('');
@@ -286,7 +483,7 @@
       modal.innerHTML = `
         <div class="modal agent-modal" role="dialog" aria-modal="true">
           <div class="modal-header">
-            <span>${isEdit ? '编辑智能体' : '新建智能体'}</span>
+            <span>${isEdit ? '编辑任务智能体' : '新建任务智能体'}</span>
             <button class="icon-btn" id="agentFormClose" aria-label="关闭">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             </button>
@@ -297,9 +494,9 @@
                 <input type="text" id="afName" value="${esc(el('name', ''))}" placeholder="如 旅行规划师" autocomplete="off" />
               </label>
               <label class="field"><span class="field-label">一句话描述</span>
-                <input type="text" id="afDesc" value="${esc(el('desc', ''))}" placeholder="这个智能体擅长做什么" autocomplete="off" />
+                <input type="text" id="afDesc" value="${esc(el('desc', ''))}" placeholder="这个任务智能体适合处理什么" autocomplete="off" />
               </label>
-              <label class="field"><span class="field-label">系统提示词（角色设定）</span>
+                <label class="field"><span class="field-label">任务系统提示词</span>
                 <textarea id="afPrompt" rows="4" placeholder="你是一位……">${esc(el('systemPrompt', ''))}</textarea>
               </label>
               <div class="field"><span class="field-label">模型</span>
@@ -331,7 +528,7 @@
                 <input type="text" id="afTags" value="${esc((el('tags', []) || []).join('，'))}" placeholder="如 写作，文案" autocomplete="off" />
               </label>
               <div class="field">
-                <span class="field-label">引导问题（点击即可开聊）</span>
+                <span class="field-label">任务启动问题（点击即可继续）</span>
                 <div id="afStarters">${starters.map(s => App.create.starterRowHtml(s)).join('')}</div>
                 <button type="button" class="mini add-starter" id="afAddStarter">+ 添加引导问题</button>
               </div>
@@ -418,7 +615,7 @@
         App.create.editingId = null;
         close();
         App.create.render();
-        App.ui.toast(isEdit ? '已更新智能体' : '已创建智能体');
+        App.ui.toast(isEdit ? '已更新任务智能体' : '已创建任务智能体');
       };
 
       modal.querySelector('#agentFormClose').addEventListener('click', close);
@@ -460,7 +657,7 @@
       modal.innerHTML = `
         <div class="modal agent-modal" role="dialog" aria-modal="true">
           <div class="modal-header">
-            <span>智能体详情</span>
+              <span>任务智能体详情</span>
             <button class="icon-btn" id="pvClose" aria-label="关闭">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             </button>
@@ -472,14 +669,14 @@
               <div class="pv-desc">${esc(agent.desc || '')}</div>
               ${tags}
               ${cfgHtml}
-              <div class="pv-prompt-label">角色设定</div>
+              <div class="pv-prompt-label">任务设定</div>
               <div class="pv-prompt">${esc(previewPrompt)}</div>
               ${starters}
             </div>
           </div>
           <div class="modal-footer">
             ${agent.custom ? '<button class="btn-ghost" id="pvEdit">编辑</button><button class="btn-ghost danger" id="pvDel">删除</button>' : '<button class="btn-ghost" id="pvClone">克隆</button>'}
-            <button class="btn-primary" id="pvStart">开始对话</button>
+            <button class="btn-primary" id="pvStart">打开任务会话</button>
           </div>
         </div>`;
       document.body.appendChild(modal);
@@ -502,13 +699,13 @@
     /* ---------- 删除确认 ---------- */
     confirmDelete(id) {
       const agent = (App.state.settings.agents || []).find(a => a.id === id);
-      const name = agent ? agent.name : '该智能体';
+      const name = agent ? agent.name : '该任务智能体';
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.id = 'agentDelMask';
       modal.innerHTML = `
         <div class="modal agent-modal" role="dialog" aria-modal="true">
-          <div class="modal-header"><span>删除智能体</span>
+          <div class="modal-header"><span>删除任务智能体</span>
             <button class="icon-btn" id="delClose" aria-label="关闭">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             </button>
@@ -526,128 +723,12 @@
         App.persist();
         close();
         App.create.render();
-        App.ui.toast('已删除智能体');
+      App.ui.toast('已删除任务智能体');
       };
       modal.querySelector('#delClose').addEventListener('click', close);
       modal.querySelector('#delCancel').addEventListener('click', close);
       modal.querySelector('#delOk').addEventListener('click', del);
       modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-    },
-
-    /* ============ 模板库 tab ============ */
-    renderTemplates() {
-      const c = $('createContent');
-      if (!c) return;
-      const tpls = App.state.settings.templates || [];
-      c.innerHTML = `
-        <div class="create-sec">
-          <div class="create-toolbar">
-            <div class="toolbar-row between">
-              <div class="module-sub">提示词模板库</div>
-              <button class="btn-primary sm" id="addTplBtn">+ 新建模板</button>
-            </div>
-          </div>
-        </div>
-        <div class="tpl-grid" id="tplGrid"></div>`;
-      $('addTplBtn').addEventListener('click', () => App.create.openTemplateForm());
-      const grid = $('tplGrid');
-      if (!tpls.length) {
-        grid.innerHTML = '<div class="create-empty">还没有模板，点“新建模板”添加常用提示词吧～</div>';
-        return;
-      }
-      grid.innerHTML = tpls.map(t => `
-        <div class="tpl-card" data-tpl="${t.id}">
-          <div class="tpl-head"><span class="tpl-ico">${esc(t.icon || '📋')}</span><span class="tpl-title">${esc(t.title)}</span>${t.category ? `<span class="tpl-cat">${esc(t.category)}</span>` : ''}</div>
-          <div class="tpl-prompt">${esc((t.prompt || '').length > 120 ? (t.prompt || '').slice(0, 120) + '…' : (t.prompt || ''))}</div>
-          <div class="tpl-ops">
-            <button class="mini" data-use="${t.id}">使用</button>
-            <button class="mini" data-copy="${t.id}">复制</button>
-            <button class="mini" data-edit="${t.id}">编辑</button>
-            <button class="mini danger" data-del="${t.id}">删除</button>
-          </div>
-        </div>`).join('');
-      grid.querySelectorAll('[data-use]').forEach(b => b.addEventListener('click', () => {
-        const t = (App.state.settings.templates || []).find(x => x.id === b.dataset.use);
-        if (t) App.create.useTemplate(t);
-      }));
-      grid.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
-        const t = (App.state.settings.templates || []).find(x => x.id === b.dataset.copy);
-        if (!t) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t.prompt || '').then(() => App.ui.toast('已复制提示词')).catch(() => fallbackCopy(t.prompt || ''));
-        else fallbackCopy(t.prompt || '');
-      }));
-      grid.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
-        const t = (App.state.settings.templates || []).find(x => x.id === b.dataset.edit);
-        if (t) App.create.openTemplateForm(t);
-      }));
-      grid.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
-        App.state.settings.templates = (App.state.settings.templates || []).filter(x => x.id !== b.dataset.del);
-        App.persist(); App.create.renderTemplates(); App.ui.toast('已删除模板');
-      }));
-    },
-
-    useTemplate(t) {
-      App.chat.newConversation();
-      const input = $('input');
-      if (input) { input.value = t.prompt || ''; input.focus(); }
-    },
-
-    openTemplateForm(tpl) {
-      const isEdit = !!tpl;
-      const el = (k, d) => (tpl && tpl[k] != null ? tpl[k] : d);
-      const modal = document.createElement('div');
-      modal.className = 'modal-mask';
-      modal.id = 'tplModalMask';
-      modal.innerHTML = `
-        <div class="modal agent-modal" role="dialog" aria-modal="true">
-          <div class="modal-header"><span>${isEdit ? '编辑模板' : '新建模板'}</span>
-            <button class="icon-btn" id="tplClose" aria-label="关闭">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </button>
-          </div>
-          <div class="modal-body">
-            <div class="agent-form">
-              <label class="field"><span class="field-label">标题 <em>*</em></span>
-                <input type="text" id="tfTitle" value="${esc(el('title', ''))}" placeholder="如 周报模板" autocomplete="off" /></label>
-              <label class="field"><span class="field-label">分类</span>
-                <input type="text" id="tfCat" value="${esc(el('category', ''))}" placeholder="如 职场 / 写作" autocomplete="off" /></label>
-              <label class="field"><span class="field-label">图标</span>
-                <input type="text" id="tfIcon" class="icon-custom" value="${esc(el('icon', ''))}" placeholder="emoji，如 📋" maxlength="4" /></label>
-              <label class="field"><span class="field-label">提示词 <em>*</em></span>
-                <textarea id="tfPrompt" rows="5" placeholder="写下可复用的提示词…">${esc(el('prompt', ''))}</textarea></label>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn-ghost" id="tplCancel">取消</button>
-            <button class="btn-primary" id="tplSave">保存</button>
-          </div>
-        </div>`;
-      document.body.appendChild(modal);
-      const titleInput = modal.querySelector('#tfTitle');
-      const close = () => modal.remove();
-      const save = () => {
-        const title = modal.querySelector('#tfTitle').value.trim();
-        const prompt = modal.querySelector('#tfPrompt').value.trim();
-        if (!title || !prompt) { App.ui.toast('请填写标题和提示词'); return; }
-        const data = { title, category: modal.querySelector('#tfCat').value.trim(), icon: modal.querySelector('#tfIcon').value.trim() || '📋', prompt };
-        App.state.settings.templates = App.state.settings.templates || [];
-        if (isEdit) {
-          const t = App.state.settings.templates.find(x => x.id === tpl.id);
-          if (t) Object.assign(t, data);
-        } else {
-          App.state.settings.templates.push(Object.assign({ id: 't-' + App.uid().slice(1) }, data));
-        }
-        App.persist();
-        close();
-        if (App.create.tab !== 'templates') { App.create.tab = 'templates'; App.create.render(); }
-        else App.create.renderTemplates();
-        App.ui.toast(isEdit ? '已更新模板' : '已创建模板');
-      };
-      modal.querySelector('#tplClose').addEventListener('click', close);
-      modal.querySelector('#tplCancel').addEventListener('click', close);
-      modal.querySelector('#tplSave').addEventListener('click', save);
-      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-      setTimeout(() => titleInput.focus(), 30);
     },
 
     /* ============ 工作流 tab ============ */
@@ -659,13 +740,14 @@
         <div class="create-sec">
           <div class="create-toolbar">
             <div class="toolbar-row between">
-              <div class="module-sub">智能体工作流（多步串联）</div>
+          <div class="module-sub">任务工作流（多步串联）</div>
               <button class="btn-primary sm" id="addWfBtn">+ 新建工作流</button>
             </div>
             <div class="wf-hint">每一步可使用上一步的结果作为上下文，按顺序合成最终答案。</div>
           </div>
         </div>
         <div class="wf-grid" id="wfGrid"></div>`;
+      wrapCreateGenericLibrary(c, { title: '\u5de5\u4f5c\u6d41', subtitle: '\u591a\u6b65\u9aa4\u4efb\u52a1\u4e32\u8054', expandLabel: '\u5de5\u4f5c\u6d41' });
       $('addWfBtn').addEventListener('click', () => App.create.openWorkflowForm());
       const grid = $('wfGrid');
       if (!wfs.length) {
@@ -840,7 +922,7 @@
     wfStepHtml(s, idx) {
       const no = (typeof idx === 'number') ? idx + 1 : '';
       // M7：步骤级模型 + 失败策略
-      const chatProv = App.getProvider('chat');
+      const chatProv = App.getProvider('create');
       const models = (chatProv && chatProv.models && chatProv.models.length) ? chatProv.models : [];
       const onErr = s.onError || 'continue';
       return `<div class="wf-step" draggable="true">
@@ -866,8 +948,8 @@
     },
 
     async runWorkflow(wf) {
-      const s = App.getProvider('chat');
-      if (!s.ref || !s.hasKey || !s.model) { App.ui.toast('请先在设置里配置聊天 API'); return; }
+      const s = App.getProvider('create');
+      if (!s.ref || !s.hasKey || !s.model) { App.ui.toast('请先在设置里配置糖创账户和模型'); return; }
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.id = 'wfRunMask';
@@ -881,7 +963,7 @@
           <div class="modal-body"><div class="wf-run" id="wfRun"></div></div>
           <div class="modal-footer">
             <button class="btn-ghost" id="wfRunCancel">关闭</button>
-            <button class="btn-primary" id="wfRunChat" style="display:none">完成并开聊</button>
+            <button class="btn-primary" id="wfRunChat" style="display:none">在糖创继续会话</button>
           </div>
         </div>`;
       document.body.appendChild(modal);
@@ -1000,13 +1082,14 @@
       const chatBtn = modal.querySelector('#wfRunChat');
       if (results.length) {
         chatBtn.style.display = '';
-        chatBtn.addEventListener('click', () => {
-          const summary = results.map(r => `## ${r.title}\n${r.content}`).join('\n\n');
-          const conv = App.chat.newConversation();
-          conv.systemPrompt = '你是一个任务助手。下面是多步工作流的执行结果，用户可以基于它继续追问或要求修改。';
+          chatBtn.addEventListener('click', () => {
+            const summary = results.map(r => `## ${r.title}\n${r.content}`).join('\n\n');
+            const conv = App.chat.newConversation(null, { stay: 'create', originModule: 'create' });
+            if (!conv) return;
+            conv.systemPrompt = '你是一个任务助手。下面是多步工作流的执行结果，用户可以基于它继续追问或要求修改。';
           conv.messages.push({ role: 'assistant', content: summary });
-          App.persist();
-          App.chat.showChat();
+          App.chat.persistConversation(conv, { activeId: conv.id });
+          App.create.openTaskSession(conv.id);
           App.chat.renderMessages();
           close();
         });
@@ -1072,5 +1155,24 @@
         </details>`;
       }).join('');
     },
+  };
+
+  const renderCreateGrid = App.create.renderGrid;
+  App.create.renderGrid = function () {
+    renderCreateGrid();
+    const grid = $('agentGrid');
+    if (!grid) return;
+    let add = $('addAgentBtn');
+    if (!add) {
+      grid.innerHTML = '';
+      add = document.createElement('button');
+      add.className = 'agent-card add-agent';
+      add.id = 'addAgentBtn';
+      add.innerHTML = '<span class="agent-icon">+</span><span class="agent-name">\u65b0\u5efa\u4efb\u52a1\u667a\u80fd\u4f53</span><span class="agent-desc">\u81ea\u5b9a\u4e49\u4efb\u52a1\u8bbe\u5b9a\u4e0e\u63d0\u793a\u8bcd</span>';
+      add.addEventListener('click', (event) => { event.stopPropagation(); App.create.openAgentForm(); });
+      grid.appendChild(add);
+    } else if (grid.firstElementChild !== add) {
+      grid.insertBefore(add, grid.firstElementChild);
+    }
   };
 })();

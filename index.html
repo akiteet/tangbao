@@ -177,6 +177,11 @@
           <div class="view-content" id="createView"></div>
         </section>
 
+        <!-- 糖馆：本地角色卡与世界书 -->
+        <section class="view" data-view="tangguan" hidden>
+          <div class="view-content tangguan-view-content" id="tangguanView"></div>
+        </section>
+
         <!-- 糖码视图 -->
         <section class="view" data-view="agent" hidden>
           <div class="view-content" id="agentView"></div>
@@ -245,6 +250,7 @@
                     <option value="chat">聊天（糖包）</option>
                     <option value="agent">糖码（编码）</option>
                     <option value="create">糖创（智能体）</option>
+                    <option value="tangguan">糖馆（角色会话）</option>
                     <option value="image">糖绘（图像）</option>
                     <option value="doc">糖读（文档）</option>
                   </select>
@@ -416,7 +422,7 @@
                   <button class="btn-ghost" id="importConfig">导入配置</button>
                 </div>
                 <input type="file" id="importFile" accept="application/json,.json" hidden />
-                <p class="hint">导出：账户、智能体、模板、工作流、提示词、外观与模块开关。导入会覆盖上述设置。</p>
+                <p class="hint">导出：账户、智能体、工作流、提示词、外观与模块开关；旧版模板字段会随配置保留，仅用于兼容旧数据。导入会覆盖上述设置。</p>
               </div>
               <div class="set-card">
                 <div class="set-card-title">完整数据备份</div>
@@ -463,7 +469,14 @@
                   <div class="help-module-icon" style="background:#fef7e0;color:#b06000;">🤖</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖创 · 智能体</div>
-                    <div class="help-module-desc">设计与管理智能体（Agent）。内置写作、翻译、代码等预设，可自建智能体并设置系统提示词、语气与模型；另含模板库与工作流。</div>
+                    <div class="help-module-desc">面向任务型智能体、工具和工作流。可使用预设或自建智能体，配置系统提示词、语气、模型与多步骤执行；角色卡和沉浸式会话请使用糖馆。</div>
+                  </div>
+                </div>
+                <div class="help-module">
+                  <div class="help-module-icon" style="background:#fff0e6;color:#c45b16;">🏯</div>
+                  <div class="help-module-body">
+                    <div class="help-module-name">糖馆 · 角色会话</div>
+                    <div class="help-module-desc">角色卡与沉浸式角色会话。角色设定、开场白、快捷 starter 和专属世界书只作用于当前角色，不会自动出现在糖创中。</div>
                   </div>
                 </div>
                 <div class="help-module">
@@ -501,7 +514,7 @@
               <div class="set-card">
                 <div class="set-card-title">外观与数据</div>
                 <p class="hint">「外观」可切换浅色 / 深色 / 跟随系统，自定义强调色与界面圆角，修改即时生效并在刷新后保持。</p>
-                <p class="hint">「数据」可导出 / 导入配置（账户、智能体、模板、工作流、提示词、外观、模块开关）。导入会覆盖现有设置。</p>
+                <p class="hint">「数据」可导出 / 导入配置（账户、智能体、工作流、提示词、外观、模块开关）；旧版模板字段仅为兼容旧数据而保留。导入会覆盖现有设置。</p>
               </div>
 
               <!-- 权限 -->
@@ -536,7 +549,7 @@
               <div class="help-section-title">关于糖包</div>
               <div class="set-card about-card">
                 <div class="about-logo">糖</div>
-                <div class="about-name">糖包 <span class="about-ver">v1.1.3</span></div>
+                <div class="about-name">糖包 <span class="about-ver">v1.1.4</span></div>
                 <div class="about-meta">创作者：<b>世界上最帅的人</b></div>
                 <div class="about-slogan">糖包 · 把想要的 AI，装进你自己的桌面</div>
                 <div class="about-meta" style="margin-top:6px;font-size:11.5px;color:var(--text-tertiary)">Local-first AI workstation · 密钥不出本机</div>
@@ -656,6 +669,7 @@
   <div class="toast" id="toast" hidden></div>
 
   <script src="src/application/services/index.js"></script>
+  <script src="src/renderer/perf.js"></script>
   <script src="src/application/services/system.js"></script>
   <script src="src/application/services/secrets.js"></script>
   <script src="src/application/services/fs.js"></script>
@@ -663,10 +677,13 @@
   <script src="src/application/services/gateway.js"></script>
   <script src="src/application/services/search.js"></script>
 <script src="src/application/services/shell.js"></script>
-<script src="src/application/services/workspace.js"></script>
-<script src="src/application/services/float.js"></script>
+  <script src="src/application/services/workspace.js"></script>
+  <script src="src/application/services/float.js"></script>
+  <script src="src/application/services/tangguan.js"></script>
+  <script src="src/application/services/module-sessions.js"></script>
   <script src="src/renderer/runtime.js"></script>
   <script src="src/core/models/capabilities.js"></script>
+  <script src="src/core/models/image-capabilities.js"></script>
   <script src="src/core/models/agent-prompt.js"></script>
   <script src="src/renderer/state/state.js"></script>
   <script src="vendor/tokenizer.js"></script>
@@ -680,6 +697,7 @@
   <script src="src/renderer/views/images/image.js"></script>
   <script src="src/renderer/views/documents/doc.js"></script>
   <script src="src/renderer/views/workflows/create.js"></script>
+  <script src="src/renderer/views/tangguan/tangguan.js"></script>
   <script src="src/renderer/views/agent/agent.js"></script>
   <script src="src/renderer/app.js"></script>
   <script src="src/renderer/components/search.js"></script>

@@ -11,6 +11,12 @@
   let _pendingSnapshot = null;
   let _stateRevision = 0;
   let _lastPersistenceNotice = '';
+  let _fileWriteInFlight = null;
+  let _fileWritePending = null;
+  let _sqliteSyncTimer = null;
+  let _sqliteSyncInFlight = null;
+  let _sqliteSyncPending = null;
+  let _lastEndpointFingerprint = null;
 
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 
@@ -52,11 +58,19 @@
     });
   }
 
+  function hasExplicitAccountReset(value) {
+    return !!(value && value._persistence && value._persistence.allowAccountReset === true);
+  }
+
   function stateNeedsRecovery(value) {
     const settings = value && value.settings;
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true;
     if (!hasOwn(value, 'conversations') || !hasOwn(settings, 'accounts') || !hasOwn(settings, 'providers')) return true;
-    return Array.isArray(settings.accounts) && settings.accounts.length === 0 && hasConfiguredAccountReference(value);
+    // An empty account array is recoverable unless it was produced by the
+    // explicit two-step "clear all" action. This protects against a partial
+    // renderer snapshot that kept providers but lost the account list.
+    return Array.isArray(settings.accounts) && settings.accounts.length === 0
+      && !hasExplicitAccountReset(value) && hasConfiguredAccountReference(value);
   }
 
   function mergeMissingState(primary, fallback) {
@@ -67,7 +81,7 @@
       const ps = p.settings && typeof p.settings === 'object' ? p.settings : {};
       const fs = f.settings && typeof f.settings === 'object' ? f.settings : {};
       merged.settings = Object.assign({}, fs, ps);
-      if (Array.isArray(ps.accounts) && ps.accounts.length === 0 && Array.isArray(fs.accounts) && fs.accounts.length > 0 && hasConfiguredAccountReference(p)) {
+      if (Array.isArray(ps.accounts) && ps.accounts.length === 0 && Array.isArray(fs.accounts) && fs.accounts.length > 0 && !hasExplicitAccountReset(p)) {
         merged.settings.accounts = fs.accounts;
         if (!ps.defaultAccountId && fs.defaultAccountId) merged.settings.defaultAccountId = fs.defaultAccountId;
       }
@@ -103,20 +117,95 @@
     return copy;
   }
 
-  function createPersistedSnapshot() {
+  function persistableState() {
+    const source = App.state || {};
+    const sessions = App.moduleSessions;
+    if (!Array.isArray(source.conversations)) return source;
+    const copy = Object.assign({}, source);
+    copy.conversations = source.conversations.filter((item) => !(item && (
+      item.tangguanCharacterId
+      || item.originModule === 'tangguan'
+      || item.originModule === 'create'
+    )));
+    if (copy.activeId && !copy.conversations.some((item) => item && item.id === copy.activeId)) {
+      copy.activeId = copy.conversations[0] ? copy.conversations[0].id : null;
+    }
+    return copy;
+  }
+
+  function createPersistedSnapshot(options) {
+    const opts = options && typeof options === 'object' ? options : {};
     let content;
-    try { content = JSON.stringify(App.state); } catch (_) { return null; }
-    if (_pendingSnapshot && content === _lastPersistedStateJson) return _pendingSnapshot;
+    const serializeStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
+    const stateValue = persistableState();
+    try { content = JSON.stringify(stateValue); } catch (_) { return null; }
+    if (App.perf) {
+      const stateBytes = utf8ByteLength(content);
+      App.perf.measure('stateSerializeMs', serializeStarted, { stateBytes });
+      App.perf.record('stateBytes', stateBytes);
+      App.perf.record('messageCount', Array.isArray(stateValue && stateValue.conversations)
+        ? stateValue.conversations.reduce((total, item) => total + (Array.isArray(item && item.messages) ? item.messages.length : 0), 0)
+        : 0);
+    }
+    if (_pendingSnapshot && content === _lastPersistedStateJson && !opts.allowAccountReset) return _pendingSnapshot;
     _stateRevision = Math.max(_stateRevision, Date.now());
     const revision = _stateRevision + 1;
     _stateRevision = revision;
-    const persisted = Object.assign({}, App.state, {
-      _persistence: { revision, savedAt: Date.now(), format: 1 },
+    const persisted = Object.assign({}, stateValue, {
+      _persistence: { revision, savedAt: Date.now(), format: 1, allowAccountReset: opts.allowAccountReset === true },
     });
     const json = JSON.stringify(persisted, null, 2);
     _lastPersistedStateJson = content;
     _pendingSnapshot = { content, json, revision };
     return _pendingSnapshot;
+  }
+
+  function utf8ByteLength(value) {
+    const source = String(value == null ? '' : value);
+    try {
+      if (typeof TextEncoder === 'function') return new TextEncoder().encode(source).length;
+    } catch (_) {}
+    return source.length;
+  }
+
+  // Streaming output only needs the active assistant message to survive a
+  // renderer restart. Serializing the complete state here is expensive when
+  // image history, documents, or many conversations are present, so partial
+  // checkpoints use a small patch handled by the main process.
+  function createPartialSnapshot(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const conversationId = String(opts.conversationId || '');
+    const messageId = String(opts.messageId || '');
+    const conversations = App.state && Array.isArray(App.state.conversations) ? App.state.conversations : [];
+    const conversation = conversations.find((item) => item && item.id === conversationId);
+    const message = conversation && Array.isArray(conversation.messages)
+      ? conversation.messages.find((item) => item && item.id === messageId)
+      : null;
+    if (!conversation || !message) return null;
+    _stateRevision = Math.max(_stateRevision, Date.now());
+    const revision = _stateRevision + 1;
+    _stateRevision = revision;
+    return {
+      partial: true,
+      revision,
+      patch: {
+        conversationId,
+        messageId,
+        message: {
+          role: 'assistant',
+          content: String(message.content || ''),
+          think: String(message.think || ''),
+          streamStatus: String(message.streamStatus || 'partial'),
+          error: String(message.error || ''),
+          webSources: Number.isFinite(Number(message.webSources)) ? Number(message.webSources) : null,
+          sequence: Number.isFinite(Number(message.sequence)) ? Number(message.sequence) : 0,
+          requestId: String(message.requestId || ''),
+          startedAt: Number(message.startedAt) || 0,
+          updatedAt: Number(message.updatedAt) || Date.now(),
+        },
+        conversationUpdatedAt: Number(conversation.updatedAt) || Date.now(),
+      },
+    };
   }
 
   function accountRecoverySnapshot() {
@@ -143,6 +232,154 @@
     return !!(value && typeof value.then === 'function');
   }
 
+  function endpointFingerprint() {
+    const settings = App.state && App.state.settings ? App.state.settings : {};
+    const accounts = Array.isArray(settings.accounts) ? settings.accounts
+      .map((item) => ({ id: item && item.id || '', apiBase: item && item.apiBase || '' }))
+      .filter((item) => item.id && item.apiBase) : [];
+    const custom = Object.entries(settings.providers && typeof settings.providers === 'object' ? settings.providers : {})
+      .filter(([, item]) => item && item.accountId === '__custom__')
+      .map(([module, item]) => ({ module, apiBase: item.apiBase || '' }));
+    return JSON.stringify({ accounts, custom });
+  }
+
+  function fileWriteMethod(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    if (opts.flushPartial && App.services.fs && App.services.fs.flushChatPartial) {
+      return (snapshot) => snapshot && snapshot.patch
+        ? App.services.fs.flushChatPartial({ patch: snapshot.patch, revision: snapshot.revision })
+        : App.services.fs.flushChatPartial({
+          stateJson: snapshot.json,
+          revision: snapshot.revision,
+          conversationId: opts.conversationId,
+          messageId: opts.messageId,
+        });
+    }
+    if (App.services.fs && App.services.fs.saveStateJSON) {
+      return (snapshot) => App.services.fs.saveStateJSON(snapshot.json, snapshot.revision);
+    }
+    return null;
+  }
+
+  function pumpFileWrite() {
+    if (_fileWriteInFlight || !_fileWritePending) return;
+    const request = _fileWritePending;
+    _fileWritePending = null;
+    const method = fileWriteMethod(request.options);
+    let result;
+    const writeStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
+    try { result = method ? method(request.snapshot) : { ok: false, code: 'no_persistence_backend' }; }
+    catch (error) { result = { ok: false, code: request.options.flushPartial ? 'partial_state_write_failed' : 'state_file_write_failed', error: error && error.message ? error.message : String(error) }; }
+    _fileWriteInFlight = Promise.resolve(result)
+      .then((response) => {
+        if (App.perf) App.perf.measure('fileWriteMs', writeStarted, { revision: request.snapshot.revision });
+        const settled = handlePersistenceResult(response, request.snapshot.revision, 'file');
+        request.resolve(settled);
+        return settled;
+      })
+      .catch((error) => {
+        if (App.perf) App.perf.measure('fileWriteMs', writeStarted, { revision: request.snapshot.revision, failed: true });
+        const settled = handlePersistenceResult({ ok: false, code: request.options.flushPartial ? 'partial_state_write_failed' : 'state_file_write_failed', error: error && error.message ? error.message : String(error) }, request.snapshot.revision, 'file');
+        request.resolve(settled);
+        return settled;
+      })
+      .finally(() => {
+        _fileWriteInFlight = null;
+        pumpFileWrite();
+      });
+  }
+
+  function enqueueFileWrite(snapshot, options) {
+    const promise = new Promise((resolve) => {
+      if (_fileWritePending && _fileWritePending.resolve) {
+        _fileWritePending.resolve({ ok: true, superseded: true, revision: _fileWritePending.snapshot.revision });
+      }
+      _fileWritePending = { snapshot, options: options || {}, resolve };
+      if (App.perf) App.perf.record('ipcQueueDepth', (_fileWriteInFlight ? 1 : 0) + (_fileWritePending ? 1 : 0) + (_sqliteSyncInFlight ? 1 : 0) + (_sqliteSyncPending ? 1 : 0));
+      pumpFileWrite();
+    });
+    App.__persistencePromise = promise;
+    return promise;
+  }
+
+  function pumpSqliteSync() {
+    if (_sqliteSyncInFlight || !_sqliteSyncPending) return;
+    if (!App.rt || !App.rt.syncStorage) { _sqliteSyncPending = null; return; }
+    const current = _sqliteSyncPending;
+    _sqliteSyncPending = null;
+    if (!current || current.json === _lastSyncedJson) return;
+    let result;
+    const syncStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
+    try { result = App.rt.syncStorage(current.json, current.revision); }
+    catch (error) { result = { ok: false, code: 'sqlite_sync_failed', error: error && error.message ? error.message : String(error) }; }
+    const settle = (response) => {
+      if (response && response.ok === false && response.reason !== 'no-sqlite') {
+        return handlePersistenceResult(response, current.revision, 'sqlite');
+      }
+      _lastSyncedJson = current.json;
+      publishPersistenceStatus('saved', { revision: current.revision, sqlite: response && response.ok === false ? 'fallback' : 'saved' });
+      return response;
+    };
+    _sqliteSyncInFlight = Promise.resolve(result).then((response) => {
+      if (App.perf) App.perf.measure('sqliteSyncMs', syncStarted, { revision: current.revision });
+      return settle(response);
+    }).catch((error) => {
+      if (App.perf) App.perf.measure('sqliteSyncMs', syncStarted, { revision: current.revision, failed: true });
+      return settle({ ok: false, code: 'sqlite_sync_failed', error: error && error.message ? error.message : String(error) });
+    }).finally(() => {
+      _sqliteSyncInFlight = null;
+      pumpSqliteSync();
+    });
+  }
+
+  function enqueueSqliteSync(snapshot) {
+    _sqliteSyncPending = snapshot;
+    if (App.perf) App.perf.record('ipcQueueDepth', (_fileWriteInFlight ? 1 : 0) + (_fileWritePending ? 1 : 0) + (_sqliteSyncInFlight ? 1 : 0) + (_sqliteSyncPending ? 1 : 0));
+    if (_sqliteSyncTimer) clearTimeout(_sqliteSyncTimer);
+    _sqliteSyncTimer = setTimeout(() => {
+      _sqliteSyncTimer = null;
+      pumpSqliteSync();
+    }, 800);
+  }
+
+  function flushPersistence(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    if (_sqliteSyncTimer) {
+      clearTimeout(_sqliteSyncTimer);
+      _sqliteSyncTimer = null;
+      pumpSqliteSync();
+    }
+    const waits = [];
+    if (_fileWriteInFlight) waits.push(_fileWriteInFlight);
+    if (_fileWritePending) {
+      pumpFileWrite();
+      if (_fileWriteInFlight) waits.push(_fileWriteInFlight);
+    }
+    if (_sqliteSyncInFlight) waits.push(_sqliteSyncInFlight);
+    if (_sqliteSyncPending) {
+      pumpSqliteSync();
+      if (_sqliteSyncInFlight) waits.push(_sqliteSyncInFlight);
+    }
+    if (opts.snapshot !== false && !opts.partial) {
+      const snapshot = createPersistedSnapshot(opts);
+      if (snapshot && fileWriteMethod(opts)) {
+        waits.push(enqueueFileWrite(snapshot, opts));
+      }
+      try { enqueueSqliteSync(snapshot); } catch (_) {}
+      if (_sqliteSyncTimer) {
+        clearTimeout(_sqliteSyncTimer);
+        _sqliteSyncTimer = null;
+        pumpSqliteSync();
+        if (_sqliteSyncInFlight) waits.push(_sqliteSyncInFlight);
+      }
+    }
+    const unique = Array.from(new Set(waits.filter((item) => item && typeof item.then === 'function')));
+    return unique.length ? Promise.allSettled(unique).then((items) => ({
+      ok: items.every((item) => item.status === 'fulfilled' && (!item.value || item.value.ok !== false)),
+      results: items.map((item) => item.status === 'fulfilled' ? item.value : { ok: false, error: String(item.reason || '') }),
+    })) : Promise.resolve({ ok: true, results: [] });
+  }
+
   function publishPersistenceStatus(status, detail) {
     const next = Object.assign({ status, at: Date.now() }, detail || {});
     App.__persistence = Object.assign({}, App.__persistence || {}, next);
@@ -158,8 +395,7 @@
 
   function handlePersistenceResult(result, revision, kind) {
     const response = result && typeof result === 'object' ? result : { ok: false, code: kind + '_no_result' };
-    const current = createPersistedSnapshot();
-    if (current && current.revision !== revision && response.ok === false) return response;
+    if (_stateRevision !== revision && response.ok === false) return response;
     if (response.ok === false) {
       publishPersistenceStatus('failed', { code: response.code || response.reason || kind + '_failed', error: response.error || response.message || '', revision, kind });
     } else if (kind === 'file') {
@@ -168,6 +404,20 @@
       publishPersistenceStatus('saved', { revision, sqlite: 'saved', file: (App.__persistence && App.__persistence.file) || 'saved' });
     }
     return response;
+  }
+
+  function normalizeImageCapabilityStore(value) {
+    const api = typeof App !== 'undefined' && App.ImageCapabilities;
+    if (api && typeof api.normalizeStore === 'function') return api.normalizeStore(value);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+
+  function syncImageCapabilityStore(settings) {
+    if (!settings) return {};
+    const store = normalizeImageCapabilityStore(settings.imageCapabilities);
+    settings.imageCapabilities = store;
+    if (App.ImageCapabilities && typeof App.ImageCapabilities.hydrate === 'function') App.ImageCapabilities.hydrate(store);
+    return store;
   }
 
   const defaultState = () => ({
@@ -186,14 +436,16 @@
         chat:    { accountId: '__default__', apiBase: '', model: '' },
         agent:   { accountId: '__default__', apiBase: '', model: '' },
         create:  { accountId: '__default__', apiBase: '', model: '' },
+        tangguan:{ accountId: '__default__', apiBase: '', model: '' },
         image:   { accountId: '__default__', apiBase: '', model: '' },
         doc:     { accountId: '__default__', apiBase: '', model: '' },
       },
       agents: [],
       agentUsage: {},            // { [agentId]: number } 智能体使用次数（覆盖预设+自定义）
-      templates: [],             // 提示词模板库 [{ id, title, category, prompt, icon }]
+      templates: [],             // 历史兼容字段；当前 UI 不再提供模板库
       workflows: [],             // 智能体工作流 [{ id, name, steps:[{title,prompt,usePrev}] }]
       imageHistory: [],          // [{ id, prompt, style, size, n, images:[b64...], createdAt }]
+      imageCapabilities: {},     // 图像模型能力缓存，按 API Base + 精确模型隔离
       docs: [],                   // [{ id, name, text, size, createdAt }] 文档解析已上传文档（限长截断）
       agentCwd: '',               // 编码助手工作目录（空则默认项目目录）
       prompts: {                 // 用户可自定义的系统提示词（留空回退内置）
@@ -202,13 +454,15 @@
         doc: { summary: '', points: '', translate: '', outline: '' }, // 糖读分析提示
       },
       appearance: { mode: 'system', accent: '', radius: '' }, // 外观主题：mode=light|dark|system
-      enabledModules: ['chat', 'image', 'doc', 'create', 'agent'], // 启用的内置模块
+      enabledModules: ['chat', 'image', 'doc', 'create', 'tangguan', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
       search: {},                // 联网搜索配置；Key 存在密钥库的 'search' 引用下，不落 state
       userMemory: '',         // 用户级长期记忆，注入糖码 system prompt
       contextWindow: 128000,  // 模型上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
       visionModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'], // 视觉模型白名单
       permissionRules: [],       // v2（权限大改）：全局权限规则（所有项目生效，项目规则优先）[{ id, tool, pattern, path, allow, scope:'global', force? }]
+      // 糖馆只保存可恢复指针；抽屉、标签和编辑脏状态只存在运行时。
+      tangguanUi: { lastCharacterId: '', lastConversationId: '' },
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
     activeThreadId: null,        // 当前激活的糖码会话线程 id
@@ -225,6 +479,7 @@
 
   window.App = window.App || {};
   App.state = defaultState();
+  syncImageCapabilityStore(App.state.settings);
 
   // 内置默认提示词集中定义（供设置面板 placeholder 显示 + 各模块留空时回退引用）
   App.DEFAULT_PROMPTS = {
@@ -326,6 +581,10 @@
             timeoutMs: (typeof m.timeoutMs === 'number' && m.timeoutMs > 0) ? m.timeoutMs : undefined,
             budgetMaxSteps: (typeof m.budgetMaxSteps === 'number' && m.budgetMaxSteps > 0) ? m.budgetMaxSteps : undefined,
             budgetMaxCostUsd: (typeof m.budgetMaxCostUsd === 'number' && m.budgetMaxCostUsd >= 0) ? m.budgetMaxCostUsd : undefined,
+            imageProtocol: (typeof m.imageProtocol === 'string' && m.imageProtocol) ? m.imageProtocol : undefined,
+            imageSizeStrategy: (typeof m.imageSizeStrategy === 'string' && m.imageSizeStrategy) ? m.imageSizeStrategy : undefined,
+            imageSizeFormat: (typeof m.imageSizeFormat === 'string' && m.imageSizeFormat) ? m.imageSizeFormat : undefined,
+            imageSizes: Array.isArray(m.imageSizes) ? m.imageSizes.filter((size) => typeof size === 'string').slice(0, 32) : undefined,
           };
         return null;
       }).filter(Boolean) : (a.model ? [{ name: a.model, contextWindow: 128000 }] : []),
@@ -364,10 +623,13 @@
       radius: typeof psAp.radius === 'string' ? psAp.radius : '',
     };
     // 模块开关 / 自定义模块（保留用户自定义顺序，仅过滤非法 id）
-    const allBuiltin = ['chat', 'image', 'doc', 'create', 'agent'];
+    const allBuiltin = ['chat', 'image', 'doc', 'create', 'tangguan', 'agent'];
     const validBuiltinIds = new Set(allBuiltin);
-    ns.settings.enabledModules = Array.isArray(ps.enabledModules)
+    const storedModules = Array.isArray(ps.enabledModules)
       ? ps.enabledModules.filter(id => validBuiltinIds.has(id)) : allBuiltin.slice();
+    // Tangguan did not exist in older snapshots. Add only the new module while
+    // preserving the user's existing order and other enable/disable choices.
+    ns.settings.enabledModules = Array.from(new Set(storedModules.concat('tangguan')));
     ns.settings.customModules = Array.isArray(ps.customModules)
       ? ps.customModules.filter(m => m && m.id && m.label && m.url).map(m => ({ id: m.id, label: String(m.label), url: String(m.url), forceEmbed: !!m.forceEmbed, hidden: !!m.hidden }))
       : [];
@@ -393,6 +655,11 @@
     ns.settings.visionModels = Array.isArray(ps.visionModels) && ps.visionModels.length
       ? ps.visionModels
       : ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'];
+    const tgUi = (ps.tangguanUi && typeof ps.tangguanUi === 'object') ? ps.tangguanUi : {};
+    ns.settings.tangguanUi = {
+      lastCharacterId: typeof tgUi.lastCharacterId === 'string' ? tgUi.lastCharacterId : '',
+      lastConversationId: typeof tgUi.lastConversationId === 'string' ? tgUi.lastConversationId : '',
+    };
     // 糖码多会话线程：归一化 + 旧版 agentHistory 迁移为首个线程
     const cleanSkills = (arr) => {
       const out = [], seen = new Set();
@@ -487,8 +754,8 @@
       : (threads[0] ? threads[0].id : null);
     const oldProviders = ps.providers || {};
     const newProviders = {};
-    // 聊天修复 C：保留全部 6 个模块（此前 agent/create 每载必丢 → 重启回退默认账户）
-    for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create']) {
+    // 聊天修复 C：保留全部模块；糖馆单独使用 tangguan Provider，旧快照缺失时跟随默认账户
+    for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create', 'tangguan']) {
       const op = oldProviders[m] || {};
       let accountId = (op.accountId !== undefined) ? op.accountId
         : (op.useDefault === false ? '__custom__' : '__default__');
@@ -500,6 +767,7 @@
       if (op.apiKey) newProviders[m].apiKey = op.apiKey;
     }
     ns.settings.providers = newProviders;
+    syncImageCapabilityStore(ns.settings);
     // 旧版单配置：把默认 provider 升级为一个账户
     if (oldFormat && oldProviders.default && oldProviders.default.apiBase) {
       const acc = {
@@ -511,8 +779,9 @@
       if (oldProviders.default.apiKey) acc.apiKey = oldProviders.default.apiKey;
       ns.settings.accounts = [acc];
       ns.settings.defaultAccountId = acc.id;
-      for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create']) ns.settings.providers[m].accountId = '__default__';
+      for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create', 'tangguan']) ns.settings.providers[m].accountId = '__default__';
     }
+    syncImageCapabilityStore(ns.settings);
     App.state = ns;
     if (opts.persist === true) App.persist();
     if (oldFormat) { try { localStorage.removeItem(OLD_KEY); } catch (e) {} }
@@ -600,38 +869,45 @@
     return { ok: true };
   };
 
-  App.persist = function () {
-    const snapshot = createPersistedSnapshot();
+  App.persist = function (options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    if (opts.flushPartial) {
+      const partial = createPartialSnapshot(opts);
+      if (!partial) return { ok: false, code: 'partial_target_missing' };
+      let diskResult = null;
+      try {
+        if (fileWriteMethod(opts)) diskResult = enqueueFileWrite(partial, opts);
+        else publishPersistenceStatus('degraded', { code: 'partial_persistence_backend_missing', revision: partial.revision });
+      } catch (e) {
+        handlePersistenceResult({ ok: false, code: 'partial_state_write_failed', error: e && e.message ? e.message : String(e) }, partial.revision, 'file');
+      }
+      return { ok: true, revision: partial.revision, pending: isThenable(diskResult), partial: true };
+    }
+    const snapshot = createPersistedSnapshot(opts);
     if (!snapshot) return { ok: false, error: 'state_serialize_failed' };
     let localStorageOk = true;
     try {
       localStorage.setItem(STORAGE_KEY, snapshot.json);
       const recovery = accountRecoverySnapshot();
       if (recovery) localStorage.setItem(ACCOUNT_RECOVERY_KEY, recovery);
+      else if (opts.allowAccountReset === true) localStorage.removeItem(ACCOUNT_RECOVERY_KEY);
     } catch (e) {
       localStorageOk = false;
       publishPersistenceStatus('degraded', { code: 'local_storage_write_failed', error: e && e.message ? e.message : String(e), revision: snapshot.revision });
     }
-    // 文件双写：state.json 使用 revision，主进程会拒绝过期快照。
+    // 文件双写：state.json 使用 revision，主进程会拒绝过期快照。高频保存只
+    // 保留队列中的最新快照，避免流式输出把渲染进程拖入 IPC 写入风暴。
     let diskResult = null;
     try {
-      if (App.services.fs && App.services.fs.saveStateJSON) {
-        diskResult = App.services.fs.saveStateJSON(snapshot.json, snapshot.revision);
-        if (isThenable(diskResult)) {
-          const pending = Promise.resolve(diskResult)
-            .then((result) => handlePersistenceResult(result, snapshot.revision, 'file'))
-            .catch((error) => handlePersistenceResult({ ok: false, code: 'state_file_write_failed', error: error && error.message ? error.message : String(error) }, snapshot.revision, 'file'));
-          App.__persistencePromise = pending;
-        } else {
-          handlePersistenceResult(diskResult, snapshot.revision, 'file');
-        }
+      if (fileWriteMethod(opts)) {
+        diskResult = enqueueFileWrite(snapshot, opts);
       } else if (!localStorageOk) {
         handlePersistenceResult({ ok: false, code: 'no_persistence_backend' }, snapshot.revision, 'file');
       } else {
         publishPersistenceStatus('saved', { revision: snapshot.revision, file: 'localStorage', sqlite: 'not_configured' });
       }
     } catch (e) {
-      handlePersistenceResult({ ok: false, code: 'state_file_write_failed', error: e && e.message ? e.message : String(e) }, snapshot.revision, 'file');
+      handlePersistenceResult({ ok: false, code: opts.flushPartial ? 'partial_state_write_failed' : 'state_file_write_failed', error: e && e.message ? e.message : String(e) }, snapshot.revision, 'file');
     }
     // 主窗口把脱敏状态推送给浮窗；浮窗从不把 settings 回传覆盖主窗口。
     try {
@@ -639,35 +915,59 @@
         App.services.float.pushState({ state: sanitizeFloatState(App.state), revision: snapshot.revision });
       }
     } catch (e) { /* ignore */ }
-    // 账户/自定义地址可能刚被改过，同步给主进程的模型网关
-    try { if (App.rt && App.rt.syncEndpoints) App.rt.syncEndpoints(); } catch (e) { /* ignore */ }
-    // M4 写穿：防抖后把同一份带 revision 的快照同步进 SQLite。
+    // 账户/自定义地址没有变化时不重复同步模型网关。
     try {
-      if (_syncTimer) clearTimeout(_syncTimer);
-      _syncTimer = setTimeout(() => {
-        _syncTimer = null;
-        try {
-          if (!App.rt || !App.rt.syncStorage) return;
-          const current = createPersistedSnapshot();
-          if (!current || current.json === _lastSyncedJson) return;
-          const result = App.rt.syncStorage(current.json, current.revision);
-          const settle = (response) => {
-            if (response && response.ok === false && response.reason !== 'no-sqlite') {
-              handlePersistenceResult(response, current.revision, 'sqlite');
-              return response;
-            }
-            _lastSyncedJson = current.json;
-            publishPersistenceStatus('saved', { revision: current.revision, sqlite: response && response.ok === false ? 'fallback' : 'saved' });
-            return response;
-          };
-          if (isThenable(result)) Promise.resolve(result).then(settle).catch((error) => settle({ ok: false, code: 'sqlite_sync_failed', error: error && error.message ? error.message : String(error) }));
-          else settle(result);
-        } catch (e) {
-          handlePersistenceResult({ ok: false, code: 'sqlite_sync_failed', error: e && e.message ? e.message : String(e) }, snapshot.revision, 'sqlite');
-        }
-      }, 800);
+      const fingerprint = endpointFingerprint();
+      if (App.rt && App.rt.syncEndpoints && fingerprint !== _lastEndpointFingerprint) {
+        _lastEndpointFingerprint = fingerprint;
+        Promise.resolve(App.rt.syncEndpoints()).catch(() => {});
+      }
     } catch (e) { /* ignore */ }
+    // M4 写穿：SQLite 同样使用单写入通道，连续保存只保留最新快照。
+    try { enqueueSqliteSync(snapshot); } catch (e) { /* ignore */ }
     return { ok: true, revision: snapshot.revision, pending: isThenable(diskResult), localStorage: localStorageOk };
+  };
+
+  // Internal lifecycle hook for shutdown, diagnostics, and tests. It waits
+  // for the current file/SQLite queues without changing the storage format.
+  App.persistence = {
+    flush(options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      if (_sqliteSyncTimer) {
+        clearTimeout(_sqliteSyncTimer);
+        _sqliteSyncTimer = null;
+        pumpSqliteSync();
+      }
+      const waits = [];
+      if (_fileWriteInFlight) waits.push(_fileWriteInFlight);
+      if (_fileWritePending) { pumpFileWrite(); if (_fileWriteInFlight) waits.push(_fileWriteInFlight); }
+      if (_sqliteSyncInFlight) waits.push(_sqliteSyncInFlight);
+      if (_sqliteSyncPending) { pumpSqliteSync(); if (_sqliteSyncInFlight) waits.push(_sqliteSyncInFlight); }
+      if (opts.snapshot !== false && !opts.partial) {
+        const snapshot = createPersistedSnapshot(opts);
+        if (snapshot && fileWriteMethod(opts)) waits.push(enqueueFileWrite(snapshot, opts));
+        try { enqueueSqliteSync(snapshot); } catch (_) {}
+        if (_sqliteSyncTimer) {
+          clearTimeout(_sqliteSyncTimer);
+          _sqliteSyncTimer = null;
+          pumpSqliteSync();
+          if (_sqliteSyncInFlight) waits.push(_sqliteSyncInFlight);
+        }
+      }
+      const unique = Array.from(new Set(waits.filter((item) => item && typeof item.then === 'function')));
+      return unique.length ? Promise.allSettled(unique).then((items) => ({
+        ok: items.every((item) => item.status === 'fulfilled' && (!item.value || item.value.ok !== false)),
+        results: items.map((item) => item.status === 'fulfilled' ? item.value : { ok: false, error: String(item.reason || '') }),
+      })) : Promise.resolve({ ok: true, results: [] });
+    },
+    pending() { return !!(_fileWriteInFlight || _fileWritePending || _sqliteSyncInFlight || _sqliteSyncPending || _sqliteSyncTimer); },
+  };
+
+  // Internal lifecycle hook used by shutdown, diagnostics and tests. It does
+  // not create a new persistence format and never writes secrets.
+  App.persistence = {
+    flush(options) { return flushPersistence(options); },
+    pending() { return !!(_fileWriteInFlight || _fileWritePending || _sqliteSyncInFlight || _sqliteSyncPending || _sqliteSyncTimer); },
   };
 
   // M4 写穿兜底：关闭前若有未落盘的同步立即 flush（聊天修复：改同步 sendSync，杜绝 fire-and-forget 竞态）
@@ -675,6 +975,7 @@
     window.addEventListener('beforeunload', () => {
       try {
         if (_syncTimer) { clearTimeout(_syncTimer); _syncTimer = null; }
+        if (_sqliteSyncTimer) { clearTimeout(_sqliteSyncTimer); _sqliteSyncTimer = null; }
         const snapshot = createPersistedSnapshot();
         if (snapshot && snapshot.json !== _lastSyncedJson) {
           _lastSyncedJson = snapshot.json;

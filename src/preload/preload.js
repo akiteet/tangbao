@@ -15,10 +15,33 @@ contextBridge.exposeInMainWorld('electron', {
   resetSecretStore: () => ipcRenderer.invoke('secrets:reset'),
   // 同步「密钥引用 → API Base」映射表给模型网关（渲染进程只能指定 ref，指定不了转发目标）
   setGatewayEndpoints: (list) => ipcRenderer.invoke('gateway:setEndpoints', list),
+  // 将图像供应商返回的受限 http(s) 资产转为可保存的数据 URL。
+  fetchImageAsset: (input) => ipcRenderer.invoke('image:fetchAsset', input || {}),
   probeCache: (input) => ipcRenderer.invoke('cache:probe', input || {}),
   modelHealth: (input) => ipcRenderer.invoke('model:health', input || {}),
   modelMetrics: (input) => ipcRenderer.invoke('model:metrics', input || {}),
   searchQuery: (input) => ipcRenderer.invoke('search:query', input || {}),
+  tangguanPresets: () => ipcRenderer.invoke('tangguan:presets'),
+  tangguanGetMatureMode: () => ipcRenderer.invoke('tangguan:getMatureMode'),
+  tangguanSetMatureMode: (input) => ipcRenderer.invoke('tangguan:setMatureMode', input || {}),
+  tangguanListCharacters: (input) => ipcRenderer.invoke('tangguan:listCharacters', input || {}),
+  tangguanGetCharacter: (id) => ipcRenderer.invoke('tangguan:getCharacter', id || ''),
+  tangguanSaveCharacter: (input) => ipcRenderer.invoke('tangguan:saveCharacter', input || {}),
+  tangguanToggleFavorite: (input) => ipcRenderer.invoke('tangguan:toggleFavorite', input || {}),
+  tangguanTouchCharacter: (input) => ipcRenderer.invoke('tangguan:touchCharacter', input || {}),
+  tangguanCloneCharacter: (input) => ipcRenderer.invoke('tangguan:cloneCharacter', input || {}),
+  tangguanDeleteCharacter: (input) => ipcRenderer.invoke('tangguan:deleteCharacter', input || {}),
+  tangguanPreviewImport: (input) => ipcRenderer.invoke('tangguan:previewImport', input || {}),
+  tangguanImportCharacter: (input) => ipcRenderer.invoke('tangguan:importCharacter', input || {}),
+  tangguanPreviewWorldbookImport: (input) => ipcRenderer.invoke('tangguan:previewWorldbookImport', input || {}),
+  tangguanImportWorldbook: (input) => ipcRenderer.invoke('tangguan:importWorldbook', input || {}),
+  tangguanExportCharacter: (input) => ipcRenderer.invoke('tangguan:exportCharacter', input || {}),
+  tangguanListMemory: (input) => ipcRenderer.invoke('tangguan:listMemory', input || {}),
+  tangguanSaveMemory: (input) => ipcRenderer.invoke('tangguan:saveMemory', input || {}),
+  tangguanDeleteMemory: (input) => ipcRenderer.invoke('tangguan:deleteMemory', input || {}),
+  tangguanRetrieveContext: (input) => ipcRenderer.invoke('tangguan:retrieveContext', input || {}),
+  tangguanRebuildIndex: (input) => ipcRenderer.invoke('tangguan:rebuildIndex', input || {}),
+  tangguanGenerateDraft: (input) => ipcRenderer.invoke('tangguan:generateDraft', input || {}),
   // M5：把本地文件绝对路径交给主进程，换回不透明 fileId（只回 id，不回路径/内容）
   registerLocalFile: (absPath) => ipcRenderer.invoke('app:registerLocalFile', absPath),
   // M7（#253）：把工作目录绝对路径交给主进程校验+登记，换回不透明 workspaceId（只回 id，不回路径）
@@ -44,6 +67,14 @@ contextBridge.exposeInMainWorld('electron', {
   exportStorageDiagnostics: () => ipcRenderer.invoke('storage:diagnostics'),
   restoreStorage: (input) => ipcRenderer.invoke('storage:restore', input || {}),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  moduleSessionsLoad: (module) => ipcRenderer.invoke('module-sessions:load', module),
+  moduleSessionsList: (module) => ipcRenderer.invoke('module-sessions:list', module),
+  moduleSessionsGet: (module, id) => ipcRenderer.invoke('module-sessions:get', module, id),
+  moduleSessionsSave: (module, conversation, activeId) => ipcRenderer.invoke('module-sessions:save', module, conversation, activeId),
+  moduleSessionsRemove: (module, id) => ipcRenderer.invoke('module-sessions:remove', module, id),
+  moduleSessionsFlushPartial: (input) => ipcRenderer.invoke('module-sessions:flushPartial', input || {}),
+  moduleSessionsMigrateLegacy: (state) => ipcRenderer.invoke('module-sessions:migrateLegacy', state || {}),
+  moduleSessionsInfo: () => ipcRenderer.invoke('module-sessions:info'),
   saveStateJSON: (jsonStr, revision) => ipcRenderer.invoke('fs:writeState', jsonStr, revision),
   // 读取磁盘 state.json（与端口无关，用于随机端口下稳定恢复数据）
   loadStateJSON: () => ipcRenderer.invoke('fs:readState'),
@@ -53,6 +84,7 @@ contextBridge.exposeInMainWorld('electron', {
   syncStorage: (json, revision) => ipcRenderer.invoke('storage:syncState', json, revision),
   // 聊天修复：关闭前同步落盘（sendSync 阻塞等待主进程写完成，杜绝 fire-and-forget 竞态丢数据）
   flushStorageSync: (json, revision) => ipcRenderer.sendSync('storage:flushSync', json, revision),
+  flushChatPartial: (input) => ipcRenderer.invoke('chat:flushPartial', input || {}),
   // M4 读源：从 SQLite 重建 App.state（空/不可用 → {ok:false}）
   loadStorage: () => ipcRenderer.invoke('storage:loadState'),
   // M6 导入导出：完整数据备份（经系统文件对话框）

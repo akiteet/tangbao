@@ -83,14 +83,12 @@ function buildRequest(adapter, opts) {
     });
     const body = { model, max_tokens: Number(options.maxOutputTokens) || 8192, messages: converted, stream };
     if (system) body.system = promptCaching ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system;
-    if (tools.length) {
-      body.tools = tools.map((tool) => ({
+    body.tools = tools.length ? tools.map((tool) => ({
         name: tool.function.name,
         description: tool.function.description || '',
         input_schema: tool.function.parameters || { type: 'object', properties: {} },
         ...(promptCaching ? { cache_control: { type: 'ephemeral' } } : {}),
-      }));
-    }
+      })) : [];
     return {
       url: (/\/v1$/i.test(base) ? base : base + '/v1') + '/messages',
       headers: {
@@ -124,13 +122,11 @@ function buildRequest(adapter, opts) {
     // resource is supplied. Re-sending the same prompt is not a cache hit.
     if (cachedContent) body.cachedContent = cachedContent;
     if (system && !cachedContent) body.systemInstruction = { parts: [{ text: system }] };
-    if (tools.length) {
-      body.tools = [{ functionDeclarations: tools.map((tool) => ({
+    body.tools = tools.length ? [{ functionDeclarations: tools.map((tool) => ({
         name: tool.function.name,
         description: tool.function.description || '',
         parameters: tool.function.parameters || { type: 'object', properties: {} },
-      })) }];
-    }
+      })) }] : [];
     const action = stream ? 'streamGenerateContent?alt=sse' : 'generateContent';
     return {
       url: base + '/v1beta/models/' + encodeURIComponent(model) + ':' + action,

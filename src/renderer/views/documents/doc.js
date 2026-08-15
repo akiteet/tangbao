@@ -51,10 +51,6 @@
         </div>`).join('');
 
       wrap.innerHTML = `
-        <div class="module-header">
-          <h2>糖读</h2>
-          <p>上传文本 / PDF，向糖包提问；支持多文档、引用溯源与一键分析</p>
-        </div>
         <div class="doc-shell${App.state.settings.docSidebarCollapsed ? ' sidebar-collapsed' : ''}">
           <div class="doc-model-row">
             <span class="opt-label">模型</span>
@@ -345,13 +341,15 @@
     switchDoc(id) {
       App.doc.activeId = id;
       App.persist();
-      App.doc.openDrawer();
       App.doc.render();
+      App.doc.openDrawer();
     },
 
     showDoc(d) {
       document.getElementById('docAnalysisBar').style.display = 'flex';
       // M10：预览移入右侧抽屉（#docPreview 在抽屉内），这里只更新内容，显示由抽屉控制
+      const drawerTitle = document.getElementById('docDrawerTitle');
+      if (drawerTitle) drawerTitle.textContent = d.name || '文档预览';
       const preview = document.getElementById('docPreview');
       App.doc.previewText = d.text.slice(0, PREVIEW_CAP);
       if (preview) preview.textContent = App.doc.previewText + (d.text.length > PREVIEW_CAP ? '\n…（预览已截断）' : '');

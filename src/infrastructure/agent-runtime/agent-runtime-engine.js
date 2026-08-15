@@ -365,7 +365,7 @@ for (const tool of LEGACY_TOOL_DEFINITIONS) {
   fn.parameters.properties.rootId = { type: 'string', description: '可选：目标工作区文件夹 rootId；省略时使用主文件夹。只能使用 list_workspace_roots 返回的 rootId。' };
 }
 
-const TOOL_REGISTRY_VERSION = '1.1.3';
+const TOOL_REGISTRY_VERSION = '1.1.4';
 const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'todo_write', 'propose_memory']);
 const toolRuntime = createToolRuntime({
   version: TOOL_REGISTRY_VERSION,
@@ -381,7 +381,7 @@ const TOOL_NAMES = toolRuntime.toolNames;
 const AgentPrompt = require('../../core/models/agent-prompt');
 const SYSTEM_PROMPT = AgentPrompt.SYSTEM_PROMPT;
 const PROMPT_VERSION = String(AgentPrompt.PROMPT_VERSION || 'legacy/unknown');
-const RUNTIME_VERSION = '1.1.3';
+const RUNTIME_VERSION = '1.1.4';
 
 // ===== 本地访问控制 =====
 // 由主进程在 startAgentServer 时注入：启动令牌 + 唯一允许的来源（静态服务的源）。

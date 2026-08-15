@@ -147,3 +147,50 @@ test('secret store can create a new encrypted file when no previous file exists'
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('secret deletion rolls back the in-memory reference when the file write fails', () => {
+  const root = tempRoot();
+  const active = path.join(root, 'secrets.json');
+  const originalRename = fs.renameSync;
+  try {
+    assert.equal(store.init({ filePath: active, safeStorage: safeStorage() }).state, 'empty');
+    assert.equal(store.setSecret('acc:one', 'key-one').ok, true);
+    const before = fs.readFileSync(active, 'utf8');
+    fs.renameSync = (from, to) => {
+      if (path.resolve(to) === path.resolve(active)) throw new Error('simulated secret rename failure');
+      return originalRename(from, to);
+    };
+    const result = store.deleteSecret('acc:one');
+    assert.equal(result.ok, false);
+    assert.equal(store.hasSecret('acc:one'), true);
+    assert.equal(store.getSecret('acc:one'), 'key-one');
+    assert.equal(fs.readFileSync(active, 'utf8'), before);
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('batch secret deletion rolls back every reference when the file write fails', () => {
+  const root = tempRoot();
+  const active = path.join(root, 'secrets.json');
+  const originalRename = fs.renameSync;
+  try {
+    assert.equal(store.init({ filePath: active, safeStorage: safeStorage() }).state, 'empty');
+    assert.equal(store.setSecret('acc:one', 'key-one').ok, true);
+    assert.equal(store.setSecret('acc:two', 'key-two').ok, true);
+    const before = fs.readFileSync(active, 'utf8');
+    fs.renameSync = (from, to) => {
+      if (path.resolve(to) === path.resolve(active)) throw new Error('simulated batch delete rename failure');
+      return originalRename(from, to);
+    };
+    const result = store.deleteByPrefix('acc:');
+    assert.equal(result.ok, false);
+    assert.equal(store.hasSecret('acc:one'), true);
+    assert.equal(store.hasSecret('acc:two'), true);
+    assert.equal(fs.readFileSync(active, 'utf8'), before);
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

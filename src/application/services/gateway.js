@@ -6,6 +6,15 @@
     setEndpoints(list) {
       try { return (window.electron && window.electron.setGatewayEndpoints) ? window.electron.setGatewayEndpoints(list) : null; } catch (e) { return null; }
     },
+    fetchImageAsset(input) {
+      try {
+        return (window.electron && window.electron.fetchImageAsset)
+          ? window.electron.fetchImageAsset(input || {})
+          : { ok: false, code: 'image_asset_unavailable' };
+      } catch (e) {
+        return { ok: false, code: 'image_asset_fetch_failed', error: e && e.message ? e.message : String(e) };
+      }
+    },
     probeCache(input) {
       try { return (window.electron && window.electron.probeCache) ? window.electron.probeCache(input || {}) : { ok: false }; } catch (e) { return { ok: false }; }
     },

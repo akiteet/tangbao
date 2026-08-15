@@ -1,4 +1,10 @@
 :root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  --module-library-rail-width: 40px;
+  --module-library-tab-width: 32px;
+  --module-library-tab-height: 58px;
+  --module-library-tab-font-size: 12px;
   --bg: #f5f7fb;
   --sidebar-bg: #ffffff;
   --panel-bg: #ffffff;
@@ -64,7 +70,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-ui);
   color: var(--text);
   background:
     radial-gradient(1100px 620px at 8% -8%, rgba(26, 92, 255, 0.16), transparent 60%),
@@ -189,6 +195,12 @@ img { max-width: 100%; }
   border-radius: 10px; padding: 1px 7px; white-space: nowrap;
 }
 .history-empty { color: var(--text-tertiary); font-size: 12.5px; padding: 10px; text-align: center; }
+.history-more {
+  display: block; width: calc(100% - 12px); margin: 8px 6px 4px; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent;
+  color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer;
+}
+.history-more:hover { background: var(--hover-bg); color: var(--text); }
 
 .sidebar-footer {
   border-top: 1px solid var(--border);
@@ -708,6 +720,10 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
 .size-ico.r11 { width: 14px; height: 14px; }
 .size-ico.r169 { width: 22px; height: 12px; }   /* 16:9 → 横版（宽>高） */
 .size-ico.r916 { width: 12px; height: 22px; }   /* 9:16 → 竖版（高>宽） */
+.size-ico.r32, .size-ico.r43, .size-ico.r54 { width: 19px; height: 13px; }
+.size-ico.r23, .size-ico.r34, .size-ico.r45 { width: 13px; height: 19px; }
+.size-ico.r21, .size-ico.r31 { width: 23px; height: 11px; }
+.size-ico.r12, .size-ico.r13 { width: 11px; height: 23px; }
 
 /* 分模块内联模型选择（图像 / 文档共用 .img-model-pick） */
 .img-model-pick {
@@ -1108,23 +1124,6 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
   padding: 3px 10px; border-radius: var(--radius-pill);
 }
 
-/* 模板库 */
-.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
-.tpl-card {
-  background: var(--panel-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
-  display: flex; flex-direction: column; gap: 10px; transition: border-color .15s, box-shadow .15s;
-}
-.tpl-card:hover { border-color: var(--primary); box-shadow: var(--shadow); }
-.tpl-head { display: flex; align-items: center; gap: 8px; }
-.tpl-ico { font-size: 18px; }
-.tpl-title { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tpl-cat { font-size: 11px; color: var(--text-tertiary); background: var(--hover-bg); padding: 1px 8px; border-radius: var(--radius-pill); }
-.tpl-prompt {
-  font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; max-height: 72px; overflow: hidden;
-  background: var(--hover-bg); border-radius: 9px; padding: 10px 12px;
-}
-.tpl-ops { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
-
 /* 工作流 */
 .wf-hint { font-size: 12px; color: var(--text-tertiary); }
 .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
@@ -1404,7 +1403,7 @@ a.help-module:hover { border-color: var(--primary); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(120, 130, 150, .5); background-clip: content-box; }
 /* Firefox */
 .view-content, .messages, .agent-thread, .modal-body, .settings-content,
-.tpl-grid, .wf-grid, .agent-grid, .create-toolbar, .history, .chat-scroll,
+.wf-grid, .agent-grid, .create-toolbar, .history, .chat-scroll,
 .doc-preview, .doc-messages, .doc-list, .doc-outline, .account-list-box, .model-dropdown, .wf-step-body,
 .agent-tool-args, .agent-tool-out, .code-block code, #agentHistList {
   scrollbar-width: thin;
@@ -1513,7 +1512,7 @@ a.help-module:hover { border-color: var(--primary); }
 .agent-answer a:hover { text-decoration: underline; }
 .agent-answer blockquote { margin: 0 0 10px; padding: 4px 14px; border-left: 3px solid var(--border-strong); color: var(--text-secondary); }
 .agent-answer hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
-.agent-answer code { background: var(--code-bg); padding: 2px 6px; border-radius: 5px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; color: #d9466b; }
+.agent-answer code { background: var(--code-bg); padding: 2px 6px; border-radius: 5px; font-family: var(--font-mono); font-size: 13px; color: #d9466b; }
 [data-theme="dark"] .agent-answer code { color: #ff9bb3; }
 
 /* 表格 */
@@ -1583,7 +1582,7 @@ th { background: var(--hover-bg); font-weight: 600; }
 .suggest-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .suggest-title code { overflow: hidden; text-overflow: ellipsis; color: var(--text); background: none; padding: 0; font: 600 12.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* Skill 名称使用系统黑体 700；命令名称继续保持等宽字体。 */
-.suggest-skill .suggest-title code { font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0; }
+.suggest-skill .suggest-title code { font-family: var(--font-mono); font-size: 13px; font-weight: 700; letter-spacing: 0; }
 .suggest-param { color: var(--text-tertiary); font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .suggest-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 11.5px; line-height: 1.35; }
 .suggest-source { margin-left: auto; padding: 1px 6px; border-radius: 999px; background: var(--hover-bg); color: var(--text-tertiary); font-size: 10px; font-weight: 500; }
@@ -1668,6 +1667,179 @@ th { background: var(--hover-bg); font-weight: 600; }
 @media (max-width: 640px) {
   .agent-engine-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 10px; }
   .agent-engine-stat { padding: 9px; }
+}
+
+/* v1.1.4：糖馆角色卡、快捷填写与角色限定世界书 */
+#tangguanView {
+  overflow-x: hidden;
+  padding: 20px;
+}
+.tangguan-view-content { padding: 0; overflow: hidden; }
+.tg-shell {
+  width: min(1180px, 100%);
+  min-height: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.tg-toolbar, .tg-toolbar-actions, .tg-library-head, .tg-editor-head,
+.tg-session-bar, .tg-memory-actions, .tg-ai-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.tg-toolbar {
+  justify-content: space-between;
+  gap: 14px;
+  padding: 2px 2px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tg-toolbar h1 { margin: 0; font-size: 22px; line-height: 1.25; }
+.tg-toolbar p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12.5px; overflow-wrap: anywhere; }
+.tg-toolbar-actions { justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+.tg-toolbar-actions input {
+  width: min(240px, 42vw); min-width: 150px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel-bg); color: var(--text); outline: none;
+}
+.tg-toolbar-actions input:focus, .tg-field input:focus, .tg-field textarea:focus,
+.tg-memory-form input:focus, .tg-memory-form textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.tg-toolbar button, .tg-editor-actions button, .tg-preset-list button,
+.tg-ai-row button, .tg-memory-actions button, .tg-session-bar button { white-space: nowrap; }
+.tg-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 14px; align-items: start; min-width: 0; }
+.tg-library, .tg-editor, .tg-worldbook {
+  min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--panel-bg); box-shadow: var(--glass-hi);
+}
+.tg-library { padding: 12px; min-height: 260px; }
+.tg-library-head { justify-content: space-between; gap: 8px; padding: 2px 2px 10px; color: var(--text-secondary); }
+.tg-library-head b { font-size: 13px; }
+.tg-character-list { display: flex; flex-direction: column; gap: 7px; max-height: calc(100vh - 220px); overflow-y: auto; padding-right: 2px; }
+.tg-character-card {
+  width: 100%; min-width: 0; display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+}
+.tg-character-card:hover { background: var(--hover-bg); border-color: var(--border); }
+.tg-character-card.active { background: var(--primary-soft); border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); }
+.tg-card-avatar { flex: 0 0 34px; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: var(--primary-soft); color: var(--primary); font-weight: 700; }
+.tg-card-avatar { overflow: hidden; }
+.tg-card-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tg-card-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tg-card-main b, .tg-card-main small { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.tg-card-main b { font-size: 13px; line-height: 1.35; }
+.tg-card-main small { color: var(--text-tertiary); font-size: 11.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tg-card-actions { flex: 0 0 auto; display: flex; align-items: flex-start; gap: 2px; }
+.tg-card-action { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 16px; line-height: 1; }
+.tg-card-action:hover, .tg-card-action:focus-visible { background: var(--primary-soft); color: var(--primary); outline: none; }
+.tg-tags, .tg-preset-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.tg-tags span { padding: 1px 6px; border-radius: var(--radius-pill); background: var(--bg); color: var(--text-tertiary); font-size: 10.5px; }
+.tg-main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.tg-editor { padding: 16px; }
+.tg-editor-head { justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 13px; border-bottom: 1px solid var(--border); }
+.tg-editor-head h2 { margin: 0; font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
+.tg-editor-head p { margin: 4px 0 0; color: var(--text-tertiary); font-size: 12px; overflow-wrap: anywhere; }
+.tg-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
+.tg-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.tg-field { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.tg-field:nth-child(n + 3) { grid-column: 1 / -1; }
+.tg-field > span { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.tg-field input, .tg-field textarea, .tg-memory-form input, .tg-memory-form textarea, .tg-ai-row input {
+  width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; outline: none;
+}
+.tg-field textarea, .tg-memory-form textarea { resize: vertical; line-height: 1.55; }
+.tg-ai-draft { margin-top: 14px; padding-top: 13px; border-top: 1px dashed var(--border); }
+.tg-section-title { color: var(--text); font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.tg-section-title span { color: var(--text-tertiary); font-size: 11.5px; font-weight: 400; }
+.tg-preset-list { margin-top: 8px; }
+.tg-ai-row { gap: 7px; margin-top: 9px; }
+.tg-ai-row input { flex: 1 1 auto; }
+#tgDraftStatus, .tg-status { display: block; min-height: 18px; margin-top: 6px; color: var(--text-tertiary); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tg-session-bar { justify-content: space-between; gap: 12px; margin-top: 14px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--hover-bg); }
+.tg-session-bar > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tg-session-bar b, .tg-session-bar span { overflow-wrap: anywhere; }
+.tg-session-bar b { font-size: 13px; }
+.tg-session-bar span { color: var(--text-secondary); font-size: 11.5px; }
+.tg-worldbook { padding: 14px 16px; }
+.tg-memory-list { display: flex; flex-direction: column; gap: 7px; margin: 10px 0; max-height: 330px; overflow-y: auto; }
+.tg-memory-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+.tg-memory-row > div { min-width: 0; }
+.tg-memory-row b, .tg-memory-row p, .tg-memory-row small { overflow-wrap: anywhere; word-break: break-word; }
+.tg-memory-row b { font-size: 12.5px; }
+.tg-memory-row p { margin: 3px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.tg-memory-row small { color: var(--text-tertiary); font-size: 11px; }
+.tg-memory-form { display: flex; flex-direction: column; gap: 7px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.tg-memory-import { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.tg-memory-import small { color: var(--text-tertiary); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.tg-memory-actions { gap: 7px; flex-wrap: wrap; }
+.tg-memory-actions input:first-child { flex: 1 1 180px; }
+.tg-memory-actions input[type="number"] { flex: 0 0 74px; width: 74px; }
+.tg-empty { padding: 20px 8px; color: var(--text-tertiary); font-size: 12.5px; line-height: 1.6; text-align: center; overflow-wrap: anywhere; }
+.tg-mature-toggle {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 10px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-size: 12px; background: var(--bg);
+}
+.tg-mature-toggle input { flex: 0 0 auto; }
+.tg-mature-toggle span { color: var(--text); font-weight: 600; }
+.tg-mature-toggle small { color: var(--text-tertiary); overflow-wrap: anywhere; }
+.tg-sessions {
+  min-width: 0; padding: 14px 16px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--panel-bg); box-shadow: var(--glass-hi);
+}
+.tg-session-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.tg-session-row {
+  display: flex; align-items: flex-start; gap: 8px; min-width: 0;
+  padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.tg-session-row.archived { opacity: .72; }
+.tg-session-open {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  padding: 2px 0; border: 0; background: transparent; color: var(--text);
+  text-align: left; cursor: pointer;
+}
+.tg-session-open b, .tg-session-open small { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.tg-session-open b { font-size: 12.5px; line-height: 1.35; }
+.tg-session-open small { color: var(--text-tertiary); font-size: 11px; }
+.tg-session-actions {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end;
+  gap: 5px; flex-wrap: wrap; max-width: 48%;
+}
+.tg-session-actions button { white-space: nowrap; }
+.tg-session-more { display: block; margin: 10px auto 0; }
+
+/* The model pill must keep a readable footprint; long IDs ellipsize instead of collapsing. */
+.input-toggles-left { flex: 1 1 auto; min-width: 0; }
+.input-toggles-right { flex: 0 1 auto; min-width: 0; }
+#modelSelectBtn { flex: 0 0 clamp(132px, 20vw, 260px); width: clamp(132px, 20vw, 260px); min-width: 132px; max-width: 260px; min-height: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+#modelDropdown { width: min(260px, calc(100vw - 32px)); min-width: 200px; max-width: calc(100vw - 32px); }
+.msg-card, .msg-card .bubble, .msg-card .bubble > *, .agent-answer, .agent-answer > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.msg-card .bubble h1, .msg-card .bubble h2, .msg-card .bubble h3, .agent-answer h1, .agent-answer h2, .agent-answer h3 { overflow-wrap: anywhere; word-break: break-word; }
+
+@media (max-width: 900px) {
+  #tangguanView { padding: 14px; }
+  .tg-toolbar { align-items: flex-start; flex-direction: column; }
+  .tg-toolbar-actions { width: 100%; justify-content: flex-start; }
+  .tg-toolbar-actions input { flex: 1 1 180px; width: auto; }
+  .tg-layout { grid-template-columns: 1fr; }
+  .tg-library { min-height: 0; }
+  .tg-character-list { max-height: 210px; }
+}
+@media (max-width: 620px) {
+  #tangguanView { padding: 10px; }
+  .tg-editor, .tg-worldbook, .tg-library { padding: 12px; }
+  .tg-editor-head { flex-direction: column; }
+  .tg-editor-actions { width: 100%; justify-content: flex-start; }
+  .tg-form-grid { grid-template-columns: 1fr; }
+  .tg-field:nth-child(n + 3) { grid-column: auto; }
+  .tg-ai-row, .tg-session-bar { align-items: stretch; flex-direction: column; }
+  .tg-session-bar button { align-self: flex-start; }
+  .tg-session-row { flex-direction: column; }
+  .tg-session-actions { width: 100%; max-width: none; justify-content: flex-start; }
 }
 .agent-meta { align-items: center; gap: 8px; margin: 10px 0 0; padding: 6px 12px; font-size: 12.5px; color: var(--text-secondary); background: var(--hover-bg); border-radius: var(--radius-sm); }
 /* ===== v1.1.0：糖码任务运行状态药丸（顶栏，跨模块常驻） ===== */
@@ -1897,6 +2069,11 @@ th { background: var(--hover-bg); font-weight: 600; }
   scrollbar-gutter: stable; padding-right: 3px;
 }
 .doc-sec-outline { flex: 1 1 58%; min-height: 220px; display: flex; flex-direction: column; overflow: hidden; }
+.doc-sidebar .doc-sec-outline {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
 .doc-outline {
   flex: 1 1 auto; height: 0; min-height: 0; overflow-y: scroll; overscroll-behavior: contain; scrollbar-gutter: stable both-edges;
   border: none; border-radius: 0; padding: 0 8px 0 2px; background: transparent;
@@ -1954,6 +2131,7 @@ th { background: var(--hover-bg); font-weight: 600; }
 @media (max-height: 700px) {
   .doc-sidebar { --doc-files-peek-height: 82px; gap: 5px; }
   .doc-sec-outline { min-height: 150px; flex-basis: 52%; }
+  .doc-sidebar .doc-sec-outline { min-height: 0; flex-basis: auto; }
   .doc-sidebar .doc-sec { padding: 7px; }
 }
 @media (max-width: 560px) {
@@ -2060,7 +2238,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .wf-hist-step-body { font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; margin-top: 4px; }
 
 /* 账户 modal 内表单自适应：桌面宽度一次容纳完整模型列，小窗口按视口收缩。 */
-#accountModal .modal { width: 820px; max-width: 96vw; }
+#accountModal .modal { width: min(1120px, 96vw); max-width: 96vw; }
 #accountModal .account-form { display: flex; flex-direction: column; gap: 12px; overflow-x: auto; }
 #accountModal .model-row-head { padding-left: 0; }
 
@@ -2343,3 +2521,958 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cache-probe-sample span, .cache-probe-summary { color: var(--text-secondary); }
 .cache-probe-sample small { flex: 1 1 100%; color: var(--warning, #a66b00); overflow-wrap: anywhere; }
 .cache-probe-summary b { color: var(--text); }
+
+/* Tangguan optional semantic retrieval and AI draft review. */
+.tg-check-field { grid-column: 1 / -1; }
+.tg-check-field > span:last-child { display: inline-flex; align-items: center; gap: 7px; font-weight: 400; }
+.tg-check-field input { width: auto; }
+.tg-semantic-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--hover-bg); font-size: 12px; }
+.tg-semantic-controls label { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.tg-semantic-controls small { flex: 1 1 100%; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.tg-draft-modal { width: min(760px, calc(100vw - 28px)); max-height: min(86vh, 820px); }
+.tg-draft-notice { margin: 0 0 10px; color: var(--text-secondary); font-size: 12.5px; line-height: 1.55; }
+.tg-draft-fields { display: flex; flex-direction: column; gap: 7px; max-height: 55vh; overflow-y: auto; }
+.tg-draft-field { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+.tg-draft-field > div { flex: 1 1 auto; min-width: 0; }
+.tg-draft-field b { display: block; margin-bottom: 4px; color: var(--text-secondary); font-size: 11.5px; }
+.tg-draft-field pre { margin: 0; max-height: 90px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 12px/1.5 inherit; }
+.tg-draft-field button { flex: 0 0 auto; }
+
+@media (max-width: 720px) {
+  #accountModal .modal { width: min(96vw, 620px); }
+  #accountModal .model-row-head { display: none; }
+  #accountModal .model-row { grid-template-columns: 16px minmax(150px, 1fr) 88px 88px 124px 110px 30px; min-width: 650px; }
+}
+
+/* v1.1.4 糖馆沉浸式工作区。放在旧糖馆规则之后，保证历史角色卡字段继续可用。 */
+.tangguan-view-content {
+  padding: 0;
+  overflow: hidden;
+}
+#tangguanView {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+#tangguanView .tg-shell,
+#tangguanView .tg-workspace {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+#tangguanView .tg-workspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--bg);
+}
+#tangguanView .tg-library {
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  width: 240px;
+  min-height: 0;
+  padding: 16px 12px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--panel-bg) 92%, var(--bg));
+}
+#tangguanView .tg-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  gap: 0;
+  overflow: hidden;
+}
+#tangguanView #tgCharacterHeader {
+  flex: 0 0 auto;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+#tangguanView .tg-character-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 12px 18px;
+}
+#tangguanView .tg-character-identity,
+#tangguanView .tg-header-actions,
+#tangguanView .tg-library-head,
+#tangguanView .tg-drawer-top,
+#tangguanView .tg-editor-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+#tangguanView .tg-character-identity { gap: 11px; }
+#tangguanView .tg-character-identity > div,
+#tangguanView .tg-library-head > div,
+#tangguanView .tg-drawer-top > div { min-width: 0; }
+#tangguanView .tg-character-identity h1 { margin: 0; font-size: 17px; line-height: 1.3; overflow-wrap: anywhere; }
+#tangguanView .tg-character-identity p,
+#tangguanView .tg-library-head small,
+#tangguanView .tg-drawer-top small { display: block; margin: 2px 0 0; color: var(--text-tertiary); font-size: 11.5px; line-height: 1.35; overflow-wrap: anywhere; }
+#tangguanView .tg-header-actions { justify-content: flex-end; gap: 6px; flex: 0 1 auto; flex-wrap: wrap; }
+#tangguanView .tg-header-actions > * { flex: 0 0 auto; }
+#tangguanView .tg-session-select { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; color: var(--text-tertiary); font-size: 11px; }
+#tangguanView .tg-session-select select { max-width: 190px; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+#tangguanView .tg-avatar,
+#tangguanView .tg-header-avatar,
+#tangguanView .tg-welcome-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 700;
+}
+#tangguanView .tg-avatar { width: 34px; height: 34px; border-radius: 10px; }
+#tangguanView .tg-header-avatar { width: 42px; height: 42px; border-radius: 13px; }
+#tangguanView .tg-welcome-avatar { width: 72px; height: 72px; margin: 0 auto 14px; border-radius: 22px; font-size: 26px; }
+#tangguanView .tg-avatar img { width: 100%; height: 100%; object-fit: cover; }
+#tangguanView .tg-card-avatar img,
+#tangguanView .tg-header-avatar img,
+#tangguanView .tg-welcome-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+#tangguanView .tg-chat-surface { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#tangguanView .tg-chat-surface > .tg-chat-scroll { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#tangguanView .tg-chat-message-slot { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+#tangguanView .tg-chat-surface .welcome { flex: 1 0 auto; min-height: 280px; padding: 28px 18px 20px; }
+#tangguanView .tg-chat-surface .messages { flex: 0 0 auto; width: min(900px, 100%); min-width: 0; margin: 0 auto; padding: 22px 28px 18px; }
+#tangguanView .tg-chat-surface .composer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: 10px max(18px, calc((100% - 900px) / 2)); background: color-mix(in srgb, var(--bg) 94%, transparent); }
+#tangguanView .tg-chat-surface .disclaimer { margin-top: 4px; }
+#tangguanView .tg-library-head { justify-content: space-between; gap: 8px; padding: 0 3px 13px; }
+#tangguanView .tg-library-head b { font-size: 14px; }
+#tangguanView .tg-library-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: 9px; background: var(--hover-bg); }
+#tangguanView .tg-library-tabs button,
+#tangguanView .tg-library-filters button { min-width: 0; padding: 5px 6px; border: 0; border-radius: 7px; background: transparent; color: var(--text-tertiary); font-size: 11.5px; white-space: nowrap; }
+#tangguanView .tg-library-tabs button.active,
+#tangguanView .tg-library-filters button.active { background: var(--panel-bg); color: var(--text); box-shadow: var(--glass-hi); }
+#tangguanView .tg-library-search { display: flex; align-items: center; gap: 6px; margin-top: 11px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--text-tertiary); }
+#tangguanView .tg-library-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
+#tangguanView .tg-library-filters { display: flex; gap: 3px; margin: 8px 0; }
+#tangguanView .tg-character-list { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px 0 0; overflow-y: auto; }
+#tangguanView .tg-character-card { align-items: center; gap: 8px; padding: 9px 7px; }
+#tangguanView .tg-card-main small {
+  display: block;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tangguanView .tg-card-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tangguanView .tg-tags { max-height: 18px; overflow: hidden; }
+#tangguanView .tg-preset-list { display: flex; flex-direction: column; gap: 7px; }
+#tangguanView .tg-preset-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; min-width: 0; padding: 9px 10px; text-align: left;
+  white-space: normal; overflow-wrap: anywhere;
+}
+#tangguanView .tg-preset-option b,
+#tangguanView .tg-preset-option small { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+#tangguanView .tg-preset-option b { color: var(--text); line-height: 1.35; }
+#tangguanView .tg-preset-option small {
+  color: var(--text-secondary); font-size: 11px; line-height: 1.45;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+#tangguanView .tg-library-footer { display: flex; gap: 6px; padding-top: 10px; }
+#tangguanView .tg-library-footer button { flex: 1 1 0; min-width: 0; padding: 7px 4px; font-size: 11px; white-space: nowrap; }
+#tangguanView .tg-library-scroll { min-height: 0; overflow-y: auto; }
+#tangguanView .tg-sessions { padding: 12px 0 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+#tangguanView .tg-session-list { margin-top: 8px; }
+#tangguanView .tg-session-row { flex-direction: column; gap: 5px; padding: 8px; }
+#tangguanView .tg-session-actions { width: 100%; max-width: none; justify-content: flex-start; }
+#tangguanView .tg-empty-state,
+#tangguanView .tg-welcome-card { width: min(620px, 100%); margin: auto; text-align: center; }
+#tangguanView .tg-empty-mark { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 20px; background: var(--primary-soft); color: var(--primary); font-size: 24px; font-weight: 700; }
+#tangguanView .tg-empty-state h2,
+#tangguanView .tg-welcome-card h2 { margin: 0; font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
+#tangguanView .tg-empty-state p,
+#tangguanView .tg-welcome-tagline { margin: 7px auto 16px; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+#tangguanView .tg-empty-state button { margin: 3px; }
+#tangguanView .tg-welcome-greeting { margin: 18px auto; padding: 15px 17px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-bg); color: var(--text); text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
+#tangguanView .tg-welcome-card > small { color: var(--text-tertiary); font-size: 11px; }
+#tangguanView .tg-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+#tangguanView .tg-starters button { max-width: 100%; overflow-wrap: anywhere; }
+#tangguanView .tg-drawer { position: absolute; z-index: 20; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: min(460px, calc(100% - 20px)); min-width: 0; border-left: 1px solid var(--border); background: var(--panel-bg); box-shadow: -14px 0 34px rgba(22, 42, 82, .16); }
+#tangguanView .tg-drawer[hidden] { display: none; }
+#tangguanView .tg-drawer-top { flex: 0 0 auto; justify-content: space-between; gap: 10px; padding: 15px 16px; border-bottom: 1px solid var(--border); }
+#tangguanView .tg-drawer-top b { font-size: 15px; }
+#tangguanView .tg-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 20px; }
+#tangguanView .tg-drawer-library { padding: 0 12px 14px; }
+#tangguanView .tg-drawer-library .tg-library-head { display: none; }
+#tangguanView .tg-drawer-footer { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 7px; padding: 11px 16px; border-top: 1px solid var(--border); background: var(--panel-bg); }
+#tangguanView .tg-editor-head { justify-content: space-between; align-items: flex-start; gap: 10px; padding: 14px 0 4px; }
+#tangguanView .tg-editor-head p { margin: 0; color: var(--text-tertiary); font-size: 11.5px; overflow-wrap: anywhere; }
+#tangguanView .tg-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; flex: 0 0 auto; }
+#tangguanView .tg-editor-group { min-width: 0; border-bottom: 1px solid var(--border); }
+#tangguanView .tg-group-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 0; border: 0; background: transparent; color: var(--text); text-align: left; font-size: 13px; font-weight: 700; }
+#tangguanView .tg-group-body { padding: 0 0 14px; }
+#tangguanView .tg-form-grid { grid-template-columns: 1fr; gap: 9px; margin-top: 0; }
+#tangguanView .tg-field:nth-child(n + 3) { grid-column: auto; }
+#tangguanView .tg-field input, #tangguanView .tg-field textarea { font-size: 12.5px; }
+#tangguanView .tg-ai-draft { margin-top: 0; padding-top: 0; border-top: 0; }
+#tangguanView .tg-semantic-note, #tangguanView .tg-semantic-controls { margin-top: 9px; }
+#tangguanView .tg-semantic-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--hover-bg); font-size: 11.5px; }
+#tangguanView .tg-semantic-controls label { display: inline-flex; align-items: center; gap: 5px; }
+#tangguanView .tg-semantic-controls small { flex: 1 1 100%; color: var(--text-tertiary); overflow-wrap: anywhere; }
+#tangguanView .tg-semantic-note { color: var(--text-tertiary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+#tangguanView .tg-mobile-only { display: none; }
+#tangguanView .tg-drawer-mask { position: absolute; z-index: 15; inset: 0; background: rgba(18, 26, 42, .28); }
+#tangguanView .tg-drawer-mask[hidden] { display: none; }
+
+/* 糖馆桌面角色库：运行时收起为窄图标栏，不写入持久化状态。 */
+#tangguanView .tg-workspace.tg-library-is-collapsed {
+  grid-template-columns: var(--module-library-rail-width) minmax(0, 1fr);
+}
+#tangguanView .tg-workspace.tg-library-is-collapsed .tg-library {
+  width: var(--module-library-rail-width);
+  min-width: var(--module-library-rail-width);
+  padding: 12px 4px;
+  align-items: center;
+}
+#tangguanView .tg-library-collapsed {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+#tangguanView .tg-library-collapse-btn,
+#tangguanView .tg-library-collapsed-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--module-library-tab-width);
+  min-width: var(--module-library-tab-width);
+  min-height: 34px;
+  padding: 5px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  font-size: var(--module-library-tab-font-size);
+  white-space: nowrap;
+}
+#tangguanView .tg-library-collapse-btn {
+  font-size: 17px;
+  color: var(--primary);
+}
+#tangguanView .tg-library-collapsed-tab {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  min-height: var(--module-library-tab-height);
+}
+#tangguanView .tg-library-collapse-btn:hover,
+#tangguanView .tg-library-collapsed-tab:hover { background: var(--hover-bg); color: var(--primary); }
+#tangguanView .tg-library-head-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+#tangguanView .tg-desktop-only { display: inline-flex; }
+
+/* 糖创任务会话抽屉复用 Chat Surface，不复制聊天请求和流式渲染。 */
+#createView { position: relative; min-height: 100%; }
+#createView .create-task-mask { position: absolute; z-index: 20; inset: 0; background: rgba(18, 26, 42, .28); }
+#createView .create-task-mask[hidden] { display: none; }
+#createView .create-task-drawer {
+  position: absolute;
+  z-index: 21;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100% - 18px));
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  background: var(--panel-bg);
+  box-shadow: -14px 0 34px rgba(22, 42, 82, .16);
+  overflow: hidden;
+}
+#createView .create-task-drawer[hidden] { display: none; }
+#createView .create-task-top {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+#createView .create-task-top > div { min-width: 0; }
+#createView .create-task-top b { display: block; font-size: 15px; }
+#createView .create-task-top small { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: 11.5px; overflow-wrap: anywhere; }
+#createView .create-task-surface { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
+#createView .create-task-surface > .tg-chat-scroll { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+#createView .create-task-surface .welcome { flex: 1 0 auto; min-height: 260px; padding: 28px 18px 20px; }
+#createView .create-task-surface .messages { flex: 0 0 auto; width: min(900px, 100%); min-width: 0; margin: 0 auto; padding: 22px 24px 18px; }
+#createView .create-task-surface .composer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: 10px 18px; background: color-mix(in srgb, var(--bg) 94%, transparent); }
+#createView .create-task-welcome { width: min(520px, 100%); margin: auto; text-align: center; }
+#createView .create-task-mark { display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 12px; border-radius: 18px; background: var(--primary-soft); color: var(--primary); font-size: 23px; font-weight: 700; }
+#createView .create-task-welcome h2 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+#createView .create-task-welcome p { margin: 8px auto 0; color: var(--text-secondary); font-size: 12.5px; overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+  #tangguanView .tg-workspace { display: block; }
+  #tangguanView .tg-library { display: none; }
+  #tangguanView .tg-main { width: 100%; height: 100%; }
+  #tangguanView .tg-mobile-only { display: inline-flex; }
+  #tangguanView .tg-character-header { align-items: flex-start; padding: 10px 12px; }
+  #tangguanView .tg-header-actions { gap: 4px; }
+  #tangguanView .tg-header-actions .tg-session-select { order: 5; flex: 1 1 100%; }
+  #tangguanView .tg-session-select select { flex: 1 1 auto; max-width: none; }
+  #tangguanView .tg-drawer { width: min(430px, calc(100% - 14px)); }
+  #tangguanView .tg-drawer-library-host { left: 0; right: auto; border-right: 1px solid var(--border); border-left: 0; box-shadow: 14px 0 34px rgba(22, 42, 82, .16); }
+  #tangguanView .tg-desktop-only { display: none; }
+  #createView .create-task-drawer { width: min(500px, calc(100% - 10px)); }
+}
+@media (max-width: 620px) {
+  #tangguanView .tg-character-header { min-height: 64px; }
+  #tangguanView .tg-character-identity h1 { font-size: 15px; }
+  #tangguanView .tg-character-identity p { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tangguanView .tg-chat-surface .messages { padding: 16px 12px 12px; }
+  #tangguanView .tg-chat-surface .composer { padding: 8px 10px; }
+  #tangguanView .tg-header-actions > .btn-ghost:not(.tg-mobile-only) { padding-left: 7px; padding-right: 7px; }
+  #tangguanView .tg-drawer { width: calc(100% - 8px); }
+  #createView .create-task-drawer { width: calc(100% - 8px); border-radius: var(--radius-lg) 0 0 var(--radius-lg); }
+}
+
+/* v1.1.5 module chat surfaces: keep Create conversations in Create instead
+ * of opening the global Chat view. */
+.module-provider-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.module-provider-controls select {
+  min-width: 0;
+  max-width: 170px;
+  flex: 0 0 auto;
+  height: 31px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.module-provider-controls .module-provider-account { width: 128px; }
+.module-provider-controls .module-provider-model { width: 154px; }
+
+#tangguanView .tg-character-identity { flex: 1 1 220px; min-width: 0; }
+#tangguanView .tg-header-actions { min-width: 0; }
+#tangguanView .tg-header-actions .module-provider-controls { flex: 0 1 auto; }
+
+#createView .create-shell {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#createView .create-workspace {
+  display: grid;
+  grid-template-columns: minmax(260px, .72fr) minmax(420px, 1.28fr);
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#createView .create-catalog,
+#createView .create-session-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#createView .create-catalog {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+#createView .create-session-pane {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--bg);
+}
+#createView .create-session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+#createView .create-session-header > div:first-child { min-width: 0; }
+#createView .create-session-header b,
+#createView .create-session-header small { display: block; overflow-wrap: anywhere; }
+#createView .create-session-header b { font-size: 14px; }
+#createView .create-session-header small { margin-top: 2px; color: var(--text-tertiary); font-size: 11px; }
+#createView .create-session-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+#createView .create-chat-surface {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#createView .create-chat-surface > .tg-chat-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+#createView .create-chat-surface .welcome { flex: 1 0 auto; min-height: 260px; padding: 28px 18px 20px; }
+#createView .create-chat-surface .messages { flex: 0 0 auto; width: min(900px, 100%); min-width: 0; margin: 0 auto; padding: 22px 24px 18px; }
+#createView .create-chat-surface .composer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: 10px 18px; background: color-mix(in srgb, var(--bg) 94%, transparent); }
+
+@media (max-width: 1100px) {
+  #createView .create-workspace { grid-template-columns: minmax(220px, .58fr) minmax(360px, 1.42fr); }
+  #createView .create-session-header { align-items: flex-start; flex-direction: column; }
+  #createView .create-session-actions { width: 100%; justify-content: flex-start; }
+}
+@media (max-width: 900px) {
+  #createView .create-workspace { display: flex; flex-direction: column; overflow-y: auto; }
+  #createView .create-catalog { flex: 0 0 230px; max-height: 38%; }
+  #createView .create-session-pane { flex: 1 1 520px; min-height: 420px; }
+  #createView .create-chat-surface .messages { padding-left: 14px; padding-right: 14px; }
+  #createView .module-provider-controls { width: 100%; }
+  #createView .module-provider-controls select { flex: 1 1 0; max-width: none; min-width: 0; }
+}
+@media (max-width: 560px) {
+  #createView .create-shell { padding: 10px; }
+  #createView .create-catalog { flex-basis: 190px; }
+  #createView .create-session-pane { min-height: 460px; }
+  #tangguanView .tg-header-actions .module-provider-controls { width: 100%; order: 4; }
+  #tangguanView .tg-header-actions .module-provider-controls select { flex: 1 1 0; max-width: none; }
+}
+
+/* 账户模型配置在窄窗口改为纵向字段，避免固定表格把模型名挤没。桌面端仍保持原表格。 */
+@media (max-width: 1024px) {
+  #accountModal .account-form { overflow-x: auto; }
+  #accountModal .model-row-head { display: none; }
+  #accountModal .model-row {
+    display: flex; flex-direction: column; align-items: stretch; gap: 7px;
+    min-width: 650px; padding: 10px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--panel-bg);
+  }
+  #accountModal .model-row > * { width: 100%; min-width: 0; box-sizing: border-box; }
+  #accountModal .model-row .drag-handle { width: auto; align-self: flex-start; }
+  #accountModal .model-row .accModelRow,
+  #accountModal .model-row .accModelCtx,
+  #accountModal .model-row .accModelOutput,
+  #accountModal .model-row .accModelThink,
+  #accountModal .model-row .accModelCaps { width: 100%; min-height: 34px; text-align: left; }
+  #accountModal .model-row .model-row-del { width: 34px; align-self: flex-end; }
+}
+
+/* Keep module views inside the viewport so their chat composer remains visible. */
+#createView {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+#createView .create-shell {
+  height: 100%;
+  box-sizing: border-box;
+}
+#createView .create-workspace {
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+}
+#createView .create-catalog > #createContent {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+#createView .create-catalog .create-sec {
+  flex: 0 0 auto;
+  padding: 10px;
+}
+#createView .create-catalog .create-toolbar { gap: 8px; }
+#createView .create-catalog .agent-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px;
+}
+#createView .create-catalog .agent-card {
+  min-width: 0;
+  padding: 10px 8px;
+  gap: 4px;
+}
+#createView .create-session-header > div:first-child small { display: none; }
+#createView .create-session-header > div:first-child { flex: 0 0 auto; }
+
+/* Use a stable two-row header instead of allowing controls to wrap unevenly. */
+#tangguanView .tg-header-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    "providers providers providers menu"
+    "session new edit menu";
+  align-items: center;
+  gap: 6px;
+}
+#tangguanView .tg-header-actions .module-provider-controls {
+  grid-area: providers;
+  justify-content: flex-end;
+}
+#tangguanView .tg-header-actions .tg-session-select {
+  grid-area: session;
+  width: 100%;
+  min-width: 0;
+}
+#tangguanView .tg-header-actions [data-tg-new-session] { grid-area: new; }
+#tangguanView .tg-header-actions [data-tg-open-editor] { grid-area: edit; }
+#tangguanView .tg-header-actions [data-tg-open-sessions] {
+  grid-area: menu;
+  align-self: center;
+}
+#tangguanView .tg-session-select select { width: 100%; max-width: none; }
+
+/* Delegated CSS: compact Create library and module-owned input controls. */
+#createView .create-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px;
+}
+#createView .create-library-head,
+#createView .create-library-tabs,
+#createView .create-catalog > .create-sec {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+#createView .create-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 2px;
+}
+#createView .create-library-head > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+#createView .create-library-head b {
+  display: block;
+  font-size: 14px;
+  line-height: 1.3;
+}
+#createView .create-library-head small {
+  display: block;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+#createView .create-library-head > * { min-width: 0; }
+#createView .create-library-collapse-btn,
+#createView [data-create-library-toggle],
+#createView .create-library-collapsed-tab,
+#createView [data-create-library-expand] {
+  flex: 0 0 auto;
+  min-width: 30px;
+  min-height: 30px;
+}
+#createView .create-library-collapse-btn,
+#createView [data-create-library-toggle] { display: inline-flex; align-items: center; justify-content: center; }
+#createView .create-library-collapsed-tab,
+#createView [data-create-library-expand] { display: none; }
+#createView .create-library-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--hover-bg);
+}
+#createView .create-library-tabs > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#createView .create-library-tabs [data-create-library-tab] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#createView .create-catalog .create-sec {
+  margin: 0;
+  padding: 8px;
+}
+#createView .create-catalog .create-toolbar { gap: 7px; }
+#createView .create-catalog .create-search {
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+#createView .create-catalog .toolbar-row { gap: 5px; }
+#createView .create-catalog .cat-pills,
+#createView .create-catalog .tag-pills {
+  flex-wrap: nowrap;
+  gap: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+#createView .create-catalog .cat-pills::-webkit-scrollbar,
+#createView .create-catalog .tag-pills::-webkit-scrollbar { display: none; }
+#createView .create-catalog .cat-pill,
+#createView .create-catalog .tag-pill {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  font-size: 11.5px;
+}
+#createView .create-catalog .create-sort {
+  padding: 6px 9px;
+  font-size: 11.5px;
+}
+#createView .create-catalog > #createContent,
+#createView .create-catalog > .create-library-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#createView .create-catalog .agent-grid {
+  flex: 1 1 0;
+  height: 0;
+  min-width: 0;
+  min-height: 0;
+  align-content: start;
+  grid-auto-rows: max-content;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The collapsed state can live on the view, shell, or workspace root. */
+@media (min-width: 901px) {
+  #createView.create-library-is-collapsed .create-workspace,
+  #createView .create-shell.create-library-is-collapsed .create-workspace,
+  #createView .create-workspace.create-library-is-collapsed {
+    grid-template-columns: var(--module-library-rail-width) minmax(0, 1fr);
+  }
+  #createView.create-library-is-collapsed .create-catalog,
+  #createView .create-shell.create-library-is-collapsed .create-catalog,
+  #createView .create-workspace.create-library-is-collapsed .create-catalog {
+    align-items: center;
+    gap: 8px;
+    padding: 8px 4px;
+  }
+  #createView.create-library-is-collapsed .create-library-head,
+  #createView .create-shell.create-library-is-collapsed .create-library-head,
+  #createView .create-workspace.create-library-is-collapsed .create-library-head {
+    flex-direction: column;
+    justify-content: flex-start;
+    width: 100%;
+    padding: 0;
+  }
+  #createView.create-library-is-collapsed .create-library-head > :not(.create-library-collapse-btn):not([data-create-library-toggle]):not(.create-library-collapsed-tab):not([data-create-library-expand]),
+  #createView .create-shell.create-library-is-collapsed .create-library-head > :not(.create-library-collapse-btn):not([data-create-library-toggle]):not(.create-library-collapsed-tab):not([data-create-library-expand]),
+  #createView .create-workspace.create-library-is-collapsed .create-library-head > :not(.create-library-collapse-btn):not([data-create-library-toggle]):not(.create-library-collapsed-tab):not([data-create-library-expand]) {
+    display: none;
+  }
+  #createView.create-library-is-collapsed .create-library-tabs,
+  #createView .create-shell.create-library-is-collapsed .create-library-tabs,
+  #createView .create-workspace.create-library-is-collapsed .create-library-tabs {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    padding: 0;
+    background: transparent;
+  }
+  #createView.create-library-is-collapsed .create-library-tabs > :not(.create-library-collapsed-tab):not([data-create-library-expand]),
+  #createView .create-shell.create-library-is-collapsed .create-library-tabs > :not(.create-library-collapsed-tab):not([data-create-library-expand]),
+  #createView .create-workspace.create-library-is-collapsed .create-library-tabs > :not(.create-library-collapsed-tab):not([data-create-library-expand]) {
+    display: none;
+  }
+  #createView.create-library-is-collapsed .create-library-collapsed-tab,
+  #createView.create-library-is-collapsed [data-create-library-expand],
+  #createView .create-shell.create-library-is-collapsed .create-library-collapsed-tab,
+  #createView .create-shell.create-library-is-collapsed [data-create-library-expand],
+  #createView .create-workspace.create-library-is-collapsed .create-library-collapsed-tab,
+  #createView .create-workspace.create-library-is-collapsed [data-create-library-expand] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--module-library-tab-width);
+    min-width: var(--module-library-tab-width);
+    min-height: var(--module-library-tab-height);
+    align-self: center;
+    padding: 5px 3px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--panel-bg);
+    color: var(--text-secondary);
+    font-size: var(--module-library-tab-font-size);
+    white-space: nowrap;
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+  #createView.create-library-is-collapsed .create-library-collapse-btn,
+  #createView.create-library-is-collapsed [data-create-library-toggle],
+  #createView .create-shell.create-library-is-collapsed .create-library-collapse-btn,
+  #createView .create-shell.create-library-is-collapsed [data-create-library-toggle],
+  #createView .create-workspace.create-library-is-collapsed .create-library-collapse-btn,
+  #createView .create-workspace.create-library-is-collapsed [data-create-library-toggle] {
+    display: inline-flex;
+  }
+  #createView.create-library-is-collapsed .create-catalog > .create-sec,
+  #createView.create-library-is-collapsed .create-catalog > #createContent,
+  #createView.create-library-is-collapsed .create-catalog > .create-library-content,
+  #createView .create-shell.create-library-is-collapsed .create-catalog > .create-sec,
+  #createView .create-shell.create-library-is-collapsed .create-catalog > #createContent,
+  #createView .create-shell.create-library-is-collapsed .create-catalog > .create-library-content,
+  #createView .create-workspace.create-library-is-collapsed .create-catalog > .create-sec,
+  #createView .create-workspace.create-library-is-collapsed .create-catalog > #createContent,
+  #createView .create-workspace.create-library-is-collapsed .create-catalog > .create-library-content {
+    display: none;
+  }
+}
+
+/* A provider moved out of the module header must not leave an empty grid row. */
+#tangguanView .tg-header-actions {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas: "session new edit menu";
+}
+#tangguanView .tg-header-actions:has(.module-provider-controls) {
+  grid-template-areas:
+    "providers providers providers menu"
+    "session new edit menu";
+}
+#tangguanView .tg-header-actions .tg-session-select { min-width: 0; }
+#createView .create-session-actions { min-width: 0; }
+#createView .create-session-actions > * { min-width: 0; }
+
+/* Keep the model control wide, right aligned, and adjacent to thinking controls. */
+.input-toggles {
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 5px;
+}
+.input-toggles-left,
+.input-toggles-right {
+  min-width: 0;
+  align-items: center;
+}
+.input-toggles-left { flex: 1 1 auto; }
+.input-toggles-right {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.input-toggles-right .topbar-menu-wrap,
+.input-toggles-right .module-provider-controls {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.input-toggles-right #modelSelectBtn {
+  flex: 1 1 clamp(190px, 25vw, 320px);
+  width: clamp(190px, 25vw, 320px);
+  min-width: 0;
+  max-width: 320px;
+  min-height: 34px;
+  padding: 6px 11px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.input-toggles .module-provider-controls { gap: 6px; }
+.input-toggles .module-provider-controls .module-provider-account {
+  flex: 0 1 136px;
+  width: 136px;
+  min-width: 0;
+}
+.input-toggles .module-provider-controls .module-provider-model {
+  flex: 1 1 clamp(190px, 25vw, 320px);
+  width: clamp(190px, 25vw, 320px);
+  max-width: 320px;
+  min-width: 0;
+}
+.input-toggles .module-provider-model,
+.input-toggles .module-provider-account {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  #createView .create-workspace {
+    grid-template-columns: 1fr;
+  }
+  #createView .create-catalog {
+    flex: 0 0 auto;
+    max-height: 36%;
+  }
+  #createView .create-library-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #tangguanView .tg-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+  #tangguanView .tg-header-actions .tg-session-select {
+    order: 5;
+    flex: 1 1 100%;
+  }
+  #tangguanView .tg-header-actions .module-provider-controls { order: 4; width: 100%; }
+  #tangguanView .tg-header-actions .module-provider-controls select { flex: 1 1 0; max-width: none; }
+  .input-toggles-right .topbar-menu-wrap,
+  .input-toggles-right .module-provider-controls { flex: 1 1 auto; max-width: 100%; }
+  .input-toggles-right #modelSelectBtn,
+  .input-toggles .module-provider-controls .module-provider-model {
+    width: auto;
+    max-width: none;
+    flex: 1 1 190px;
+  }
+}
+@media (max-width: 560px) {
+  #createView .create-catalog { max-height: 34%; padding: 7px; }
+  #createView .create-library-head { min-height: 26px; }
+  #createView .create-catalog .create-sec { padding: 7px; }
+  .input-toggles { align-items: stretch; }
+  .input-toggles-left,
+  .input-toggles-right { flex: 1 1 100%; }
+  .input-toggles-right { justify-content: flex-start; margin-left: 0; }
+  .input-toggles-right .topbar-menu-wrap,
+  .input-toggles-right .module-provider-controls { width: 100%; }
+  .input-toggles-right #modelSelectBtn,
+  .input-toggles .module-provider-controls .module-provider-model { width: 100%; }
+}
+
+/* Final Create library dimensions: keep the expanded pane wide and the collapsed rail compact. */
+@media (min-width: 901px) {
+  #createView .create-workspace,
+  #createView.create-library-is-collapsed .create-workspace,
+  #createView .create-shell.create-library-is-collapsed .create-workspace,
+  #createView .create-workspace.create-library-is-collapsed {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  #createView .create-catalog {
+    width: 240px;
+    min-width: 240px;
+    max-width: 240px;
+    box-sizing: border-box;
+  }
+  #createView.create-library-is-collapsed .create-workspace,
+  #createView .create-shell.create-library-is-collapsed .create-workspace,
+  #createView .create-workspace.create-library-is-collapsed {
+    grid-template-columns: var(--module-library-rail-width) minmax(0, 1fr);
+  }
+  #createView.create-library-is-collapsed .create-catalog,
+  #createView .create-shell.create-library-is-collapsed .create-catalog,
+  #createView .create-workspace.create-library-is-collapsed .create-catalog {
+    width: var(--module-library-rail-width);
+    min-width: var(--module-library-rail-width);
+    max-width: var(--module-library-rail-width);
+    box-sizing: border-box;
+  }
+  #createView .create-library-collapse-btn,
+  #createView [data-create-library-toggle] {
+    width: var(--module-library-tab-width);
+    min-width: var(--module-library-tab-width);
+    height: var(--module-library-tab-width);
+    min-height: var(--module-library-tab-width);
+    padding: 0;
+  }
+  #createView.create-library-is-collapsed .create-library-collapsed-tab,
+  #createView.create-library-is-collapsed [data-create-library-expand],
+  #createView .create-shell.create-library-is-collapsed .create-library-collapsed-tab,
+  #createView .create-shell.create-library-is-collapsed [data-create-library-expand],
+  #createView .create-workspace.create-library-is-collapsed .create-library-collapsed-tab,
+  #createView .create-workspace.create-library-is-collapsed [data-create-library-expand] {
+    width: var(--module-library-tab-width);
+    min-width: var(--module-library-tab-width);
+    min-height: var(--module-library-tab-height);
+    font-size: var(--module-library-tab-font-size);
+    height: auto;
+  }
+}
+
+/* Keep the scroll boundary inside the catalog at every compact viewport. */
+#createView .create-workspace,
+#createView .create-catalog,
+#createView .create-session-pane,
+#createView .create-chat-surface {
+  min-width: 0;
+  max-width: 100%;
+}
+#createView .create-catalog .agent-grid {
+  width: 100%;
+  max-width: 100%;
+  scrollbar-gutter: stable;
+}
+@media (max-width: 900px) {
+  #createView .create-workspace {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  #createView .create-catalog {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  #createView .create-session-pane {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+}

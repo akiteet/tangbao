@@ -16,8 +16,155 @@
     { label: '1:1', value: '1024x1024', ratio: 'r11' },
     { label: '16:9', value: '1792x1024', ratio: 'r169' },
     { label: '9:16', value: '1024x1792', ratio: 'r916' },
+    { label: '4:3', value: '1280x960', ratio: 'r43' },
+    { label: '3:4', value: '960x1280', ratio: 'r34' },
   ];
-  const SIZE_LABEL = {}; SIZES.forEach(s => SIZE_LABEL[s.value] = s.label);
+  const SENSENOVA_U1_SIZES = [
+    { label: '2:3', value: '1664x2496', ratio: 'r23' },
+    { label: '3:2', value: '2496x1664', ratio: 'r32' },
+    { label: '3:4', value: '1760x2368', ratio: 'r34' },
+    { label: '4:3', value: '2368x1760', ratio: 'r43' },
+    { label: '4:5', value: '1824x2272', ratio: 'r45' },
+    { label: '5:4', value: '2272x1824', ratio: 'r54' },
+  ];
+  const SIZE_LABEL = {};
+  [...SIZES, ...SENSENOVA_U1_SIZES].forEach((s) => { SIZE_LABEL[s.value] = s.label; });
+  const imageSizeCache = Object.create(null);
+  const IMAGE_CORE_KEYS = new Set([
+    'model', 'prompt', 'messages', 'size', 'n', 'response_format',
+    'imageProtocol', 'imageSizeStrategy', 'imageSizeFormat', 'imageSizes',
+  ]);
+
+  function imageCapabilityApi() {
+    return (window.App && window.App.ImageCapabilities) || null;
+  }
+
+  function ratioLabel(width, height) {
+    const gcd = (a, b) => b ? gcd(b, a % b) : a;
+    const divisor = gcd(Math.abs(width), Math.abs(height)) || 1;
+    const exact = (width / divisor) + ':' + (height / divisor);
+    const ratio = width / height;
+    const common = [
+      [1, 1, '1:1'], [16 / 9, 1, '16:9'], [9 / 16, 1, '9:16'],
+      [3 / 2, 1, '3:2'], [2 / 3, 1, '2:3'], [4 / 3, 1, '4:3'],
+      [3 / 4, 1, '3:4'], [5 / 4, 1, '5:4'], [4 / 5, 1, '4:5'],
+      [2, 1, '2:1'], [1 / 2, 1, '1:2'], [3, 1, '3:1'], [1 / 3, 1, '1:3'],
+    ];
+    const closest = common.reduce((best, item) => {
+      const distance = Math.abs(Math.log(ratio / item[0]));
+      return !best || distance < best.distance ? { distance, label: item[2] } : best;
+    }, null);
+    return closest && closest.distance < 0.035 ? closest.label : exact;
+  }
+
+  function ratioClass(width, height) {
+    return 'r' + ratioLabel(width, height).replace(':', '');
+  }
+
+  function normalizeSizeOptions(value) {
+    const list = Array.isArray(value) ? value : [];
+    const out = [];
+    const seen = new Set();
+    list.forEach((item) => {
+      const raw = typeof item === 'string' ? item : item && (item.value || item.size || item.resolution);
+      const valueText = String(raw || '').match(/^\s*(\d{3,5})\s*[x\u00d7*]\s*(\d{3,5})\s*$/i);
+      if (!valueText) return;
+      const valueKey = valueText[1] + 'x' + valueText[2];
+      if (seen.has(valueKey)) return;
+      seen.add(valueKey);
+      const width = Number(valueText[1]);
+      const height = Number(valueText[2]);
+      const ratio = width === height ? '1:1' : (width / height).toFixed(2);
+      out.push({
+        label: (item && item.label) || SIZE_LABEL[valueKey] || ratioLabel(width, height),
+        value: valueKey,
+        ratio: (item && item.ratio) || ratioClass(width, height),
+        width,
+        height,
+        ratioValue: ratio,
+      });
+    });
+    return out;
+  }
+
+  function providerKey(provider) {
+    const p = provider || {};
+    return String(p.apiBase || '') + '|' + String(p.model || '');
+  }
+
+  function isSenseNovaU1(provider) {
+    const p = provider || {};
+    const base = String(p.apiBase || '').toLowerCase();
+    const model = String(p.model || '').toLowerCase();
+    const api = imageCapabilityApi();
+    if (api && typeof api.isSenseNovaU1Model === 'function' && api.isSenseNovaU1Model(model)) return true;
+    return (/sensenova|sensetime/.test(base) && /^sensenova[-_ ]?u1(?:[-_ ]fast)?$/.test(model))
+      || /^sensenova[-_ ]?u1(?:[-_ ]fast)?$/.test(model);
+  }
+
+  function resolveImageCapabilities(provider) {
+    const p = provider || {};
+    const key = providerKey(p);
+    const api = imageCapabilityApi();
+    if (api) {
+      if (typeof api.resolve === 'function') {
+        try {
+          const settings = window.App && window.App.state && window.App.state.settings
+            ? window.App.state.settings : {};
+          const result = api.resolve(p.apiBase || '', p.model || '', {
+            config: p.profile || p,
+            store: settings.imageCapabilities || {},
+          });
+          if (result && typeof result === 'object') {
+            const sizes = normalizeSizeOptions(result.sizes || result.sizeOptions || result.resolutions);
+            return Object.assign({}, result, {
+              sizes: sizes.map((item) => item.value),
+              sizeOptions: sizes,
+              uiSizes: normalizeSizeOptions(result.uiSizes || (api.DEFAULT_UI_SIZES || [])),
+            });
+          }
+        } catch (_) {}
+      }
+    }
+    if (imageSizeCache[key] && imageSizeCache[key].length) return { sizes: imageSizeCache[key].map((item) => item.value || item) };
+    return { sizes: isSenseNovaU1(p) ? SENSENOVA_U1_SIZES.slice() : SIZES.slice() };
+  }
+
+  function parseSizeOptions(value) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value || '');
+    const matches = text.match(/\b\d{3,5}\s*[x\u00d7*]\s*\d{3,5}\b/gi) || [];
+    return normalizeSizeOptions(matches);
+  }
+
+  function stripImageDataUrl(value) {
+    const text = String(value || '').trim();
+    const match = text.match(/^data:image\/[^;,]+;base64,([A-Za-z0-9+/=\s]+)$/i);
+    return match ? match[1].replace(/\s+/g, '') : text;
+  }
+
+  function isRemoteImageUrl(value) {
+    return /^https?:\/\//i.test(String(value || '').trim());
+  }
+
+  async function imageValueToBase64(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    if (/^data:image\/[^;,]+;base64,/i.test(text)) return stripImageDataUrl(text);
+    if (!isRemoteImageUrl(text)) return text;
+    const gateway = App.services && App.services.gateway;
+    if (!gateway || typeof gateway.fetchImageAsset !== 'function') throw new Error('图像 URL 下载服务不可用');
+    const result = await gateway.fetchImageAsset({ url: text });
+    if (!result || !result.ok || !result.dataUrl) throw new Error((result && (result.error || result.code)) || '图像 URL 下载失败');
+    return stripImageDataUrl(result.dataUrl);
+  }
+
+  async function normalizeGeneratedImages(data) {
+    const items = Array.isArray(data && data.data) ? data.data : [];
+    const values = await Promise.all(items.map((item) => imageValueToBase64(
+      item && (item.b64_json || item.url || item.data || item.image || item.image_url),
+    )));
+    return values.filter(Boolean);
+  }
 
   const EXAMPLES = [
     '一只宇航员猫在月球上弹吉他',
@@ -45,8 +192,6 @@
 
     onShow() {
       App.image.render();
-      const t = document.getElementById('chatTitle');
-      if (t) t.textContent = '糖绘';
     },
 
     render() {
@@ -62,10 +207,6 @@
         : '<option value="" disabled selected>未配置图像模型，请到设置填写</option>';
 
       wrap.innerHTML = `
-        <div class="module-header">
-          <h2>糖绘</h2>
-          <p>输入描述，糖包帮你生成图片</p>
-        </div>
         <div class="image-shell" id="imgPanel">
           <div class="img-sec">
             <div class="image-input-wrap">
@@ -100,9 +241,7 @@
               </div>
               <div class="opt-group">
                 <span class="opt-label">尺寸</span>
-                <div class="chip-row" data-group="size">
-                  ${SIZES.map(s => `<button type="button" class="chip" data-group="size" data-val="${s.value}"><span class="size-ico ${s.ratio}"></span>${s.label}</button>`).join('')}
-                </div>
+                <div class="chip-row" id="imgSizeOptions" data-group="size"></div>
               </div>
               <div class="opt-group">
                 <span class="opt-label">数量</span>
@@ -145,6 +284,7 @@
 
       App.image.syncChips();
       App.image.bind();
+      App.image.renderSizeOptions(imgProv);
 
       // 初始画廊：优先内存结果，否则回填最近一次历史，否则空状态
       const hist = App.state.settings.imageHistory || [];
@@ -297,8 +437,124 @@
         const prov = App.state.settings.providers.image || (App.state.settings.providers.image = { accountId: '__default__' });
         prov.model = val;
         App.persist();
+        App.image.renderSizeOptions(App.getProvider('image'));
         App.ui.toast('已切换图像模型：' + val);
       });
+    },
+
+    sizeOptionsForProvider(provider) {
+      const caps = resolveImageCapabilities(provider || App.getProvider('image'));
+      const options = normalizeSizeOptions(caps.sizes || caps.sizeOptions || caps.resolutions);
+      if (options.length) return options;
+      const fallback = normalizeSizeOptions(caps.uiSizes || ((imageCapabilityApi() || {}).DEFAULT_UI_SIZES || []));
+      return fallback.length ? fallback : SIZES.slice();
+    },
+
+    normalizeSizeForProvider(value, provider) {
+      const options = App.image.sizeOptionsForProvider(provider);
+      const wanted = String(value || '');
+      const exact = options.find((item) => item.value === wanted);
+      if (exact) return exact;
+      const api = imageCapabilityApi();
+      const capability = resolveImageCapabilities(provider || App.getProvider('image'));
+      const selected = api && typeof api.chooseSize === 'function'
+        ? api.chooseSize(wanted, capability.sizes || []) : '';
+      return options.find((item) => item.value === selected) || options[0] || SIZES[0];
+    },
+
+    rememberImageSizes(provider, sizes) {
+      const options = normalizeSizeOptions(sizes);
+      if (!options.length) return [];
+      imageSizeCache[providerKey(provider)] = options;
+      return options;
+    },
+
+    learnImageSizesFromError(provider, text) {
+      const p = provider || App.getProvider('image');
+      const api = imageCapabilityApi();
+      let learned = [];
+      if (api && typeof api.learnFromError === 'function') {
+        try {
+          const settings = window.App && window.App.state && window.App.state.settings
+            ? window.App.state.settings : {};
+          const result = api.learnFromError(p.apiBase || '', p.model || '', String(text || ''), {
+            config: p.profile || p,
+            store: settings.imageCapabilities || {},
+          });
+          learned = normalizeSizeOptions(result && (result.sizes || result.sizeOptions || result.resolutions || result));
+          if (settings && typeof api.serialize === 'function') settings.imageCapabilities = api.serialize();
+          if (App.persist) App.persist();
+        } catch (_) {}
+      }
+      if (!learned.length) learned = parseSizeOptions(text);
+      if (learned.length) App.image.rememberImageSizes(p, learned);
+      return learned;
+    },
+
+    async remoteImageToBase64(url, signal) {
+      const api = imageCapabilityApi();
+      const service = App.services && (App.services.images || App.services.image);
+      const candidates = [
+        [api, 'fetchImageAsDataUrl'], [api, 'fetchRemoteImage'], [api, 'toDataUrl'],
+        [App.rt, 'fetchImageUrl'], [App.rt, 'fetchRemoteImage'],
+        [App.services && App.services.gateway, 'fetchImageAsset'],
+        [service, 'fetchImageUrl'], [service, 'fetchRemoteImage'],
+      ];
+      for (const [owner, name] of candidates) {
+        if (!owner || typeof owner[name] !== 'function') continue;
+        try {
+          const result = name === 'fetchImageAsset'
+            ? await owner[name]({ url })
+            : await owner[name](url, { signal });
+          if (result && result.ok === false) continue;
+          const value = result && (result.dataUrl || result.data || result.b64_json || result.base64) || result;
+          const base64 = stripImageDataUrl(value);
+          if (base64 && !isRemoteImageUrl(base64)) return base64;
+        } catch (_) {}
+      }
+      throw new Error('远程图片未能转换为本地数据');
+    },
+
+    async parseImageResponse(data, task, provider, signal) {
+      const values = [];
+      const add = (value) => {
+        if (value == null) return;
+        if (Array.isArray(value)) { value.forEach(add); return; }
+        if (typeof value === 'object') {
+          if (value.b64_json) add(value.b64_json);
+          else if (value.dataUrl) add(value.dataUrl);
+          else if (value.url) add(value.url);
+          else if (value.image_url) add(value.image_url);
+          else if (value.data) add(value.data);
+          return;
+        }
+        values.push(String(value));
+      };
+      if (task && task.refImg) {
+        const msg = (data && data.choices && data.choices[0] && data.choices[0].message) || {};
+        add(msg.content);
+      } else {
+        add(data && data.data);
+      }
+      const result = [];
+      for (const value of values) {
+        const text = String(value || '').trim();
+        if (!text) continue;
+        if (isRemoteImageUrl(text)) result.push(await App.image.remoteImageToBase64(text, signal));
+        else result.push(stripImageDataUrl(text));
+      }
+      return result.filter(Boolean);
+    },
+
+    renderSizeOptions(provider) {
+      const row = $('imgSizeOptions');
+      if (!row) return;
+      const activeProvider = provider || App.getProvider('image');
+      const options = App.image.sizeOptionsForProvider(activeProvider);
+      const selected = App.image.normalizeSizeForProvider(App.image.sel.size, activeProvider);
+      App.image.sel.size = selected.value;
+      row.innerHTML = options.map((item) => `<button type="button" class="chip" data-group="size" data-val="${item.value}"><span class="size-ico ${item.ratio}"></span>${item.label}</button>`).join('');
+      App.image.syncChips();
     },
 
     syncChips() {
@@ -319,7 +575,8 @@
         return;
       }
       const styleKey = App.image.sel.style;
-      const sizeObj = SIZES.find(s => s.value === App.image.sel.size) || SIZES[0];
+      const sizeObj = App.image.normalizeSizeForProvider(App.image.sel.size, p);
+      App.image.sel.size = sizeObj.value;
       const refImg = App.image.refImage;
       // M6：图片编辑走 vision chat 兜底，需当前图像模型支持视觉输入；否则给出可行动提示
       if (refImg && App.ModelCapabilities && App.ModelCapabilities.capsOfModelApp) {
@@ -333,7 +590,7 @@
         + (STYLES[styleKey] ? STYLES[styleKey].suffix : '')
         + '，比例 ' + sizeObj.label;
       if (refImg) finalPrompt = '请根据以下描述编辑这张图片：' + finalPrompt;
-      const size = App.image.sel.size;
+      const size = sizeObj.value;
       const n = Number(App.image.sel.n) || 1;
       // M12：高级参数（折叠区）——收集 + JSON 预校验
       const adv = App.image.collectAdv();
@@ -375,24 +632,44 @@
 
     // M12：文生图 payload——高级参数尽力映射（OpenAI 系传 seed/quality/response_format；火山/SD 额外 cfg_scale/negative_prompt），模型专属 JSON 透传合并
     buildImagePayload(task, p) {
-      const payload = { model: p.model, prompt: task.finalPrompt, n: task.n, size: task.size, response_format: 'b64_json' };
+      const capability = resolveImageCapabilities(p);
+      const payload = { model: p.model, prompt: task.finalPrompt, n: task.n, size: task.size };
+      if (capability.protocol) payload.imageProtocol = capability.protocol;
+      if (capability.sizeStrategy) payload.imageSizeStrategy = capability.sizeStrategy;
+      if (capability.sizeFormat) payload.imageSizeFormat = capability.sizeFormat;
+      if (Array.isArray(capability.sizes) && capability.sizes.length) payload.imageSizes = capability.sizes.slice();
       const adv = task.adv || {};
       const sup = App.image.detectImageSupplier(p);
+      const formats = ['b64_json', 'url'];
+      const requestedFormat = formats.includes(adv.format) ? adv.format : capability.responseFormat;
+      if (requestedFormat) payload.response_format = requestedFormat;
       if (adv.seed != null) payload.seed = adv.seed;
-      if (adv.format && ['b64_json', 'url', 'png', 'jpeg', 'webp'].includes(adv.format)) payload.response_format = adv.format;
       if (adv.quality && ['low', 'medium', 'high'].includes(adv.quality) && sup === 'openai') payload.quality = adv.quality;
       if (sup === 'volc' || sup === 'sd') {
         if (adv.guidance != null) payload.cfg_scale = adv.guidance;
         if (adv.negative) payload.negative_prompt = adv.negative;
       }
-      if (adv.extra && typeof adv.extra === 'object') Object.assign(payload, adv.extra);
+      const api = imageCapabilityApi();
+      if (api && typeof api.adaptPayload === 'function') {
+        try {
+          const adapted = api.adaptPayload(Object.assign({}, payload), capability);
+          if (adapted && typeof adapted === 'object') Object.assign(payload, adapted);
+        } catch (_) {}
+      }
+      if (adv.extra && typeof adv.extra === 'object') {
+        Object.keys(adv.extra).forEach((key) => {
+          if (!IMAGE_CORE_KEYS.has(key)) payload[key] = adv.extra[key];
+        });
+      }
       return payload;
     },
 
     // M7：入队一个生成任务
     enqueue(params) {
       const id = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-      const task = Object.assign({ id, status: 'queued', error: null }, params);
+      const provider = App.getProvider('image');
+      const size = App.image.normalizeSizeForProvider(params && params.size, provider);
+      const task = Object.assign({ id, status: 'queued', error: null }, params, { size: size.value });
       App.image.tasks[id] = task;
       App.image.queue.push(id);
       App.image.renderQueue();
@@ -427,6 +704,7 @@
       task.startedAt = Date.now();
       App.image.renderQueue();
       const p = App.getProvider('image');
+      task.size = App.image.normalizeSizeForProvider(task.size, p).value;
       const status = $('imgStatus');
       const btn = $('imgGenBtn');
       if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
@@ -439,7 +717,11 @@
           // 图片编辑：用 chat completions vision 格式；高级参数忽略（视觉模型），仅模型专属 JSON 透传
           const content = [{ type: 'text', text: task.finalPrompt }, { type: 'image_url', image_url: { url: task.refImg } }];
           const chatPayload = { model: p.model, messages: [{ role: 'user', content }], stream: false };
-          if (task.adv && task.adv.extra && typeof task.adv.extra === 'object') Object.assign(chatPayload, task.adv.extra);
+          if (task.adv && task.adv.extra && typeof task.adv.extra === 'object') {
+            Object.keys(task.adv.extra).forEach((key) => {
+              if (!IMAGE_CORE_KEYS.has(key)) chatPayload[key] = task.adv.extra[key];
+            });
+          }
           res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', telemetry: { scope: 'image', callType: 'vision_edit' }, payload: chatPayload, signal: ctrl.signal });
         } else {
           // 文生图：标准 images/generations（M12：高级参数映射）
@@ -451,20 +733,17 @@
         }
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
+          if (Number(res.status) === 400) {
+            const learned = App.image.learnImageSizesFromError(p, txt);
+            if (learned.length) {
+              App.image.renderSizeOptions(p);
+              task.retryable = true;
+            }
+          }
           throw new Error('请求失败（' + res.status + '）：' + String(txt).slice(0, 200));
         }
         data = await res.json();
-        let arr;
-        if (task.refImg) {
-          // chat completions 返回：尝试从 choices[0].message.content 提取 base64
-          const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
-          const text = msg.content || '';
-          const b64Match = text.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);
-          arr = b64Match ? [b64Match[1]] : [];
-          if (!arr.length) arr = text ? [text] : [];
-        } else {
-          arr = (data.data || []).map(it => it.b64_json || '').filter(Boolean);
-        }
+        const arr = await App.image.parseImageResponse(data, task, p, ctrl.signal);
         if (!arr.length) throw new Error('未返回图片。');
         App.image.results = arr;
         App.image.rawPrompt = task.prompt;

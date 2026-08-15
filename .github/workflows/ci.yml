@@ -27,6 +27,7 @@ jobs:
         run: |
           npm run check:version
           npm run check:storage
+          npm run check:perf
           npm run check:release
       - name: Offline Benchmark reproducibility
         shell: bash
