@@ -25,12 +25,15 @@ function main() {
   for (const file of ['.github/workflows/ci.yml', '.github/workflows/macos-release.yml', 'docs/CHANGELOG-v1.1.4.md', 'docs/DATA_MODEL.md']) assert(fs.existsSync(path.join(ROOT, file)), 'missing release file ' + file);
   const ci = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8');
   const macRelease = fs.readFileSync(path.join(ROOT, '.github/workflows/macos-release.yml'), 'utf8');
+  const macAssetsReleasePath = path.join(ROOT, '.github/workflows/macos-release-assets.yml');
+  const macAssetsRelease = fs.existsSync(macAssetsReleasePath) ? fs.readFileSync(macAssetsReleasePath, 'utf8') : '';
   const dataModel = fs.readFileSync(path.join(ROOT, 'docs/DATA_MODEL.md'), 'utf8');
   assert(ci.includes('npm run check:release') && ci.includes('electron-builder --win nsis'), 'CI must run release checks and Windows NSIS build');
   assert(ci.includes('npm run check:perf'), 'CI must run the performance contract check');
   assert(ci.includes('electron-builder --mac dmg zip') && ci.includes('shasum -a 256'), 'CI must build macOS installers and checksums');
   assert(ci.includes('npm run check:electron-abi') && ci.includes('xvfb-run -a npm run check:ui'), 'CI must verify Electron native ABI and real renderer UI');
   assert(macRelease.includes('default: v1.1.4') && macRelease.includes('release-assets/*.sha256'), 'macOS release workflow must target v1.1.4 and publish checksums');
+  if (macAssetsRelease) assert(macAssetsRelease.includes('default: v1.1.4') && macAssetsRelease.includes('tangbao-v1.1.4-macos-'), 'macOS asset workflow must target v1.1.4');
   assert(dataModel.includes('v1.1.4') && dataModel.includes('activeRoot/tangbao-data'), 'data model must describe current storage layout');
   run('check-version.js');
   run('check-storage.js');
