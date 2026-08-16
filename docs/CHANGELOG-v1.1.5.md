@@ -42,6 +42,12 @@ The remaining engine bulk (agent loop, tool implementations, handleAgent) is sla
 
 - New `npm run check:sqlite` runs `storage-search-metrics` under Electron's Node runtime (`ELECTRON_RUN_AS_NODE=1`, matching native ABI): the four cases that structurally skip in plain-Node `npm test` now execute for real. The CI ui job (which already rebuilds natives for Electron) runs this step, closing the gap that previously left real database logic covered only by the `select 1` ABI smoke.
 
+## UI performance and consistency
+
+- Remove `backdrop-filter` from the three always-visible large surfaces (sidebar, topbar, and every assistant message card). At 88%+ background opacity over a smooth gradient the blur contributed almost nothing visually, but forced a blur recomposite on every stream chunk, scroll, and sidebar update — the main source of visible jank on Windows. Glass blur is retained on small transient overlays (modals, dropdowns, command suggestions, approval bar, memory card) where the cost is negligible.
+- Unify all monospace rendering on the existing `--font-mono` token: ten hardcoded font stacks across three different variants (plus one inline style in the agent memory editor) now resolve identically on every platform.
+- Tokenize border radii onto the six-step scale (`--radius-xs/md/sm`/`--radius`/`--radius-lg`/`--radius-pill`): 150 single-value declarations mapped, two new fine-grained tokens (`xs`/`md`) added and wired into the appearance radius slider so all corners scale together. Multi-value bubble-tail radii and circles are intentionally untouched.
+
 ## Release gates
 
 Run the following before packaging:

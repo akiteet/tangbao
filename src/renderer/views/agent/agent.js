@@ -3654,7 +3654,7 @@
             <button class="modal-close" id="memClose" title="关闭">×</button></div>
           <div class="modal-body">
             <p class="hint">该文件位于项目工作目录 <code>${App.escapeHtml(cwd)}</code>，会作为长期记忆注入糖码的系统提示。保存即写入磁盘。</p>
-            <textarea id="memContent" class="mem-editor" rows="14" style="font-family:ui-monospace,Menlo,Consolas,monospace">${App.escapeHtml(content)}</textarea>
+            <textarea id="memContent" class="mem-editor" rows="14" style="font-family:var(--font-mono)">${App.escapeHtml(content)}</textarea>
           </div>
           <div class="modal-footer">
             <button class="btn-ghost" id="memCancel">取消</button>

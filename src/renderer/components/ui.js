@@ -444,11 +444,15 @@
       if (ap.radius) {
         const r = parseInt(ap.radius, 10);
         root.style.setProperty('--radius', r + 'px');
+        root.style.setProperty('--radius-xs', Math.max(4, r - 8) + 'px');  // v1.1.5：微元件同步联动
+        root.style.setProperty('--radius-md', Math.max(6, r - 6) + 'px');  // v1.1.5：输入框/小按钮同步联动
         root.style.setProperty('--radius-sm', Math.max(6, r - 4) + 'px');
         root.style.setProperty('--radius-lg', (r + 4) + 'px');      // M12：大卡片/气泡圆角随滑杆
         root.style.setProperty('--radius-pill', '999px');           // M12：胶囊圆角恒定
       } else {
         root.style.setProperty('--radius', '');
+        root.style.setProperty('--radius-xs', '');
+        root.style.setProperty('--radius-md', '');
         root.style.setProperty('--radius-sm', '');
         root.style.setProperty('--radius-lg', '');
         root.style.setProperty('--radius-pill', '');
