@@ -38,7 +38,7 @@
 
 ## 安装
 
-- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.4-setup.exe`，双击安装即可。
+- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.5-setup.exe`，双击安装即可。
 - **从源码运行**：
 
 ```bash
@@ -50,7 +50,7 @@ npm start          # 启动应用（糖码本地后端随应用自动启动）
 
 > `npm run server` 仅用于独立调试糖码后端；正常使用不需要单独启动。
 >
-> **打包**：`npm run dist` → `dist/tangbao-1.1.4-setup.exe`
+> **打包**：`npm run dist` → `dist/tangbao-1.1.5-setup.exe`
 
 ## 配置
 
@@ -109,13 +109,23 @@ tangbao/
 └── package.json
 ```
 
-- **测试**：`npm test`（当前 464 个用例，459 个通过、5 个因本机 SQLite ABI 不匹配跳过，0 个失败）
+- **测试**：`npm test`（当前 472 个用例，467 个通过、5 个跳过——4 个 SQLite ABI 用例由 `npm run check:sqlite` 在 Electron 运行时真实执行、1 个评测存档用例需设 `TANGBAO_EVAL_ARCHIVE_DIR`——0 个失败）
 - **评测存档**：`eval-task-contracts` 里的 med-007 历史产物用例需设置 `TANGBAO_EVAL_ARCHIVE_DIR` 指向本机 `eval-runs-archive-*` 目录后才会真实执行，未设置时优雅跳过
 - **闭环门禁**：`npm run check:version`、`npm run check:storage`、`npm run check:perf`、`npm run check:electron-abi`、`npm run check:sqlite`（Electron 运行时跑 SQLite 用例，补纯 Node 的 ABI 跳过）、`npm run check:ui`、`npm run check:release`、`npm run bench:offline`
 - **打包**：`npm run dist`（Electron 31 + electron-builder，产物在 `dist/`）
 - **数据模型**：见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.4
+## v1.1.5
+
+- 架构减重：4158 行的糖码引擎拆分出四个聚焦模块（HTTP 传输层 agent-server-http、工具协议定义正名迁入 tool-runtime、搜索供应商 search-providers、运行态注册表 run-registry），全部行为零变化——离线基准与 v1.1.4 逐字节一致（seed 1337，成功率 0.875）。
+- 基础设施收敛：主进程与糖码后端共用一份 HTTP 鉴权实现（常数时间比较 + 回环校验），readJson/clone/escapeHtml 与渲染层 IPC 容错包装各自收敛为单一实现。
+- 发布自动化：新增 `npm run bump -- <version>` 一条命令完成发版全部版本号替换（含 dry-run 与历史段落保护），check:version / check:release 改为从 package.json 派生版本单一来源。
+- Prompt Caching 对齐：模型网关聊天路径与糖码运行时一样先过能力判定，reasoning 类模型不再注入 cache_control；数据库保持 Schema v16，无迁移。
+- 测试补强：新增 `npm run check:sqlite` 在 Electron 运行时真实执行 SQLite 用例（纯 Node 下的 4 个结构性跳过在 CI 中被补齐），并接入发布契约与 CI。
+
+详细说明见 [docs/CHANGELOG-v1.1.5.md](docs/CHANGELOG-v1.1.5.md)。
+
+## v1.1.4（历史版本）
 
 - 糖馆角色工作区：提供角色卡预设、AI 草稿预览、脏状态保护、JSON 导入/导出，以及 Tavern/SillyTavern 常见字段和 `character_book.entries` 兼容。
 - 角色隔离会话：糖馆角色会话与普通聊天分离；糖创任务会话也使用独立侧车，切换模块、删除会话和空状态均保持所属边界。

@@ -32,6 +32,7 @@ function textAnchors(cur, target) {
     ['src/infrastructure/agent-runtime/agent-runtime-engine.js', "const RUNTIME_VERSION = '" + cur + "'", "const RUNTIME_VERSION = '" + target + "'", 1],
     ['.github/workflows/macos-release.yml', 'default: v' + cur, 'default: v' + target, 1],
     ['.github/workflows/macos-release-assets.yml', 'default: v' + cur, 'default: v' + target, 1],
+    ['.github/workflows/macos-release-assets.yml', 'tangbao-v' + cur + '-macos-', 'tangbao-v' + target + '-macos-', 1],
     ['README.md', 'tangbao-' + cur + '-setup.exe', 'tangbao-' + target + '-setup.exe', 1],
     ['README.en.md', 'tangbao-' + cur + '-setup.exe', 'tangbao-' + target + '-setup.exe', 1],
   ];

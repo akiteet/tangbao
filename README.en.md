@@ -38,7 +38,7 @@ Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop work
 
 ## Installation
 
-- **Install the app**: download `tangbao-1.1.4-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
+- **Install the app**: download `tangbao-1.1.5-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
 - **Run from source**:
 
 ```bash
@@ -50,7 +50,7 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 > `npm run server` is only for standalone debugging of the Tangma backend; regular use does not need it.
 >
-> **Package**: `npm run dist` → `dist/tangbao-1.1.4-setup.exe`
+> **Package**: `npm run dist` → `dist/tangbao-1.1.5-setup.exe`
 
 ## Configuration
 
@@ -111,12 +111,22 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (464 cases; 459 pass, 5 skipped when the local SQLite ABI does not match, 0 failures)
-- **Release gates**: `npm run check:version`, `npm run check:storage`, `npm run check:perf`, `npm run check:electron-abi`, `npm run check:ui`, `npm run check:release`, and `npm run bench:offline`
+- **Tests**: `npm test` (472 cases; 467 pass, 5 skipped — 4 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
+- **Release gates**: `npm run check:version`, `npm run check:storage`, `npm run check:perf`, `npm run check:electron-abi`, `npm run check:sqlite`, `npm run check:ui`, `npm run check:release`, and `npm run bench:offline`
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.4
+## v1.1.5
+
+- Architecture slimming: the 4158-line agent runtime engine now delegates to four focused modules (HTTP transport `agent-server-http`, tool protocol definitions renamed and relocated into `tool-runtime`, search providers `search-providers`, runtime state registry `run-registry`) with zero behavior change — the offline benchmark stays byte-identical to v1.1.4 (seed 1337, success rate 0.875).
+- Infrastructure convergence: the main process and the agent backend share one HTTP auth implementation (timing-safe compare + loopback checks); readJson/clone/escapeHtml and the renderer IPC fault-tolerant wrappers each collapse to a single implementation.
+- Release automation: `npm run bump -- <version>` performs every release version replacement in one command (dry-run and historical-section protection included); check:version / check-release now derive the version from package.json as the single source.
+- Prompt caching alignment: the gateway chat path consults the capability check just like the runtime — reasoning-class models no longer send cache_control. The database stays at Schema v16; no migration.
+- Test hardening: `npm run check:sqlite` runs SQLite cases under the Electron runtime (the 4 structural skips in plain Node are covered in CI), wired into the release contract.
+
+See [docs/CHANGELOG-v1.1.5.md](docs/CHANGELOG-v1.1.5.md) for details.
+
+## v1.1.4 (historical)
 
 - Tangguan character workspace: presets, AI draft preview, dirty-state protection, JSON import/export, and common Tavern/SillyTavern fields including `character_book.entries`.
 - Isolated module sessions: Tangguan character chats and Tangcreate task sessions stay in their own sidecar, with safe switching, deletion, and empty-state behavior.
