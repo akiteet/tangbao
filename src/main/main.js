@@ -29,6 +29,7 @@ const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/r
 const legacySecretContext = require('../infrastructure/secrets/legacy-context');
 const TangguanCore = require('../core/tangguan/tangguan-store');
 const TangguanStore = require('../infrastructure/tangguan/tangguan-store');
+const ImageAssets = require('../infrastructure/storage/image-assets');
 const ModuleSessions = require('../infrastructure/storage/module-sessions');
 
 // M5（#254）：自定义协议 tangbao-file:// —— 渲染进程不再直接持有本地文件绝对路径，
@@ -218,6 +219,8 @@ let tangguanStoreBackend = null;
 let tangguanStoreRoot = '';
 let moduleSessionStoreInstance = null;
 let moduleSessionStoreRoot = '';
+let imageAssetStoreInstance = null;
+let imageAssetStoreRoot = '';
 const tangguanImportPreviews = new Map();
 
 function getTangguanStore() {
@@ -230,10 +233,21 @@ function getTangguanStore() {
   tangguanStoreInstance = TangguanStore.createStore({
     getKV: svc && typeof svc.getKV === 'function' ? (key) => svc.getKV(key) : null,
     setKV: svc && typeof svc.setKV === 'function' ? (key, value) => svc.setKV(key, value) : null,
-    filePath: path.join(dataDir, 'tangguan-library.json'),
-    indexPath: path.join(dataDir, 'tangguan-embeddings.index.json'),
+    filePath: path.join(dataDir, 'tangbao-library.json'),
+    indexPath: path.join(dataDir, 'tangbao-embeddings.index.json'),
   });
   return tangguanStoreInstance;
+}
+
+// v1.1.5（批次 D1）：糖绘历史图片资产存储（数据根 images/ 目录，含 500MB 配额）
+function getImageAssetStore() {
+  const activeRoot = dataLocation.canonical(app.getPath('userData'));
+  if (imageAssetStoreInstance && imageAssetStoreRoot === activeRoot) return imageAssetStoreInstance;
+  imageAssetStoreRoot = activeRoot;
+  imageAssetStoreInstance = ImageAssets.createImageAssetStore({
+    dir: path.join(dataLocation.recordsRoot(activeRoot), 'images'),
+  });
+  return imageAssetStoreInstance;
 }
 
 function getModuleSessionStore() {
@@ -873,6 +887,36 @@ safeHandle('image:fetchAsset', async (_e, input) => {
       code: error && error.type || 'image_asset_fetch_failed',
       error: error && error.message ? error.message : String(error),
     };
+  }
+});
+
+// v1.1.5（批次 D1）：糖绘历史图片落盘——渲染层只传 base64 与资源名，
+// 读写严格限定在数据根 images/ 目录内（见 storage/image-assets.js 的名称白名单）。
+safeHandle('image:saveAsset', (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  if (!opts.base64) return { ok: false, code: 'image_asset_empty' };
+  try {
+    return getImageAssetStore().save(opts.base64, opts.ext);
+  } catch (error) {
+    return { ok: false, code: 'image_asset_save_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('image:readAsset', (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  try {
+    return getImageAssetStore().read(opts.name);
+  } catch (error) {
+    return { ok: false, code: 'image_asset_read_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('image:deleteAsset', (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  try {
+    return getImageAssetStore().remove(opts.name);
+  } catch (error) {
+    return { ok: false, code: 'image_asset_delete_failed', error: error && error.message ? error.message : String(error) };
   }
 });
 

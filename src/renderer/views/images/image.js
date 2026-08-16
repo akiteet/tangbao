@@ -174,7 +174,54 @@
     '极简主义咖啡馆室内设计',
   ];
 
-  const HISTORY_CAP = 30;
+  const HISTORY_CAP = 200; // v1.1.5（批次 D1）：图片落盘后索引轻量，上限 30 → 200
+
+  // v1.1.5（批次 D1）：文件名 → data URL 的 LRU 缓存（历史缩略图/灯箱/对比按需取图）
+  const assetCache = new Map();
+  const ASSET_CACHE_LIMIT = 40;
+  async function cachedAssetDataUrl(name) {
+    if (!name) return '';
+    if (assetCache.has(name)) {
+      const v = assetCache.get(name);
+      assetCache.delete(name); assetCache.set(name, v);
+      return v;
+    }
+    const svc = App.services && App.services.images;
+    if (!svc || typeof svc.read !== 'function') return '';
+    const result = await svc.read(name);
+    const dataUrl = result && result.ok && result.dataUrl ? result.dataUrl : '';
+    if (!dataUrl) return '';
+    assetCache.set(name, dataUrl);
+    while (assetCache.size > ASSET_CACHE_LIMIT) assetCache.delete(assetCache.keys().next().value);
+    return dataUrl;
+  }
+
+  // v1.1.5（批次 C3）：base64 头嗅探真实 MIME（下载命名与展示用；存储侧以服务端嗅探为准）
+  function sniffMime(b64) {
+    try {
+      const head = atob(String(b64 || '').slice(0, 24));
+      if (head.length < 4) return 'image/png';
+      const c = head.charCodeAt;
+      if (c(0) === 0x89 && c(1) === 0x50 && c(2) === 0x4e && c(3) === 0x47) return 'image/png';
+      if (c(0) === 0xff && c(1) === 0xd8 && c(2) === 0xff) return 'image/jpeg';
+      if (head.slice(0, 4) === 'RIFF' && head.slice(8, 12) === 'WEBP') return 'image/webp';
+      if (head.slice(0, 3) === 'GIF') return 'image/gif';
+    } catch (_) {}
+    return 'image/png';
+  }
+  const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+  function dataUrlOf(b64) { const mime = sniffMime(b64); return 'data:' + mime + ';base64,' + b64; }
+
+  // 历史条目（新格式 files / 旧格式 images）→ data URL 数组
+  async function materializeEntry(e) {
+    if (!e) return [];
+    if (Array.isArray(e.images) && e.images.length) return e.images.map(dataUrlOf);
+    if (Array.isArray(e.files) && e.files.length) {
+      const urls = await Promise.all(e.files.map(cachedAssetDataUrl));
+      return urls.filter(Boolean);
+    }
+    return [];
+  }
 
   App.image = {
     results: [],
@@ -189,14 +236,82 @@
     lbImages: [], lbPrompt: '', lbIdx: 0,
     compareList: [],  // M7：图片对比队列（收集 2 张自动弹出对比）
     refImage: null,   // 参考图片 base64 data URL（用于图片编辑）
+    // v1.1.5：A2 草稿态（切视图不丢输入）/ D2 历史管理态 / B1 队列计时器
+    _draftPrompt: '', _draftRefName: '',
+    _historySearch: '', _expandedHistory: new Set(), _migrating: false, _migrated: false,
+    _queueTimer: null, _lbKeyHandler: null,
 
     onShow() {
+      App.image.migrateLegacyHistory();
       App.image.render();
+    },
+
+    // v1.1.5（批次 D1）：旧内联 base64 历史一次性迁出到数据根 images/ 文件（先落盘后改索引，可重入）
+    async migrateLegacyHistory() {
+      if (App.image._migrated || App.image._migrating) return;
+      const svc = App.services && App.services.images;
+      if (!svc || typeof svc.available === 'function' && !svc.available()) { App.image._migrated = true; return; }
+      const hist = App.state.settings.imageHistory || [];
+      const legacy = hist.filter((e) => e && Array.isArray(e.images) && e.images.length && !Array.isArray(e.files));
+      if (!legacy.length) { App.image._migrated = true; return; }
+      App.image._migrating = true;
+      let migratedCount = 0;
+      try {
+        for (const entry of legacy) {
+          const files = [];
+          let failed = false;
+          for (const b64 of entry.images) {
+            const saved = await svc.save(b64);
+            if (saved && saved.ok && saved.name) files.push(saved.name);
+            else if (saved && saved.code === 'quota') { failed = true; break; }
+          }
+          if (!failed && files.length === entry.images.length) {
+            entry.files = files;
+            delete entry.images;
+            migratedCount++;
+          }
+        }
+        if (migratedCount) {
+          App.persist();
+          App.image.renderHistory();
+          App.ui.toast('已把 ' + migratedCount + ' 条历史图片迁移到本地文件存储');
+        }
+      } catch (_) {}
+      App.image._migrating = false;
+      App.image._migrated = true;
+    },
+
+    // v1.1.5（批次 A1/A2）：参考图 UI 方法化——灯箱「用作参考图」与视图重建后的草稿恢复共用
+    showRefUI(dataUrl, name) {
+      App.image.refImage = dataUrl;
+      App.image._draftRefName = name || '参考图';
+      const chip = $('imgRefChip'), thumb = $('imgRefThumb'), label = $('imgRefName');
+      if (chip) chip.style.display = 'flex';
+      if (thumb) thumb.src = dataUrl;
+      if (label) label.textContent = App.image._draftRefName;
+      const btn = $('imgGenBtn');
+      if (btn) btn.textContent = '🎨 编辑图片';
+      const hint = $('advRefHint');
+      if (hint) hint.style.display = 'block';
+    },
+    hideRefUI() {
+      App.image.refImage = null;
+      App.image._draftRefName = '';
+      const chip = $('imgRefChip');
+      if (chip) chip.style.display = 'none';
+      const btn = $('imgGenBtn');
+      if (btn) btn.textContent = '✨ 生成图片';
+      const hint = $('advRefHint');
+      if (hint) hint.style.display = 'none';
     },
 
     render() {
       const wrap = $('imageView');
       if (!wrap) return;
+
+      // v1.1.5（批次 A2）：重建前保存提示词草稿（refImage 常驻模块态），重建后回填
+      const prevTa = $('imgPrompt');
+      if (prevTa) App.image._draftPrompt = prevTa.value;
 
       // 图像模型选择器：读当前图像账户模型列表
       const imgProv = App.getProvider('image');
@@ -228,6 +343,7 @@
                 ${(App.state.settings.imagePresets || []).map((pr, i) =>
                   `<span class="preset-chip" data-preset="${i}">${App.escapeHtml(pr.name)}<button type="button" class="preset-chip-x" data-preset-x="${i}" title="删除预设">×</button></span>`).join('')}
                 <button type="button" class="btn-ghost mini" id="imgPresetSave" title="把当前提示词保存为预设">＋存为预设</button>
+                <input type="text" id="imgPresetName" class="preset-name-input" maxlength="24" style="display:none" placeholder="预设名称，Enter 保存 / Esc 取消" />
               </div>
             </div>
           </div>
@@ -277,6 +393,8 @@
             </div>
           </div>
           <button class="gen-btn" id="imgGenBtn">✨ 生成图片</button>
+          <div class="image-status img-queue-status" id="imgQueueStatus"></div>
+          <div class="img-queue-cards" id="imgQueueCards"></div>
           <div class="image-status" id="imgStatus"></div>
           <div class="img-sec"><div class="image-grid" id="imgGrid"></div></div>
           <div class="img-sec"><div class="history-section" id="imgHistory"></div></div>
@@ -286,6 +404,10 @@
       App.image.bind();
       App.image.renderSizeOptions(imgProv);
 
+      // v1.1.5（批次 A2）：回填草稿（提示词 + 参考图）
+      if (App.image._draftPrompt) { const ta = $('imgPrompt'); if (ta) ta.value = App.image._draftPrompt; }
+      if (App.image.refImage) App.image.showRefUI(App.image.refImage, App.image._draftRefName);
+
       // 初始画廊：优先内存结果，否则回填最近一次历史，否则空状态
       const hist = App.state.settings.imageHistory || [];
       if (App.image.results.length) {
@@ -293,7 +415,13 @@
       } else if (hist.length) {
         const last = hist[0];
         const p = last.prompt + (STYLES[last.style] ? STYLES[last.style].suffix : '');
-        App.image.renderGrid(last.images, p);
+        materializeEntry(last).then((urls) => {
+          // 回填期间用户可能已切走或开始新生成，仅在网格仍为空时渲染
+          const grid = $('imgGrid');
+          if (!App.image.results.length && grid && !grid.querySelector('.img-card')) {
+            App.image.renderGrid(urls.map(stripImageDataUrl), p);
+          }
+        });
       } else {
         App.image.renderGrid([], '');
       }
@@ -314,29 +442,12 @@
         const refName = $('imgRefName');
         const genBtn = $('imgGenBtn');
 
-        const showRef = (dataUrl, name) => {
-          App.image.refImage = dataUrl;
-          if (refChip) refChip.style.display = 'flex';
-          if (refThumb) refThumb.src = dataUrl;
-          if (refName) refName.textContent = name || '参考图';
-          if (genBtn) genBtn.textContent = '🎨 编辑图片';
-          // M12：参考图模式提示高级参数不生效
-          const hint = $('advRefHint');
-          if (hint) hint.style.display = 'block';
-        };
-        const hideRef = () => {
-          App.image.refImage = null;
-          if (refChip) refChip.style.display = 'none';
-          if (genBtn) genBtn.textContent = '✨ 生成图片';
-          const hint = $('advRefHint');
-          if (hint) hint.style.display = 'none';
-        };
-
+        // 参考图展示/移除走 App.image.showRefUI/hideRefUI（v1.1.5 方法化，灯箱「用作参考图」共用）
         const processRefImage = async (file) => {
           if (!file || !file.type.startsWith('image/')) return;
           try {
             const dataUrl = await compressImage(file);
-            showRef(dataUrl, file.name);
+            App.image.showRefUI(dataUrl, file.name);
           } catch (e) { App.ui.toast('图片处理失败：' + (e.message || '未知')); }
         };
 
@@ -348,7 +459,7 @@
             refInput.value = '';
           });
         }
-        if (refRemove) refRemove.addEventListener('click', hideRef);
+        if (refRemove) refRemove.addEventListener('click', () => App.image.hideRefUI());
 
         // 粘贴参考图
         const ta = $('imgPrompt');
@@ -413,20 +524,40 @@
             if (pr && ta) { ta.value = pr.prompt; ta.focus(); }
           }
         });
+        // v1.1.5（批次 A3）：预设命名改为内联输入（替代阻塞式 window.prompt）
         const ps = $('imgPresetSave');
         if (ps) ps.addEventListener('click', () => {
           const ta = $('imgPrompt');
           const text = ta ? ta.value.trim() : '';
           if (!text) { App.ui.toast('请先输入要保存的提示词'); return; }
-          const name = window.prompt('预设名称：', text.slice(0, 20));
-          if (!name || !name.trim()) return;
-          const list = App.state.settings.imagePresets || (App.state.settings.imagePresets = []);
-          if (list.some(p => p.name === name.trim())) { App.ui.toast('已存在同名预设'); return; }
-          list.push({ name: name.trim(), prompt: text });
-          App.persist();
-          App.image.render();
-          App.ui.toast('已保存预设：' + name.trim());
+          const input = $('imgPresetName');
+          if (!input) return;
+          input.style.display = 'inline-block';
+          input.value = text.slice(0, 20);
+          input.focus();
+          input.select();
         });
+        const nameInput = $('imgPresetName');
+        if (nameInput) {
+          const savePreset = () => {
+            const ta = $('imgPrompt');
+            const text = ta ? ta.value.trim() : '';
+            const name = nameInput.value.trim();
+            nameInput.style.display = 'none';
+            if (!name || !text) return;
+            const list = App.state.settings.imagePresets || (App.state.settings.imagePresets = []);
+            if (list.some(p => p.name === name)) { App.ui.toast('已存在同名预设'); return; }
+            list.push({ name, prompt: text });
+            App.persist();
+            App.image.render();
+            App.ui.toast('已保存预设：' + name);
+          };
+          nameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); savePreset(); }
+            else if (e.key === 'Escape') { e.preventDefault(); nameInput.style.display = 'none'; }
+          });
+          nameInput.addEventListener('blur', () => { nameInput.style.display = 'none'; }); // 失焦取消
+        }
       }
 
       // 内联图像模型选择：直接写 providers.image.model
@@ -708,7 +839,7 @@
       const status = $('imgStatus');
       const btn = $('imgGenBtn');
       if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
-      App.image.renderSkeleton(task.n);
+      App.image.renderSkeleton(task.n, task.size);
       const ctrl = new AbortController();
       task._ctrl = ctrl;
       try {
@@ -748,58 +879,131 @@
         App.image.results = arr;
         App.image.rawPrompt = task.prompt;
         App.image.lastPrompt = task.finalPrompt;
-        App.image.renderGrid(arr, task.finalPrompt);
-        App.image.pushHistory({ prompt: task.prompt, style: task.style, size: task.size, n: task.n, images: arr, adv: task.adv || null });
+        App.image.renderGrid(arr, task.finalPrompt, { model: p.model, size: task.size, time: Date.now() });
+        await App.image.pushHistory({ prompt: task.prompt, style: task.style, size: task.size, n: task.n, images: arr, adv: task.adv || null, model: p.model });
         task.status = 'done';
+        task.endedAt = Date.now();
         if (status) status.textContent = `已生成 ${arr.length} 张图片`;
       } catch (err) {
         if (err && err.name === 'AbortError') task.status = 'canceled';
         else { task.status = 'error'; task.error = String((err && err.message) || err); }
+        task.endedAt = Date.now();
         App.image.renderGrid(App.image.results, App.image.lastPrompt);
       } finally {
         task._ctrl = null;
         if (btn) { btn.disabled = false; btn.textContent = task.refImg ? '🎨 编辑图片' : '✨ 生成图片'; }
-        // 最终状态文本（错误带重试按钮；已取消带提示）——由 runTask 直接写，不被队列收尾清空
+        // 最终状态文本（错误全文在任务卡 title 可查；重试操作在任务卡上）——由 runTask 直接写，不被队列收尾清空
         const st = $('imgStatus');
         if (task.status === 'error' && st) {
-          st.innerHTML = `<span class="error">失败：${App.escapeHtml(String(task.error || '未知错误').slice(0, 120))}</span> <button class="mini" id="imgRetryBtn">重试</button>`;
-          const rb = $('imgRetryBtn');
-          if (rb) rb.addEventListener('click', () => {
-            App.image.enqueue({ prompt: task.prompt, finalPrompt: task.finalPrompt, style: task.style, size: task.size, n: task.n, refImg: task.refImg, adv: task.adv });
-          });
+          st.innerHTML = `<span class="error">失败：${App.escapeHtml(String(task.error || '未知错误').slice(0, 120))}</span>`;
         } else if (task.status === 'canceled' && st) {
           st.innerHTML = '<span class="warn">已取消</span>';
         }
         App.image.currentId = null;
+        App.image.renderQueueCards();
       }
     },
 
-    // M7：渲染状态区（仅进行中/排队提示；最终结果文本由 runTask 写入）
+    // v1.1.5（批次 B1/B3）：队列状态与结果状态分区显示；任务卡可视化管理
     renderQueue() {
-      const status = $('imgStatus');
-      if (!status) return;
+      const qs = $('imgQueueStatus');
       const queued = App.image.queue.length;
       const cur = App.image.currentId ? App.image.tasks[App.image.currentId] : null;
-      if (cur && cur.status === 'running') {
-        status.innerHTML = `正在生成…${queued ? '（队列剩余 ' + queued + '）' : ''} <button class="mini" id="imgCancelBtn">取消</button>`;
-        const cb = $('imgCancelBtn');
-        if (cb) cb.addEventListener('click', () => { if (cur._ctrl) cur._ctrl.abort(); });
-        return;
+      if (qs) {
+        if (cur && cur.status === 'running') {
+          qs.innerHTML = `正在生成…${queued ? '（队列剩余 ' + queued + '）' : ''} <button class="mini" id="imgCancelBtn">取消</button>`;
+          const cb = $('imgCancelBtn');
+          if (cb) cb.addEventListener('click', () => { if (cur._ctrl) cur._ctrl.abort(); });
+        } else {
+          qs.innerHTML = queued ? `排队中（第 ${queued} 位）…` : '';
+        }
       }
-      if (queued) {
-        status.innerHTML = `排队中（第 ${queued} 位）…`;
+      App.image.renderQueueCards();
+      // 运行中每秒刷新任务卡耗时；无运行任务时清理计时器
+      if (cur && cur.status === 'running' && !App.image._queueTimer) {
+        App.image._queueTimer = setInterval(() => {
+          const running = App.image.currentId && App.image.tasks[App.image.currentId];
+          if (running && App.image.tasks[App.image.currentId].status === 'running') App.image.renderQueueCards();
+          else { clearInterval(App.image._queueTimer); App.image._queueTimer = null; }
+        }, 1000);
+      } else if (!cur && App.image._queueTimer) {
+        clearInterval(App.image._queueTimer);
+        App.image._queueTimer = null;
       }
     },
 
-    renderSkeleton(n) {
+    // v1.1.5（批次 B1）：任务卡列表——运行/排队可取消，失败可重试，显示已耗时
+    renderQueueCards() {
+      const box = $('imgQueueCards');
+      if (!box) return;
+      const terminals = Object.values(App.image.tasks)
+        .filter((t) => t && (t.status === 'error' || t.status === 'canceled'))
+        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+        .slice(0, 3);
+      const queuePos = (id) => App.image.queue.indexOf(id) + 1;
+      const cards = [];
+      const cur = App.image.currentId ? App.image.tasks[App.image.currentId] : null;
+      if (cur && cur.status === 'running') cards.push(cur);
+      App.image.queue.forEach((id) => { const t = App.image.tasks[id]; if (t && t.status === 'queued') cards.push(t); });
+      cards.push(...terminals);
+      if (!cards.length) {
+        box.innerHTML = '';
+        // 顺带清理历史终态任务，防止 tasks 无限增长
+        Object.keys(App.image.tasks).forEach((id) => {
+          const t = App.image.tasks[id];
+          if (t && (t.status === 'done' || t.status === 'removed')) delete App.image.tasks[id];
+        });
+        return;
+      }
+      const elapsed = (t) => {
+        const ms = (t.status === 'running' ? Date.now() : (t.endedAt || t.startedAt || Date.now())) - (t.startedAt || Date.now());
+        const s = Math.max(0, Math.round(ms / 1000));
+        return s >= 60 ? Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') : s + 's';
+      };
+      const esc = App.escapeHtml;
+      box.innerHTML = cards.map((t) => {
+        const brief = esc(String(t.prompt || '').slice(0, 20));
+        const meta = (SIZE_LABEL[t.size] || t.size || '') + ' × ' + (t.n || 1);
+        let state = '', act = '';
+        if (t.status === 'running') { state = '<span class="qc-dot qc-run"></span>生成中 ' + elapsed(t); act = '<button class="mini qc-act" data-qact="cancel" data-qid="' + t.id + '">取消</button>'; }
+        else if (t.status === 'queued') { state = '<span class="qc-dot qc-wait"></span>排队第 ' + queuePos(t.id) + ' 位'; act = '<button class="mini qc-act" data-qact="remove" data-qid="' + t.id + '">移出</button>'; }
+        else if (t.status === 'error') { state = '<span class="qc-dot qc-err"></span>失败 ' + elapsed(t); act = '<button class="mini qc-act" data-qact="retry" data-qid="' + t.id + '">重试</button>'; }
+        else if (t.status === 'canceled') { state = '<span class="qc-dot qc-cancel"></span>已取消'; }
+        const err = t.status === 'error' && t.error ? '<div class="qc-error" title="' + esc(String(t.error)) + '">' + esc(String(t.error).slice(0, 60)) + '</div>' : '';
+        return `<div class="queue-card st-${t.status}" data-qid="${t.id}">
+          <div class="qc-main"><span class="qc-prompt">${brief}</span><span class="qc-meta">${meta}</span>${state}</div>
+          ${err}${act}
+        </div>`;
+      }).join('');
+      box.querySelectorAll('.qc-act').forEach((b) => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = b.dataset.qid;
+        const t = App.image.tasks[id];
+        if (!t) return;
+        if (b.dataset.qact === 'cancel') { if (t._ctrl) t._ctrl.abort(); }
+        else if (b.dataset.qact === 'remove') {
+          t.status = 'removed';
+          App.image.queue = App.image.queue.filter((qid) => qid !== id);
+          App.image.renderQueue();
+        } else if (b.dataset.qact === 'retry') {
+          App.image.enqueue({ prompt: t.prompt, finalPrompt: t.finalPrompt, style: t.style, size: t.size, n: t.n, refImg: t.refImg, adv: t.adv });
+        }
+      }));
+    },
+
+    renderSkeleton(n, size) {
       const grid = $('imgGrid');
       if (!grid) return;
       const cnt = Math.max(1, Math.min(n || 1, 4));
+      // v1.1.5（批次 B2）：骨架屏按所选比例占位，与结果形状一致
+      const m = String(size || App.image.sel.size || '').match(/^(\d+)x(\d+)$/);
+      const ratio = m ? (Number(m[1]) / Number(m[2])) : 1;
+      const aspect = ratio >= 1 ? ratio.toFixed(3) + '/1' : '1/' + (1 / ratio).toFixed(3);
       grid.innerHTML = Array.from({ length: cnt }).map(() =>
-        `<div class="img-card img-skeleton"><div class="sk-img"></div></div>`).join('');
+        `<div class="img-card img-skeleton" style="aspect-ratio:${aspect}"><div class="sk-img"></div></div>`).join('');
     },
 
-    renderGrid(images, prompt) {
+    renderGrid(images, prompt, meta) {
       const grid = $('imgGrid');
       if (!grid) return;
       if (!images || !images.length) {
@@ -811,69 +1015,254 @@
           </div>`;
         return;
       }
+      App.image._gridMeta = meta || App.image._gridMeta || null;
+      // v1.1.5（批次 C2）：卡片按所选比例占位，图片加载后按真实宽高校正，不再固定等高裁切
+      const sm = String(App.image.sel.size || '').match(/^(\d+)x(\d+)$/);
+      const placeholder = sm ? (Number(sm[1]) / Number(sm[2])) : 1;
       grid.innerHTML = images.map((b, i) => `
-        <div class="img-card" data-i="${i}">
-          <img src="data:image/png;base64,${b}" alt="生成结果 ${i + 1}">
+        <div class="img-card" data-i="${i}" style="aspect-ratio:${placeholder >= 1 ? placeholder.toFixed(3) + '/1' : '1/' + (1 / placeholder).toFixed(3)}">
+          <img src="${dataUrlOf(b)}" alt="生成结果 ${i + 1}">
           <div class="img-card-mask">
             <button type="button" class="card-act copy-prompt" data-i="${i}">复制提示词</button>
             <button type="button" class="card-act download-btn" data-i="${i}">下载</button>
           </div>
         </div>`).join('');
-      grid.querySelectorAll('.img-card').forEach(c => c.addEventListener('click', () => App.image.openLightbox(images, +c.dataset.i, prompt)));
+      grid.querySelectorAll('.img-card img').forEach((img) => {
+        img.addEventListener('load', () => {
+          if (img.naturalWidth && img.naturalHeight) {
+            img.closest('.img-card').style.aspectRatio = img.naturalWidth + '/' + img.naturalHeight;
+          }
+        });
+      });
+      grid.querySelectorAll('.img-card').forEach(c => c.addEventListener('click', () => App.image.openLightbox(images, +c.dataset.i, prompt, App.image._gridMeta)));
       grid.querySelectorAll('.download-btn').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); App.image.download(b64Of(images, +b.dataset.i), +b.dataset.i); }));
       grid.querySelectorAll('.copy-prompt').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); App.image.copyPrompt(prompt); }));
     },
 
-    pushHistory(entry) {
+    // v1.1.5（批次 D1）：优先把图片落盘为数据根 images/ 文件、settings 只存轻量索引；
+    // 服务不可用或配额超限时回退旧内联格式（数据绝不丢），迁移器稍后会重试迁出。
+    async pushHistory(entry) {
       const hist = App.state.settings.imageHistory || (App.state.settings.imageHistory = []);
-      hist.unshift(Object.assign({ id: App.uid(), createdAt: Date.now() }, entry));
-      while (hist.length > HISTORY_CAP) hist.pop();
+      const record = Object.assign({ id: App.uid(), createdAt: Date.now() }, entry);
+      const svc = App.services && App.services.images;
+      if (svc && typeof svc.available === 'function' && svc.available()) {
+        const files = [];
+        let quotaHit = false;
+        for (const b64 of (record.images || [])) {
+          try {
+            const saved = await svc.save(b64);
+            if (saved && saved.ok && saved.name) files.push(saved.name);
+            else if (saved && saved.code === 'quota') { quotaHit = true; break; }
+          } catch (_) { quotaHit = true; break; }
+        }
+        if (files.length === (record.images || []).length && !quotaHit) {
+          record.files = files;
+          delete record.images;
+        } else if (quotaHit) {
+          App.ui.toast('本地图片存储已达配额，新历史暂存于状态文件。可在历史中清理旧图片');
+        }
+      }
+      hist.unshift(record);
+      while (hist.length > HISTORY_CAP) {
+        const dropped = hist.pop();
+        // 索引被挤出时顺带清理其落盘文件（尽力而为）
+        if (dropped && Array.isArray(dropped.files) && svc && typeof svc.remove === 'function') {
+          dropped.files.forEach((name) => { svc.remove(name).catch(() => {}); });
+        }
+      }
       App.persist();
       App.image.renderHistory();
     },
 
+    // v1.1.5（批次 D2/D3/E2）：历史管理（删除/清空/搜索/展开）+ 落盘文件按需取图 + 单张粒度对比
     renderHistory() {
       const box = $('imgHistory');
       if (!box) return;
-      const hist = App.state.settings.imageHistory || [];
-      if (!hist.length) { box.innerHTML = ''; return; }
-      // M7：对比队列状态徽标
+      const all = App.state.settings.imageHistory || [];
+      const q = App.image._historySearch.trim().toLowerCase();
+      const hist = q ? all.filter((e) => e && String(e.prompt || '').toLowerCase().includes(q)) : all;
       const cmpN = App.image.compareList.length;
+      const esc = App.escapeHtml;
+      if (!all.length) { box.innerHTML = ''; return; }
       box.innerHTML = `
-        <div class="history-head">历史记录<span class="history-count">最近 ${hist.length} 次</span>
+        <div class="history-head">历史记录<span class="history-count">最近 ${all.length} 次</span>
+          <input type="search" id="imgHistorySearch" class="history-search" placeholder="搜索提示词…" value="${esc(App.image._historySearch)}" />
           ${cmpN ? `<button type="button" class="mini" id="imgCmpClear">清空对比（${cmpN}/2）</button>` : ''}
+          <button type="button" class="mini" id="imgHistoryClear" title="删除全部历史（含本地图片文件）">清空历史</button>
         </div>
-        ${hist.map((e, ei) => `
-          <div class="history-item">
+        ${hist.length ? hist.map((e) => {
+          const total = (e.files || e.images || []).length;
+          const expanded = App.image._expandedHistory.has(e.id);
+          const shown = expanded ? total : Math.min(total, 4);
+          const thumbs = [];
+          for (let j = 0; j < shown; j++) {
+            if (Array.isArray(e.files)) thumbs.push(`<button type="button" class="history-thumb" data-ei="${e.id}" data-j="${j}"><img data-file="${esc(e.files[j])}" alt=""><span class="thumb-cmp" data-ei="${e.id}" data-j="${j}" title="加入对比">⊞</span></button>`);
+            else thumbs.push(`<button type="button" class="history-thumb" data-ei="${e.id}" data-j="${j}"><img src="${dataUrlOf(e.images[j])}" alt=""><span class="thumb-cmp" data-ei="${e.id}" data-j="${j}" title="加入对比">⊞</span></button>`);
+          }
+          const more = total > 4
+            ? `<button type="button" class="history-thumb history-more" data-ei="${e.id}">${expanded ? '收起' : '+' + (total - 4)}</button>`
+            : '';
+          return `
+          <div class="history-item" data-hid="${esc(e.id)}">
             <div class="history-meta">
-              <div class="history-prompt">${App.escapeHtml(e.prompt)}</div>
-              <div class="history-sub">${SIZE_LABEL[e.size] || e.size} · ${e.n} 张 · ${timeAgo(e.createdAt)}</div>
-              <button type="button" class="btn-ghost mini" data-cmp="${ei}" title="加入对比（选 2 张对比）">对比</button>
+              <div class="history-prompt">${esc(e.prompt)}</div>
+              <div class="history-sub">${SIZE_LABEL[e.size] || e.size || ''} · ${e.n} 张 · ${timeAgo(e.createdAt)}${e.model ? ' · ' + esc(e.model) : ''}</div>
+              <div class="history-ops">
+                <button type="button" class="btn-ghost mini" data-cmpfirst="${e.id}" title="把这条的第 1 张加入对比">对比</button>
+                <button type="button" class="btn-ghost mini" data-del="${e.id}" title="删除这条历史（含图片文件）">🗑 删除</button>
+              </div>
             </div>
-            <div class="history-thumbs">
-              ${e.images.slice(0, 4).map((b, j) => `<button type="button" class="history-thumb" data-ei="${ei}" data-j="${j}"><img src="data:image/png;base64,${b}" alt=""></button>`).join('')}
-            </div>
-          </div>`).join('')}`;
-      box.querySelectorAll('.history-thumb').forEach(t => t.addEventListener('click', () => {
-        const e = hist[+t.dataset.ei];
-        if (e) App.image.openLightbox(e.images, +t.dataset.j, e.prompt + (STYLES[e.style] ? STYLES[e.style].suffix : ''));
-      }));
-      // M7：对比——收集 2 张后自动弹出对比视图
-      box.querySelectorAll('[data-cmp]').forEach(b => b.addEventListener('click', () => {
-        const e = hist[+b.dataset.cmp];
-        if (!e || !e.images || !e.images.length) return;
-        App.image.compareList.push({ b64: e.images[0], prompt: e.prompt + (STYLES[e.style] ? STYLES[e.style].suffix : '') });
+            <div class="history-thumbs">${thumbs.join('')}${more}</div>
+          </div>`;
+        }).join('') : '<div class="history-empty">没有匹配的历史记录</div>'}`;
+
+      // 落盘文件按需取图（LRU 缓存命中则同步返回）
+      box.querySelectorAll('img[data-file]').forEach(async (img) => {
+        const name = img.dataset.file;
+        const url = await cachedAssetDataUrl(name);
+        if (url) img.src = url;
+        else { img.classList.add('thumb-missing'); img.alt = '图片文件缺失'; img.title = '图片文件缺失'; }
+      });
+
+      // 搜索（输入即时过滤，不触发整体 render 重建输入焦点）
+      const search = box.querySelector('#imgHistorySearch');
+      if (search) search.addEventListener('input', () => {
+        App.image._historySearch = search.value;
         App.image.renderHistory();
-        if (App.image.compareList.length >= 2) App.image.openCompare();
+        const next = box.querySelector('#imgHistorySearch');
+        if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+      });
+
+      // 展开/收起全部缩略图（批次 D3）
+      box.querySelectorAll('.history-more').forEach((b) => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = b.dataset.ei;
+        if (App.image._expandedHistory.has(id)) App.image._expandedHistory.delete(id);
+        else App.image._expandedHistory.add(id);
+        App.image.renderHistory();
       }));
-      const cc = $('imgCmpClear');
+
+      // 缩略图点击 → 灯箱（含该条元信息，批次 C3）
+      box.querySelectorAll('.history-thumb:not(.history-more)').forEach((t) => t.addEventListener('click', () => {
+        const entry = (App.state.settings.imageHistory || []).find((x) => x && x.id === t.dataset.ei);
+        if (!entry) return;
+        materializeEntry(entry).then((urls) => {
+          if (!urls.length) { App.ui.toast('图片文件不可用'); return; }
+          App.image.openLightbox(urls.map(stripImageDataUrl), +t.dataset.j,
+            entry.prompt + (STYLES[entry.style] ? STYLES[entry.style].suffix : ''),
+            { model: entry.model || '', size: entry.size, time: entry.createdAt });
+        });
+      }));
+
+      // v1.1.5（批次 E2）：单张粒度加入对比（缩略图角标 ⊞）
+      box.querySelectorAll('.thumb-cmp').forEach((s) => s.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const entry = (App.state.settings.imageHistory || []).find((x) => x && x.id === s.dataset.ei);
+        if (!entry) return;
+        const idx = +s.dataset.j;
+        materializeEntry(entry).then((urls) => {
+          const url = urls[idx];
+          if (!url) { App.ui.toast('图片文件不可用'); return; }
+          App.image.compareList.push({
+            b64: stripImageDataUrl(url),
+            prompt: entry.prompt + (STYLES[entry.style] ? STYLES[entry.style].suffix : ''),
+            model: entry.model || '', size: entry.size, time: entry.createdAt,
+          });
+          App.image.renderHistory();
+          if (App.image.compareList.length >= 2) App.image.openCompare();
+        });
+      }));
+      // 条目级「对比」快捷入口（第 1 张），保持旧习惯
+      box.querySelectorAll('[data-cmpfirst]').forEach((b) => b.addEventListener('click', () => {
+        const entry = (App.state.settings.imageHistory || []).find((x) => x && x.id === b.dataset.cmpFirst);
+        if (!entry) return;
+        materializeEntry(entry).then((urls) => {
+          if (!urls.length) return;
+          App.image.compareList.push({
+            b64: stripImageDataUrl(urls[0]),
+            prompt: entry.prompt + (STYLES[entry.style] ? STYLES[entry.style].suffix : ''),
+            model: entry.model || '', size: entry.size, time: entry.createdAt,
+          });
+          App.image.renderHistory();
+          if (App.image.compareList.length >= 2) App.image.openCompare();
+        });
+      }));
+
+      // 单条删除（文件一并清理）
+      box.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+        const list = App.state.settings.imageHistory || [];
+        const idx = list.findIndex((x) => x && x.id === b.dataset.del);
+        if (idx < 0) return;
+        const entry = list[idx];
+        const svc = App.services && App.services.images;
+        if (Array.isArray(entry.files) && svc && typeof svc.remove === 'function') {
+          for (const name of entry.files) { try { await svc.remove(name); } catch (_) {} }
+        }
+        list.splice(idx, 1);
+        App.persist();
+        App.image.renderHistory();
+        App.ui.toast('已删除该条历史');
+      }));
+
+      // 清空历史（确认弹窗，批次 D2；非阻塞式，替代原生 confirm）
+      const clearBtn = box.querySelector('#imgHistoryClear');
+      if (clearBtn) clearBtn.addEventListener('click', () => App.image.confirmClearHistory());
+      const cc = box.querySelector('#imgCmpClear');
       if (cc) cc.addEventListener('click', () => { App.image.compareList = []; App.image.renderHistory(); });
     },
 
-    // M7：图片对比视图（两张并排 + 各自提示词）
+    // v1.1.5（批次 D2）：清空历史的非阻塞确认弹窗
+    confirmClearHistory() {
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.id = 'imgClearMask';
+      mask.innerHTML = `
+        <div class="modal agent-modal img-clear-confirm" role="dialog" aria-modal="true">
+          <div class="modal-header"><span>清空图片历史？</span>
+            <button class="icon-btn" id="clrClose" aria-label="关闭"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="modal-body"><p>将删除全部 ${ (App.state.settings.imageHistory || []).length } 条历史记录及其本地图片文件，此操作不可撤销。</p></div>
+          <div class="modal-footer">
+            <button class="btn-ghost" id="clrCancel">取消</button>
+            <button class="btn-primary" id="clrOk">清空</button>
+          </div>
+        </div>`;
+      $('imageView').appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelector('#clrClose').addEventListener('click', close);
+      mask.querySelector('#clrCancel').addEventListener('click', close);
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      mask.querySelector('#clrOk').addEventListener('click', async () => {
+        const svc = App.services && App.services.images;
+        const list = App.state.settings.imageHistory || [];
+        for (const entry of list) {
+          if (Array.isArray(entry.files) && svc && typeof svc.remove === 'function') {
+            for (const name of entry.files) { try { await svc.remove(name); } catch (_) {} }
+          }
+        }
+        App.state.settings.imageHistory = [];
+        App.persist();
+        close();
+        App.image.renderHistory();
+        App.ui.toast('已清空图片历史');
+      });
+    },
+
+    // M7 + v1.1.5（批次 E2）：两张并排对比 + 模型/比例/时间元信息与差异高亮
     openCompare() {
       const list = App.image.compareList.slice(0, 2);
       if (list.length < 2) return;
+      const esc = App.escapeHtml;
+      const fmtTime = (ts) => (ts ? new Date(ts).toLocaleString() : '未知');
+      const rows = (it, other) => {
+        const diff = (label, mine, theirs) => {
+          const different = String(mine || '—') !== String(theirs || '—');
+          return `<div class="cmp-meta-row${different ? ' cmp-diff' : ''}"><span>${label}</span><b>${esc(String(mine || '—'))}</b></div>`;
+        };
+        return diff('模型', it.model, other.model)
+          + diff('比例', SIZE_LABEL[it.size] || it.size, SIZE_LABEL[other.size] || other.size)
+          + diff('时间', fmtTime(it.time), fmtTime(other.time));
+      };
       const mask = document.createElement('div');
       mask.className = 'modal-mask';
       mask.id = 'imgCmpMask';
@@ -887,8 +1276,9 @@
           </div>
           <div class="modal-body cmp-body">
             ${list.map((it, i) => `<div class="cmp-col">
-              <div class="cmp-img"><img src="data:image/png;base64,${it.b64}" alt="图 ${i + 1}"></div>
-              <div class="cmp-prompt">${App.escapeHtml(it.prompt)}</div>
+              <div class="cmp-img"><img src="${dataUrlOf(it.b64)}" alt="图 ${i + 1}"></div>
+              <div class="cmp-prompt">${esc(it.prompt)}</div>
+              <div class="cmp-meta">${rows(it, list[1 - i])}</div>
             </div>`).join('')}
           </div>
           <div class="modal-footer"><button class="btn-ghost" id="cmpOk">关闭</button></div>
@@ -900,10 +1290,18 @@
       mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
     },
 
-    openLightbox(images, idx, prompt) {
+    // v1.1.5：灯箱升级——键盘(Esc/←→) + 双击/滚轮缩放拖拽 + 用作参考图 + 复制图片 + 元信息
+    openLightbox(images, idx, prompt, meta) {
       App.image.lbImages = images;
       App.image.lbPrompt = prompt || '';
       App.image.lbIdx = idx;
+      App.image.lbMeta = meta || null;
+      const esc = App.escapeHtml;
+      const metaLine = App.image.lbMeta
+        ? [App.image.lbMeta.model, SIZE_LABEL[App.image.lbMeta.size] || App.image.lbMeta.size,
+           App.image.lbMeta.time ? new Date(App.image.lbMeta.time).toLocaleString() : '']
+          .filter(Boolean).map(esc).join(' · ')
+        : '';
       const mask = document.createElement('div');
       mask.className = 'modal-mask';
       mask.id = 'imgLightboxMask';
@@ -918,24 +1316,47 @@
           <div class="modal-body lb-body">
             <div class="lb-stage">
               <button class="lb-nav lb-prev" id="lbPrev" aria-label="上一张">‹</button>
-              <img id="lbImg" src="" alt="预览">
+              <div class="lb-zoom-wrap" id="lbZoomWrap"><img id="lbImg" src="" alt="预览" draggable="false"></div>
+              <span class="lb-zoom" id="lbZoomBadge">100%</span>
               <button class="lb-nav lb-next" id="lbNext" aria-label="下一张">›</button>
             </div>
             <div class="lb-prompt" id="lbPrompt"></div>
+            ${metaLine ? `<div class="lb-meta" id="lbMeta">${metaLine}</div>` : ''}
           </div>
           <div class="modal-footer">
+            <button class="btn-ghost" id="lbUseRef" title="把这张图作为参考图，进入编辑（以图生图）">✎ 用作参考图</button>
+            <button class="btn-ghost" id="lbCopyImg" title="复制图片到剪贴板">⧉ 复制图片</button>
             <button class="btn-ghost" id="lbRegen">重新生成</button>
             <button class="btn-ghost" id="lbCopy">复制提示词</button>
             <button class="btn-primary" id="lbDownload">下载</button>
           </div>
         </div>`;
       $('imageView').appendChild(mask);
-      const close = () => mask.remove();
+      let scale = 1, tx = 0, ty = 0;
+      const img = () => mask.querySelector('#lbImg');
+      const applyZoom = () => {
+        const node = img();
+        if (!node) return;
+        if (scale <= 1) { scale = 1; tx = 0; ty = 0; node.style.transform = ''; node.classList.remove('zoomed'); }
+        else node.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+        const badge = mask.querySelector('#lbZoomBadge');
+        if (badge) badge.textContent = Math.round(scale * 100) + '%';
+      };
+      const resetZoom = () => { scale = 1; tx = 0; ty = 0; applyZoom(); };
+      const close = () => {
+        if (App.image._lbKeyHandler) { document.removeEventListener('keydown', App.image._lbKeyHandler); App.image._lbKeyHandler = null; }
+        mask.remove();
+      };
+      const step = (dir) => {
+        App.image.lbIdx = (App.image.lbIdx + dir + App.image.lbImages.length) % App.image.lbImages.length;
+        resetZoom();
+        render();
+      };
       const render = () => {
         const i = App.image.lbIdx;
-        const im = $('lbImg'); if (im) im.src = 'data:image/png;base64,' + App.image.lbImages[i];
-        const pr = $('lbPrompt'); if (pr) pr.textContent = App.image.lbPrompt;
-        const prev = $('lbPrev'), next = $('lbNext');
+        const node = img(); if (node) node.src = dataUrlOf(App.image.lbImages[i]);
+        const pr = mask.querySelector('#lbPrompt'); if (pr) pr.textContent = App.image.lbPrompt;
+        const prev = mask.querySelector('#lbPrev'), next = mask.querySelector('#lbNext');
         const multi = App.image.lbImages.length > 1;
         if (prev) prev.style.display = multi ? '' : 'none';
         if (next) next.style.display = multi ? '' : 'none';
@@ -945,15 +1366,74 @@
       mask.querySelector('#lbCopy').addEventListener('click', () => App.image.copyPrompt(App.image.lbPrompt));
       mask.querySelector('#lbDownload').addEventListener('click', () => App.image.download(App.image.lbImages[App.image.lbIdx], App.image.lbIdx));
       mask.querySelector('#lbRegen').addEventListener('click', () => { close(); App.image.regenerate(); });
-      mask.querySelector('#lbPrev').addEventListener('click', () => {
-        App.image.lbIdx = (App.image.lbIdx - 1 + App.image.lbImages.length) % App.image.lbImages.length;
-        render();
+      // v1.1.5（批次 A1）：一键把当前图带入编辑流（以图生图闭环）
+      mask.querySelector('#lbUseRef').addEventListener('click', () => {
+        App.image.showRefUI(dataUrlOf(App.image.lbImages[App.image.lbIdx]), '生成结果');
+        close();
+        const ta = $('imgPrompt');
+        if (ta) { ta.scrollIntoView({ behavior: 'smooth', block: 'center' }); ta.focus(); }
+        App.ui.toast('已设为参考图，输入修改要求后点「编辑图片」');
       });
-      mask.querySelector('#lbNext').addEventListener('click', () => {
-        App.image.lbIdx = (App.image.lbIdx + 1) % App.image.lbImages.length;
-        render();
+      // v1.1.5（批次 A1）：复制图片到剪贴板
+      mask.querySelector('#lbCopyImg').addEventListener('click', () => {
+        App.image.copyImage(App.image.lbImages[App.image.lbIdx]);
       });
+      mask.querySelector('#lbPrev').addEventListener('click', () => step(-1));
+      mask.querySelector('#lbNext').addEventListener('click', () => step(1));
+      // v1.1.5（批次 C1）：键盘操作
+      App.image._lbKeyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+        else if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+      };
+      document.addEventListener('keydown', App.image._lbKeyHandler);
+      // v1.1.5（批次 C1）：双击 1x↔2x；滚轮 0.2 步进（1–4x）；放大态拖拽平移
+      const stage = mask.querySelector('#lbZoomWrap');
+      if (stage) {
+        stage.addEventListener('dblclick', () => { scale = scale > 1 ? 1 : 2; tx = 0; ty = 0; applyZoom(); });
+        stage.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          scale = Math.min(4, Math.max(1, scale + (e.deltaY < 0 ? 0.2 : -0.2)));
+          if (scale <= 1) resetZoom(); else applyZoom();
+        }, { passive: false });
+        let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        stage.addEventListener('pointerdown', (e) => {
+          if (scale <= 1) return;
+          dragging = true; sx = e.clientX; sy = e.clientY; ox = tx; oy = ty;
+          stage.setPointerCapture(e.pointerId);
+        });
+        stage.addEventListener('pointermove', (e) => {
+          if (!dragging) return;
+          tx = ox + (e.clientX - sx); ty = oy + (e.clientY - sy);
+          applyZoom();
+        });
+        stage.addEventListener('pointerup', () => { dragging = false; });
+        stage.addEventListener('pointercancel', () => { dragging = false; });
+      }
       mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+    },
+
+    // v1.1.5（批次 A1）：复制图片（canvas → blob → 剪贴板；失败提示改用下载）
+    async copyImage(b64) {
+      try {
+        const blob = await new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+            canvas.getContext('2d').drawImage(image, 0, 0);
+            canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('blob failed'))), 'image/png');
+          };
+          image.onerror = () => reject(new Error('图片解析失败'));
+          image.src = dataUrlOf(b64);
+        });
+        if (navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem !== 'undefined') {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          App.ui.toast('已复制图片');
+        } else throw new Error('clipboard unsupported');
+      } catch (_) {
+        App.ui.toast('当前环境不支持复制图片，请使用下载');
+      }
     },
 
     regenerate() {
@@ -964,9 +1444,12 @@
 
     download(b64, idx) {
       if (!b64) return;
+      // v1.1.5（批次 C3）：按内容嗅探真实 MIME 命名，jpeg 不再存成 .png
+      const mime = sniffMime(b64);
+      const ext = MIME_EXT[mime] || 'png';
       const a = document.createElement('a');
-      a.href = 'data:image/png;base64,' + b64;
-      a.download = `tangbao-${Date.now()}-${(idx || 0) + 1}.png`;
+      a.href = 'data:' + mime + ';base64,' + b64;
+      a.download = `tangbao-${Date.now()}-${(idx || 0) + 1}.${ext}`;
       a.click();
     },
 

@@ -50,6 +50,17 @@ The remaining engine bulk (agent loop, tool implementations, handleAgent) is sla
 - Tokenize border radii onto the six-step scale (`--radius-xs/md/sm`/`--radius`/`--radius-lg`/`--radius-pill`): 150 single-value declarations mapped, two new fine-grained tokens (`xs`/`md`) added and wired into the appearance radius slider so all corners scale together. Multi-value bubble-tail radii and circles are intentionally untouched.
 - Switch-path jank (second revision): `estimateTokens` gains an LRU memo so re-entering a conversation no longer re-runs o200k BPE over unchanged messages (the context-usage bar and compaction decisions were the largest synchronous task on conversation switch); `renderMessages` now guards on a content stamp (conversation id + count + content/think length sum + last stream status) so module round-trips reuse the existing DOM; the agent (糖码) view skips its full `innerHTML` rebuild on module re-entry when a structural stamp (model, project, roots, collapse state, thread, run state) is unchanged — state-change re-renders inside the view are untouched.
 
+## Tangbu (image) module upgrade
+
+Full interaction and UI upgrade per `糖绘v1.1.5升级计划.md` (planned as five batches, all shipped):
+
+- Closing the edit loop: the lightbox gains "use as reference" (one click feeds a generated or historical image back into the edit flow) plus "copy image" to clipboard. Prompt text and the reference image now survive module round-trips (draft save/restore on re-render), and preset naming uses an inline input instead of a blocking `window.prompt`.
+- Queue feedback: visual task cards (running with live elapsed time, queued with position and removable, failed with full error on hover and retry, canceled); skeleton placeholders match the selected aspect ratio; queue status and result status are separate slots that no longer overwrite each other.
+- Lightbox and grid: keyboard control (Esc/arrows), double-click zoom toggle with wheel step zoom (1–4x) and drag panning; grid cards render at the true image aspect ratio (no more fixed-height cropping of tall images); downloads are named by the actual sniffed MIME type; the lightbox shows model/ratio/time metadata.
+- History storage overhaul: images move from inline base64 in settings to files under `tangbao-data/images/` via new whitelisted main-process IPC (`image:saveAsset/readAsset/deleteAsset`) — the renderer never gains arbitrary-path file access. Settings keep a lightweight index; legacy inline entries migrate automatically on first open (files written before the index switches, re-runnable); a 500MB directory quota guards runaway growth; on save failure entries fall back to the inline format so no data is lost.
+- History management: per-entry delete (removes its files), clear-all with a non-blocking confirm dialog, prompt search, view-all expansion for entries beyond four thumbnails, and per-image compare selection with model/ratio/time difference highlighting. History cap raised 30 → 200.
+- First image-module media queries (≤900px / ≤560px): stacked option labels, single-column advanced params, touch-friendlier lightbox navigation, adaptive grid and history layout.
+
 ## Release gates
 
 Run the following before packaging:
