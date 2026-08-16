@@ -18,7 +18,7 @@ function run(script) {
 function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const version = pkg.version; // 版本单一来源：package.json（与 check-version.js 一致）
-  for (const name of ['check:version', 'check:storage', 'check:perf', 'check:electron-abi', 'check:ui', 'bench:offline', 'check:release']) assert(pkg.scripts && pkg.scripts[name], 'missing npm script ' + name);
+  for (const name of ['check:version', 'check:storage', 'check:perf', 'check:electron-abi', 'check:sqlite', 'check:ui', 'bench:offline', 'check:release']) assert(pkg.scripts && pkg.scripts[name], 'missing npm script ' + name);
   assert(pkg.build && pkg.build.win && pkg.build.mac, 'Windows and macOS build targets are required');
   assert(pkg.build.win.target === 'nsis', 'Windows NSIS target is required');
   assert(Array.isArray(pkg.build.mac.target) && pkg.build.mac.target.includes('dmg') && pkg.build.mac.target.includes('zip'), 'macOS DMG/ZIP targets are required');
