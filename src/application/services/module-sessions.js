@@ -14,16 +14,7 @@
   });
   const validModule = (module) => MODULES.has(String(module || '')) ? String(module) : '';
 
-  async function invoke(name, fallback, args) {
-    try {
-      const fn = window.electron && window.electron[name];
-      if (typeof fn !== 'function') return fallback;
-      const result = await fn.apply(window.electron, args || []);
-      return result && typeof result === 'object' ? result : fallback;
-    } catch (error) {
-      return Object.assign({}, fallback, { ok: false, code: 'ipc_failed', error: error && error.message ? error.message : String(error) });
-    }
-  }
+  const invoke = (name, fallback, args) => App.services.ipc.invoke(name, args, fallback);
 
   App.services.moduleSessions = {
     status: 'pending',

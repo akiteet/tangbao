@@ -40,6 +40,7 @@ const { TraceRecorder } = require('../../core/agent-runtime/trace-recorder');
 const { prefixFingerprint, normalizeCacheMetrics, mergeCacheMetrics } = require('../../core/agent-runtime/model-telemetry');
 const { calculateCost, mergeCosts } = require('../../core/agent-runtime/cost-ledger');
 const { createToolRuntime } = require('./tool-runtime');
+const { tokenMatches, isLoopbackHost } = require('../http/request-auth');
 const { runAgent } = require('../../core/agent-runtime/run-agent');
 
 const MAX_STEPS = 96; // v1.1.0（Fix 3）：48→96，支持请求参数 maxSteps 覆盖（项目可配置 1-200）；预算耗尽前端可「继续任务」接力
@@ -408,23 +409,10 @@ function configureAgentServer(opts) {
   if (opts && Array.isArray(opts.userSkillsDirs)) userSkillsDirs = opts.userSkillsDirs;
 }
 
-function tokenEqual(a, b) {
-  const ba = Buffer.from(String(a || ''), 'utf8');
-  const bb = Buffer.from(String(b || ''), 'utf8');
-  if (ba.length !== bb.length) return false;
-  try { return crypto.timingSafeEqual(ba, bb); } catch (_) { return false; }
-}
-
+// 本地 API 鉴权与 DNS 重绑定防护的实现在 src/infrastructure/http/request-auth.js（与主进程共用，v1.1.5 收敛）。
+// AUTH_TOKEN 是运行时经 configureAgentServer 注入的 let 变量，故这里按次传入而不是加载时绑定。
 function checkToken(req) {
-  if (!AUTH_TOKEN) return true; // 独立调试模式
-  const m = /^Bearer\s+(.+)$/i.exec(String(req.headers['authorization'] || '').trim());
-  return !!m && tokenEqual(m[1], AUTH_TOKEN);
-}
-
-// DNS 重绑定防护：Host 必须指向回环地址
-function isLoopbackHost(req) {
-  const name = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+  return tokenMatches(req, AUTH_TOKEN);
 }
 
 // 只允许主进程指定的那一个源；未配置时按同机放行

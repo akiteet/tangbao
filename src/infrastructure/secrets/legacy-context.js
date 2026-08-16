@@ -2,14 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-
-function readJson(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (_) {
-    return null;
-  }
-}
+const { readJson } = require('../util/json');
 
 function sameBytes(left, right) {
   try {

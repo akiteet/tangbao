@@ -3,12 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const Core = require('../../core/tangguan/tangguan-store');
+const { readJson } = require('../util/json');
 
 const VERSION = 1;
-
-function readJson(filePath) {
-  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (_) { return null; }
-}
 
 function writeAtomic(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

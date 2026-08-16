@@ -1,19 +1,15 @@
 'use strict';
 
+// 分层说明（v1.1.5）：本文件是糖馆持久化实现（infrastructure 层，依赖 fs）；
+// 领域契约与预设角色卡在 src/core/tangguan/tangguan-store.js。同名是有意的分层设计。
 const fs = require('fs');
 const path = require('path');
 const Core = require('../../core/tangguan/tangguan-store');
 const EmbeddingIndex = require('./embedding-index');
 const KeywordIndex = require('./keyword-index');
+const { readJson } = require('../util/json');
 
 const KV_KEY = 'tangguan:library:v1';
-
-function readJson(filePath) {
-  try {
-    if (!filePath || !fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (_) { return null; }
-}
 
 function writeJsonAtomic(filePath, value) {
   const dir = path.dirname(filePath);

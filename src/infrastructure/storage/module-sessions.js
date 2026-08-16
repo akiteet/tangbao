@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { clone } = require('../../core/util/clone');
 
 const FORMAT = 'tangbao-module-sessions';
 const VERSION = 1;
@@ -19,10 +20,6 @@ function moduleName(value) {
   const name = String(value || '').trim();
   if (!MODULES.has(name)) throw Object.assign(new Error('unsupported_module'), { code: 'unsupported_module' });
   return name;
-}
-
-function clone(value) {
-  try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
 }
 
 function normalizeMessage(message) {

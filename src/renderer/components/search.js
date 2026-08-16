@@ -2,12 +2,8 @@
 (function () {
   window.App = window.App || {};
 
-  const escapeHtml = (value) => {
-    if (App.escapeHtml) return App.escapeHtml(value);
-    return String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[char]));
-  };
+  // markdown.js 先于本文件加载并导出 App.escapeHtml（v1.1.5 批次 C2 收敛，删除本地副本）
+  const escapeHtml = (value) => App.escapeHtml(value);
 
   const labels = {
     all: '全部', conversation: '会话', document: '文档', run: '运行',

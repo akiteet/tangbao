@@ -25,6 +25,7 @@ const SkillSecurity = require('../core/skills/skill-security');
 const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
 const dataLocation = require('../infrastructure/storage/data-location');
+const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
 const legacySecretContext = require('../infrastructure/secrets/legacy-context');
 const TangguanCore = require('../core/tangguan/tangguan-store');
 const TangguanStore = require('../infrastructure/tangguan/tangguan-store');
@@ -207,6 +208,7 @@ let agentPort = 0; // 糖码后端端口
 // 所有本地 API（/gateway 模型网关、糖码后端）都要求 Authorization: Bearer <token>，
 // 这样即便有别的本机进程/网页猜到了端口，也无法调用本地接口。
 const LOCAL_TOKEN = crypto.randomBytes(32).toString('hex');
+const checkToken = createTokenChecker(LOCAL_TOKEN);
 
 let staticServer = null;
 let mainWindow = null;
@@ -419,32 +421,14 @@ let controlledEvalCount = 0; // v16（批量提速）：运行中的评测并发
 const MAX_CONCURRENT_EVAL = 3; // v16（批量提速）：评测并发上限，3 路并行（中转站限流下保守值）
 
 // 常数时间比较，避免用 === 比较令牌时被时序侧信道逐字节猜出
-function tokenEqual(a, b) {
-  const ba = Buffer.from(String(a || ''), 'utf8');
-  const bb = Buffer.from(String(b || ''), 'utf8');
-  if (ba.length !== bb.length) return false;
-  try { return crypto.timingSafeEqual(ba, bb); } catch (_) { return false; }
-}
-
 // 本地 API 鉴权：必须带 Authorization: Bearer <启动令牌>
-function checkToken(req) {
-  const h = req.headers['authorization'] || '';
-  const m = /^Bearer\s+(.+)$/i.exec(String(h).trim());
-  return !!m && tokenEqual(m[1], LOCAL_TOKEN);
-}
+// DNS 重绑定防护：Host 必须指向回环地址
+// ——三者的实现在 v1.1.5 收敛到 src/infrastructure/http/request-auth.js（与糖码后端共用）
 
 // 判断来源是否为本应用自身（同源）。文档导航没有 Origin 头，此时按无 Origin 处理。
 function isSelfOrigin(v) {
   if (!v) return true;
   return v === `http://127.0.0.1:${appPort}` || v === `http://localhost:${appPort}`;
-}
-
-// DNS 重绑定防护：只接受 Host 明确指向回环地址的请求。
-// 若攻击者用一个解析到 127.0.0.1 的域名（evil.com）诱导浏览器访问，Host 会是 evil.com，这里直接拒绝。
-function isLoopbackHost(req) {
-  const host = String(req.headers.host || '');
-  const name = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
 }
 
 function deny(res, code, msg) {
