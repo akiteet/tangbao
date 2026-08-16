@@ -43,13 +43,26 @@
   function estimateTokens(text) {
     if (!text) return 0;
     const s = typeof text === 'string' ? text : JSON.stringify(text);
+    // v1.1.5：LRU 记忆化——换会话/重进模块时 updateCtxBar 与压缩决策会对同一批
+    // 消息文本反复分词（o200k BPE 是真实长任务），同串只算一次即可消除切换卡顿。
+    const memo = estimateTokens._memo || (estimateTokens._memo = new Map());
+    const hit = memo.get(s);
+    if (hit !== undefined) {
+      memo.delete(s); memo.set(s, hit); // 触碰移到队尾，维持 LRU 语义
+      return hit;
+    }
+    let n;
     if (BPE) {
       try {
-        const n = BPE.countTokens(s);
-        if (typeof n === 'number' && n >= 0) return n;
-      } catch (e) { /* 落到启发式 */ }
+        const counted = BPE.countTokens(s);
+        n = (typeof counted === 'number' && counted >= 0) ? counted : heuristicTokens(s);
+      } catch (e) { n = heuristicTokens(s); /* 落到启发式 */ }
+    } else {
+      n = heuristicTokens(s);
     }
-    return heuristicTokens(s);
+    memo.set(s, n);
+    if (memo.size > 4000) memo.delete(memo.keys().next().value); // 淘汰最久未用
+    return n;
   }
 
   function hasRealTokenizer() { return !!BPE; }

@@ -36,7 +36,7 @@
     _sidebarCompactMode: false,
     _compactSidebarOpen: null,
 
-    onShow() { App.agent.render(); },
+    onShow() { App.agent.render({ reentry: true }); },
 
     // ===== 项目模型 =====
     projects() {
@@ -367,9 +367,32 @@
     },
 
     // ===== 渲染 =====
-    render() {
+    // v1.1.5：重进戳——枚举 render 反映的结构性输入（模型/项目/根/折叠态/线程/运行态等）。
+    // onShow 重进时戳不变则跳过全量 innerHTML 重建（保留滚动、草稿与输入焦点）；
+    // 文件内部 11 处状态变更后的 render() 调用不带 reentry，仍走全量重建，行为不变。
+    renderStamp() {
+      const prov = App.getProvider('agent');
+      const proj = App.agent.activeProject();
+      return [
+        App.state.agentModel || prov.model || '',
+        ((prov.models && prov.models.length) ? prov.models : (prov.model ? [prov.model] : [])).join(','),
+        proj ? [proj.id || '', proj.name || '', proj.cwd || '', (Array.isArray(proj.roots) ? proj.roots : []).map((r) => r.rootId).join('+'), proj.primaryRootId || '', proj.auto ? 1 : 0, proj.planMode ? 1 : 0].join('~') : '',
+        App.state.activeThreadId || '',
+        App.agent._backendOk ? 1 : 0,
+        App.agent.running ? 1 : 0,
+        App.state.settings.agentThinkLevel || '',
+        (App.state.agentProjectsCollapsed ? 1 : 0) + '' + (App.state.agentSessionsCollapsed ? 1 : 0),
+        (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) ? 1 : 0,
+        ((App.state.agentProjects || []).length) + ':' + ((App.state.agentThreads || []).length),
+      ].join('|');
+    },
+    render(opts) {
       const wrap = document.getElementById('agentView');
       if (!wrap) return;
+      if (opts && opts.reentry && wrap.dataset.rendered === '1'
+        && this.renderStamp && this.renderStamp() === this._renderStamp) {
+        return; // 重进且结构未变：复用现有 DOM
+      }
       // 重建前把文字与 Skill 气泡保存到当前会话草稿。
       App.agent.saveComposerDraft();
       const agentProv = App.getProvider('agent');
@@ -529,6 +552,8 @@
       App.agent.renderEngineStrip();
       App.agent.refreshEngineStrip();
       // v2（UX）：发送前就绪检查改为轻量 toast（不再弹就地提示条）
+      wrap.dataset.rendered = '1';
+      this._renderStamp = this.renderStamp(); // 构建成功后落戳，供 onShow 重进守卫比对
     },
 
     renderProjects() {

@@ -26,6 +26,7 @@
   let streaming = false;
   let streamUi = null;
   let renderedConvId = null;
+  let renderedContentStamp = ''; // v1.1.5：内容戳——重进未变化的会话（模块往返）不再整窗重建
   let streamConvId = null;  // 聊天修复 E：当前流式回复所属会话 id（区分“本会话忙碌”与“其它会话忙碌”）
   let voiceBase = '';       // B5（P2）：语音听写最终文本基线——interim 更新时替换而非重复累加
   // 聊天修复 E：半开连接看门狗——首字节 30s / 流数据空闲 90s 未推进视为连接失效，
@@ -795,6 +796,7 @@
       // Tangguan session can never expose the old session's DOM.
       if (messages) messages.innerHTML = '';
       renderedConvId = null;
+      renderedContentStamp = ''; // 清空态同步清戳，避免清空后重入被守卫跳过
       if (owner === 'create' && App.create && typeof App.create.renderTaskWelcome === 'function') {
         welcome.style.display = 'flex';
         messages.style.display = 'none';
@@ -950,6 +952,20 @@
         && streamUi.bubble.closest('#messages') === messages) {
         return;
       }
+      // v1.1.5：内容戳守卫——戳 = 会话 id + 条数 + 全部 content/think 长度和 + 末条流状态。
+      // 编辑/删除/重生成/新消息都会改变戳；模块往返（聊天↔糖码）重进同一未变化会话时
+      // 直接复用现有 DOM，跳过整窗重建（保留滚动位置，只做滚动跟随与标题/用量条刷新）。
+      let stampSum = 0;
+      for (const m of conv.messages) stampSum += String(m && m.content != null ? m.content : '').length + String(m && m.think != null ? m.think : '').length;
+      const lastMsg = conv.messages[conv.messages.length - 1];
+      const stamp = conv.id + '|' + conv.messages.length + '|' + stampSum + '|' + ((lastMsg && lastMsg.streamStatus) || '');
+      if (stamp === renderedContentStamp && renderedConvId === conv.id
+        && messages.children.length > 0 && messages.style.display !== 'none') {
+        App.chat.scrollBottom(true);
+        App.ui.renderTopbarTitle();
+        App.chat.updateCtxBar();
+        return;
+      }
       resetTangguanMessageWindow(conv);
       App.chat.showChat();
        messages.innerHTML = '';
@@ -980,6 +996,7 @@
        });
        messages.appendChild(fragment);
       renderedConvId = conv.id;
+      renderedContentStamp = stamp; // 构建成功后才落戳，失败重入仍会完整重建
       if (streaming && streamConvId === conv.id && streamUi && streamUi.messageId) {
         const liveNode = Array.from(messages.children).find((node) => node.dataset && node.dataset.messageId === streamUi.messageId);
         if (liveNode) App.chat.bindStreamUi(streamUi, liveNode);

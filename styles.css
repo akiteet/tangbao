@@ -349,7 +349,7 @@ img { max-width: 100%; }
   padding: 2px 4px; max-width: 100%;
 }
 .msg.assistant .msg-card {
-  border: 1px solid var(--glass-border); border-radius: var(--radius);
+  background: var(--panel-bg); border: 1px solid var(--border-strong); border-radius: var(--radius); /* v1.1.5 修订：实底面板色 + 可见描边，与渐变背景/浅蓝用户气泡形成清晰对比 */
   padding: 12px 16px; margin: 2px 0; box-shadow: var(--glass-hi);
   max-width: 92%;
 }
