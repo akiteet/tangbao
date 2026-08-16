@@ -46,7 +46,10 @@ jobs:
         run: |
           node -e "
             const fs = require('fs');
-            const runtime = fs.readFileSync('src/infrastructure/agent-runtime/agent-runtime-engine.js','utf8');
+            // v1.1.5（批次 D）：运行时拆分出多个同目录模块，静态锚点覆盖拆分后的全部文件
+            const runtimeDir = 'src/infrastructure/agent-runtime/';
+            const runtimeFiles = ['agent-runtime-engine.js','tool-runtime.js','agent-server-http.js','search-providers.js','run-registry.js'];
+            const runtime = runtimeFiles.map((f) => fs.readFileSync(runtimeDir + f,'utf8')).join('\n');
             const agent = fs.readFileSync('src/renderer/views/agent/agent.js','utf8');
             const checks = [
               ['needsApproval 决策链', runtime.includes('permCtx && permCtx.mode')],
