@@ -599,7 +599,7 @@
     ns.settings.templates = Array.isArray(ps.templates) ? ps.templates : [];
     ns.settings.workflows = Array.isArray(ps.workflows) ? ps.workflows : [];
     ns.settings.imageHistory = Array.isArray(ps.imageHistory)
-      ? ps.imageHistory.filter(x => x && Array.isArray(x.images))
+      ? ps.imageHistory.filter(x => x && (Array.isArray(x.images) || Array.isArray(x.files)))
       : [];
     ns.settings.docs = Array.isArray(ps.docs)
       ? ps.docs.filter(x => x && typeof x.text === 'string')

@@ -2,14 +2,10 @@
 
 const crypto = require('crypto');
 const { classifyError } = require('./error-classifier');
+const { clone } = require('../util/clone');
 
 const RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
 const TYPE_NAMES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'array', 'null']);
-
-function clone(value) {
-  if (value == null) return value;
-  return JSON.parse(JSON.stringify(value));
-}
 
 function stable(value) {
   if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';

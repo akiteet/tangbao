@@ -84,6 +84,8 @@ jobs:
         run: npx electron-builder install-app-deps
       - name: Check Electron native ABI
         run: xvfb-run -a npm run check:electron-abi
+      - name: SQLite tests under Electron runtime
+        run: npm run check:sqlite
       - name: Real renderer layout smoke
         run: xvfb-run -a npm run check:ui
 

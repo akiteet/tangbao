@@ -13,7 +13,7 @@
   <!-- Markdown 渲染加固：marked 解析 + DOMPurify 消毒（本地 vendored，离线可用） -->
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/purify.min.js"></script>
-  <!-- PDF.js（本地 vendored，ESM 离线可用；缺失时糖读降级为粘贴文本）。脚本外提为 js/pdf-boot.mjs，否则 CSP 的 script-src 'self' 会拦截内联模块脚本 -->
+  <!-- PDF.js（本地 vendored，ESM 离线可用；缺失时糖读降级为粘贴文本）。脚本外提为 src/renderer/views/documents/pdf-boot.mjs，否则 CSP 的 script-src 'self' 会拦截内联模块脚本 -->
   <script type="module" src="src/renderer/views/documents/pdf-boot.mjs"></script>
 </head>
 <body>
@@ -669,12 +669,14 @@
   <div class="toast" id="toast" hidden></div>
 
   <script src="src/application/services/index.js"></script>
+  <script src="src/application/services/ipc.js"></script>
   <script src="src/renderer/perf.js"></script>
   <script src="src/application/services/system.js"></script>
   <script src="src/application/services/secrets.js"></script>
   <script src="src/application/services/fs.js"></script>
   <script src="src/application/services/skills.js"></script>
   <script src="src/application/services/gateway.js"></script>
+  <script src="src/application/services/images.js"></script>
   <script src="src/application/services/search.js"></script>
 <script src="src/application/services/shell.js"></script>
   <script src="src/application/services/workspace.js"></script>

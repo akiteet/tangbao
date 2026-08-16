@@ -1,6 +1,6 @@
 {
   "name": "tangbao-web",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "private": true,
   "description": "糖包 - 全能 AI 助手桌面版（含糖码本地后端）",
   "author": "糖包",
@@ -15,10 +15,12 @@
     "bench:offline": "node scripts/bench.js --suite multi-agent --mode offline",
     "eval": "node scripts/bench.js --eval",
     "eval:one": "node scripts/bench.js --eval",
+    "bump": "node scripts/bump-version.js",
     "check:version": "node scripts/check-version.js",
     "check:storage": "node scripts/check-storage.js",
     "check:perf": "node scripts/check-perf.js",
     "check:electron-abi": "electron scripts/check-electron-abi.js",
+    "check:sqlite": "node scripts/run-sqlite-tests.js",
     "check:ui": "electron scripts/ui-smoke-app",
     "check:release": "node scripts/check-release.js"
   },

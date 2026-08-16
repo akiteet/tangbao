@@ -9,7 +9,7 @@
  *   Windows → DPAPI，macOS → Keychain，Linux → libsecret（Electron safeStorage 统一封装）
  *
  * 关键约束：渲染进程只有「写入 / 删除 / 询问是否存在」三个通道，没有任何读回明文的接口。
- * 真正用到密钥的地方（模型网关 server/gateway.js、糖码后端 server/agent-server.js）
+ * 真正用到密钥的地方（模型网关 src/infrastructure/model-gateway/gateway.js、糖码后端 src/infrastructure/agent-runtime/agent-server.js）
  * 都在主进程里直接取，密钥全程不经过渲染层，也不进 IPC 回程消息。
  *
  * 密钥引用（ref）命名：

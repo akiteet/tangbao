@@ -25,9 +25,11 @@ const SkillSecurity = require('../core/skills/skill-security');
 const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
 const dataLocation = require('../infrastructure/storage/data-location');
+const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
 const legacySecretContext = require('../infrastructure/secrets/legacy-context');
 const TangguanCore = require('../core/tangguan/tangguan-store');
 const TangguanStore = require('../infrastructure/tangguan/tangguan-store');
+const ImageAssets = require('../infrastructure/storage/image-assets');
 const ModuleSessions = require('../infrastructure/storage/module-sessions');
 
 // M5（#254）：自定义协议 tangbao-file:// —— 渲染进程不再直接持有本地文件绝对路径，
@@ -207,6 +209,7 @@ let agentPort = 0; // 糖码后端端口
 // 所有本地 API（/gateway 模型网关、糖码后端）都要求 Authorization: Bearer <token>，
 // 这样即便有别的本机进程/网页猜到了端口，也无法调用本地接口。
 const LOCAL_TOKEN = crypto.randomBytes(32).toString('hex');
+const checkToken = createTokenChecker(LOCAL_TOKEN);
 
 let staticServer = null;
 let mainWindow = null;
@@ -216,6 +219,8 @@ let tangguanStoreBackend = null;
 let tangguanStoreRoot = '';
 let moduleSessionStoreInstance = null;
 let moduleSessionStoreRoot = '';
+let imageAssetStoreInstance = null;
+let imageAssetStoreRoot = '';
 const tangguanImportPreviews = new Map();
 
 function getTangguanStore() {
@@ -228,10 +233,21 @@ function getTangguanStore() {
   tangguanStoreInstance = TangguanStore.createStore({
     getKV: svc && typeof svc.getKV === 'function' ? (key) => svc.getKV(key) : null,
     setKV: svc && typeof svc.setKV === 'function' ? (key, value) => svc.setKV(key, value) : null,
-    filePath: path.join(dataDir, 'tangguan-library.json'),
-    indexPath: path.join(dataDir, 'tangguan-embeddings.index.json'),
+    filePath: path.join(dataDir, 'tangbao-library.json'),
+    indexPath: path.join(dataDir, 'tangbao-embeddings.index.json'),
   });
   return tangguanStoreInstance;
+}
+
+// v1.1.5（批次 D1）：糖绘历史图片资产存储（数据根 images/ 目录，含 500MB 配额）
+function getImageAssetStore() {
+  const activeRoot = dataLocation.canonical(app.getPath('userData'));
+  if (imageAssetStoreInstance && imageAssetStoreRoot === activeRoot) return imageAssetStoreInstance;
+  imageAssetStoreRoot = activeRoot;
+  imageAssetStoreInstance = ImageAssets.createImageAssetStore({
+    dir: path.join(dataLocation.recordsRoot(activeRoot), 'images'),
+  });
+  return imageAssetStoreInstance;
 }
 
 function getModuleSessionStore() {
@@ -419,32 +435,14 @@ let controlledEvalCount = 0; // v16（批量提速）：运行中的评测并发
 const MAX_CONCURRENT_EVAL = 3; // v16（批量提速）：评测并发上限，3 路并行（中转站限流下保守值）
 
 // 常数时间比较，避免用 === 比较令牌时被时序侧信道逐字节猜出
-function tokenEqual(a, b) {
-  const ba = Buffer.from(String(a || ''), 'utf8');
-  const bb = Buffer.from(String(b || ''), 'utf8');
-  if (ba.length !== bb.length) return false;
-  try { return crypto.timingSafeEqual(ba, bb); } catch (_) { return false; }
-}
-
 // 本地 API 鉴权：必须带 Authorization: Bearer <启动令牌>
-function checkToken(req) {
-  const h = req.headers['authorization'] || '';
-  const m = /^Bearer\s+(.+)$/i.exec(String(h).trim());
-  return !!m && tokenEqual(m[1], LOCAL_TOKEN);
-}
+// DNS 重绑定防护：Host 必须指向回环地址
+// ——三者的实现在 v1.1.5 收敛到 src/infrastructure/http/request-auth.js（与糖码后端共用）
 
 // 判断来源是否为本应用自身（同源）。文档导航没有 Origin 头，此时按无 Origin 处理。
 function isSelfOrigin(v) {
   if (!v) return true;
   return v === `http://127.0.0.1:${appPort}` || v === `http://localhost:${appPort}`;
-}
-
-// DNS 重绑定防护：只接受 Host 明确指向回环地址的请求。
-// 若攻击者用一个解析到 127.0.0.1 的域名（evil.com）诱导浏览器访问，Host 会是 evil.com，这里直接拒绝。
-function isLoopbackHost(req) {
-  const host = String(req.headers.host || '');
-  const name = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
 }
 
 function deny(res, code, msg) {
@@ -468,7 +466,7 @@ const MIME = {
 // ===== Electron 安全加固（v1.0.6）=====
 // CSP（通过静态服务响应头下发；本地文件协议用更宽松版本）。
 // connect-src 必须写成 http://127.0.0.1:*：CSP 的 host-source 省略端口时只匹配 scheme 默认端口（http→80），
-// 而糖码后端跑在系统分配的随机端口上（js/runtime.js agentBase()），不带 :* 会把 /api/* 请求全部拦死。
+// 而糖码后端跑在系统分配的随机端口上（src/renderer/runtime.js agentBase()），不带 :* 会把 /api/* 请求全部拦死。
 // 模型网关是同源请求（appOrigin + /gateway），由 'self' 覆盖，无需放行任何外部 https。
 // frame-src / img-src 放行 http:：自定义模块允许用户填 http:// 地址（主进程 openChildWindow 白名单同样放行 http），
 // 头像 safeUrl 也放行 http；iframe 天然跨源隔离且 IPC 有 assertTrustedSender 兜底，风险可控。
@@ -490,7 +488,7 @@ const CSP_APP = [
 
 // 本地文件模块（tangbao-file://）用较宽松 CSP：允许文件自身的内联/外链脚本与资源。
 // frame-ancestors 必须写成 http://127.0.0.1:*（不能用 'none'/'self'）：本地文件模块是被主页面用 iframe
-// 嵌进来的（js/modules.js 本地文件分支），'none' 会让 iframe 直接被拒渲染而白屏；而 'self' 在这里指的是
+// 嵌进来的（src/renderer/components/modules.js 本地文件分支），'none' 会让 iframe 直接被拒渲染而白屏；而 'self' 在这里指的是
 // 被嵌文档自身的 tangbao-file:// 源，同样匹配不上静态服务。限定 127.0.0.1 后，外部站点依旧无法嵌入。
 // 其 IPC 已被 assertTrustedSender 拦截（frame.url 非本应用）。
 const CSP_LOCAL = [
@@ -609,8 +607,8 @@ function startStaticServer() {
 
 // 同源代理 /proxy 已删除（M4）：它作为「强制嵌入外部站」的服务端反代缺少对目标地址的 SSRF 拦截
 // （仅 Referer 同源校验挡外部站借道，未拦 169.254.x / 内网），构成 SSRF 面。
-// 强制嵌入现由 openChildWindow 子窗口承载（见 js/modules.js、preload.js），
-// 模型转发统一走 /gateway（server/gateway.js，已拦云元数据）。
+// 强制嵌入现由 openChildWindow 子窗口承载（见 src/renderer/components/modules.js、preload.js），
+// 模型转发统一走 /gateway（src/infrastructure/model-gateway/gateway.js，已拦云元数据）。
 
 // M5（#254）已收敛：本地文件读取不再接受渲染进程给的绝对路径，消除「任意路径可读」暴露面。
 // 改为：渲染进程调用 app:registerLocalFile(绝对路径) → 主进程发不透明 fileId → 经 tangbao-file://<fileId> 自定义协议读取
@@ -889,6 +887,36 @@ safeHandle('image:fetchAsset', async (_e, input) => {
       code: error && error.type || 'image_asset_fetch_failed',
       error: error && error.message ? error.message : String(error),
     };
+  }
+});
+
+// v1.1.5（批次 D1）：糖绘历史图片落盘——渲染层只传 base64 与资源名，
+// 读写严格限定在数据根 images/ 目录内（见 storage/image-assets.js 的名称白名单）。
+safeHandle('image:saveAsset', (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  if (!opts.base64) return { ok: false, code: 'image_asset_empty' };
+  try {
+    return getImageAssetStore().save(opts.base64, opts.ext);
+  } catch (error) {
+    return { ok: false, code: 'image_asset_save_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('image:readAsset', (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  try {
+    return getImageAssetStore().read(opts.name);
+  } catch (error) {
+    return { ok: false, code: 'image_asset_read_failed', error: error && error.message ? error.message : String(error) };
+  }
+});
+
+safeHandle('image:deleteAsset', (_e, input) => {
+  const opts = input && typeof input === 'object' ? input : {};
+  try {
+    return getImageAssetStore().remove(opts.name);
+  } catch (error) {
+    return { ok: false, code: 'image_asset_delete_failed', error: error && error.message ? error.message : String(error) };
   }
 });
 

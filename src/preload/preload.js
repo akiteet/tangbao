@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electron', {
   setGatewayEndpoints: (list) => ipcRenderer.invoke('gateway:setEndpoints', list),
   // 将图像供应商返回的受限 http(s) 资产转为可保存的数据 URL。
   fetchImageAsset: (input) => ipcRenderer.invoke('image:fetchAsset', input || {}),
+  // v1.1.5（批次 D1）：糖绘历史图片落盘资产（严格限定数据根 images/ 目录）。
+  saveImageAsset: (input) => ipcRenderer.invoke('image:saveAsset', input || {}),
+  readImageAsset: (input) => ipcRenderer.invoke('image:readAsset', input || {}),
+  deleteImageAsset: (input) => ipcRenderer.invoke('image:deleteAsset', input || {}),
   probeCache: (input) => ipcRenderer.invoke('cache:probe', input || {}),
   modelHealth: (input) => ipcRenderer.invoke('model:health', input || {}),
   modelMetrics: (input) => ipcRenderer.invoke('model:metrics', input || {}),

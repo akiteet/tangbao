@@ -2,15 +2,7 @@
 /* 技能服务：导入 / 启停（底层走主进程文件操作，renderer 无任意路径写权限） */
 (function () {
   App.services = App.services || {};
-  const invoke = (method, payload) => {
-    try {
-      return (window.electron && typeof window.electron[method] === 'function')
-        ? window.electron[method](payload)
-        : { ok: false, error: '环境不支持' };
-    } catch (e) {
-      return { ok: false, code: e && e.code || 'ipc_failed', error: String(e && e.message ? e.message : e) };
-    }
-  };
+  const invoke = (method, payload) => App.services.ipc.invokeSync(method, [payload], { ok: false, error: '环境不支持' });
   const activeProject = () => App.agent && App.agent.activeProject ? App.agent.activeProject() : null;
   const needsWorkspace = (payload) => {
     const body = payload && typeof payload === 'object' ? payload : {};

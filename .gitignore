@@ -22,3 +22,6 @@ benchmarks/reports/
 outputs/
 *.tmp
 *.report.json
+
+# Electron 临时用户数据目录（ui-smoke / 本地调试产生）
+.tmp-electron-user-data/
