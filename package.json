@@ -15,6 +15,7 @@
     "bench:offline": "node scripts/bench.js --suite multi-agent --mode offline",
     "eval": "node scripts/bench.js --eval",
     "eval:one": "node scripts/bench.js --eval",
+    "bump": "node scripts/bump-version.js",
     "check:version": "node scripts/check-version.js",
     "check:storage": "node scripts/check-storage.js",
     "check:perf": "node scripts/check-perf.js",
