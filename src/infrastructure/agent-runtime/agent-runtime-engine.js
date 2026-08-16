@@ -79,55 +79,12 @@ const MAX_OUTPUT = 12000;     // 单条工具结果截断长度
 const APPROVE_TIMEOUT = 90 * 1000; // v1.1.0（M3+）：审批等待 90 秒（此前 5 分钟会让简单任务干等）
 const CMD_TIMEOUT = 120000;
 
-// callId -> { resolve, timer }  等待前端审批
-const approvals = new Map();
-// v1.1.0（优化 Plan 模式）：用户提问等待队列——decId -> { resolve, timer, runId }，供 /api/agent/decision 回传答复
-const decisionsPending = new Map();
-// jobId -> { child, logs, desc }  后台命令
-const jobs = new Map();
-// v1.1.0（M3）：写前 Diff 审批的会话级授权——allow_file（按路径）/ allow_run（整个运行）
-// v2（P1-4）：按 run 隔离——runAuthRegistry 存每个 Run 的授权状态（多 Run 并发不互漏）；模块级变量仅作未迁移兼容
-const approvedFiles = new Set();
+// 运行态注册表（approvals / decisionsPending / jobs / approvedFiles / runAuthRegistry / sessions
+// 与 killTree / killRunJobs / killRunSessions）自 v1.1.5 批次 D4 拆至 run-registry.js；
+// 导出的是单例实例，解构后所有调用点不变。审批语义注释随迁。
+const { approvals, decisionsPending, jobs, approvedFiles, runAuthRegistry, sessions, killTree, killRunJobs, killRunSessions } = require('./run-registry');
+// v2（P1-4）：模块级 run 授权仅作未迁移兼容，正常路径走 runAuthRegistry 按 Run 隔离
 let approvedRun = false;
-const runAuthRegistry = new Map(); // runId -> { approvedRun, approvedFiles }
-// v1.1.0（M3）：长命令 Session——sessionId -> { child, logs, cursor, desc, code }
-const sessions = new Map();
-
-// 进程树终止：Windows taskkill /T /F；非 Win 负 pid 杀进程组
-function killTree(child) {
-  try {
-    if (child && child.pid) {
-      if (process.platform === 'win32') {
-        exec('taskkill /PID ' + child.pid + ' /T /F', () => {});
-      } else {
-        try { process.kill(-child.pid, 'SIGTERM'); } catch (e) { try { child.kill('SIGTERM'); } catch (e2) {} }
-      }
-    } else if (child) { try { child.kill(); } catch (e) {} }
-  } catch (e) {}
-}
-
-// B4（P2）：Run 中止/连接关闭时清理该 Run 的后台 job（jobs Map 条目 + 进程树），防止长驻命令泄漏
-function killRunJobs(runId) {
-  const id = String(runId || '');
-  if (!id) return;
-  for (const [jobId, job] of jobs) {
-    if (job && job.runId === id) {
-      try { killTree(job.child); } catch (_) {}
-      jobs.delete(jobId);
-    }
-  }
-}
-
-function killRunSessions(runId) {
-  const id = String(runId || '');
-  if (!id) return;
-  for (const [sessionId, session] of sessions) {
-    if (session && session.runId === id) {
-      try { killTree(session.child); } catch (_) {}
-      sessions.delete(sessionId);
-    }
-  }
-}
 
 const TOOL_REGISTRY_VERSION = '1.1.4';
 const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'todo_write', 'propose_memory']);
