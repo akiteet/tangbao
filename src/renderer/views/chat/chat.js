@@ -5,7 +5,7 @@
   const $ = (id) => document.getElementById(id);
   const SYSTEM_PROMPT = App.DEFAULT_PROMPTS.chat;
 
-  // 上下文自动压缩逻辑见 js/context.js（App.context.*），聊天与糖码共用
+  // 上下文自动压缩逻辑见 src/renderer/views/chat/context.js（App.context.*），聊天与糖码共用
 
   const SUGGESTIONS = [
     { title: '写一份周报', desc: '工作总结 / 计划', prompt: '帮我写一份本周工作周报，包含完成事项、进行中和下周计划。', icon: '📅' },

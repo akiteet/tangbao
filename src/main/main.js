@@ -468,7 +468,7 @@ const MIME = {
 // ===== Electron 安全加固（v1.0.6）=====
 // CSP（通过静态服务响应头下发；本地文件协议用更宽松版本）。
 // connect-src 必须写成 http://127.0.0.1:*：CSP 的 host-source 省略端口时只匹配 scheme 默认端口（http→80），
-// 而糖码后端跑在系统分配的随机端口上（js/runtime.js agentBase()），不带 :* 会把 /api/* 请求全部拦死。
+// 而糖码后端跑在系统分配的随机端口上（src/renderer/runtime.js agentBase()），不带 :* 会把 /api/* 请求全部拦死。
 // 模型网关是同源请求（appOrigin + /gateway），由 'self' 覆盖，无需放行任何外部 https。
 // frame-src / img-src 放行 http:：自定义模块允许用户填 http:// 地址（主进程 openChildWindow 白名单同样放行 http），
 // 头像 safeUrl 也放行 http；iframe 天然跨源隔离且 IPC 有 assertTrustedSender 兜底，风险可控。
@@ -490,7 +490,7 @@ const CSP_APP = [
 
 // 本地文件模块（tangbao-file://）用较宽松 CSP：允许文件自身的内联/外链脚本与资源。
 // frame-ancestors 必须写成 http://127.0.0.1:*（不能用 'none'/'self'）：本地文件模块是被主页面用 iframe
-// 嵌进来的（js/modules.js 本地文件分支），'none' 会让 iframe 直接被拒渲染而白屏；而 'self' 在这里指的是
+// 嵌进来的（src/renderer/components/modules.js 本地文件分支），'none' 会让 iframe 直接被拒渲染而白屏；而 'self' 在这里指的是
 // 被嵌文档自身的 tangbao-file:// 源，同样匹配不上静态服务。限定 127.0.0.1 后，外部站点依旧无法嵌入。
 // 其 IPC 已被 assertTrustedSender 拦截（frame.url 非本应用）。
 const CSP_LOCAL = [
@@ -609,8 +609,8 @@ function startStaticServer() {
 
 // 同源代理 /proxy 已删除（M4）：它作为「强制嵌入外部站」的服务端反代缺少对目标地址的 SSRF 拦截
 // （仅 Referer 同源校验挡外部站借道，未拦 169.254.x / 内网），构成 SSRF 面。
-// 强制嵌入现由 openChildWindow 子窗口承载（见 js/modules.js、preload.js），
-// 模型转发统一走 /gateway（server/gateway.js，已拦云元数据）。
+// 强制嵌入现由 openChildWindow 子窗口承载（见 src/renderer/components/modules.js、preload.js），
+// 模型转发统一走 /gateway（src/infrastructure/model-gateway/gateway.js，已拦云元数据）。
 
 // M5（#254）已收敛：本地文件读取不再接受渲染进程给的绝对路径，消除「任意路径可读」暴露面。
 // 改为：渲染进程调用 app:registerLocalFile(绝对路径) → 主进程发不透明 fileId → 经 tangbao-file://<fileId> 自定义协议读取

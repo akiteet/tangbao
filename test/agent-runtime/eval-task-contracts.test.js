@@ -44,9 +44,10 @@ test('仅四个目标任务使用向上取整的25%预算配置', () => {
 test('med-007 接受合法对象方法实现，但占位 logger 仍不能通过', (t) => {
   const task = byId.get('med-007');
   const original = path.join(ROOT, 'benchmarks/fixtures/med-logging');
-  // 合法实现来自 8-07 真实评测产物（历史存档目录；若不存在则跳过，不因评测目录轮换而失败）
-  const completed = 'C:/Users/18860/AppData/Roaming/tangbao-web/tangbao-data/eval-runs-archive-20260808/med-007-2026-08-07T08-22-22-651Z-27160-a5a642df';
-  if (!fs.existsSync(completed)) { t.skip('评测历史存档 med-007 目录不存在'); return; }
+  // 合法实现来自 8-07 真实评测产物（历史存档目录；本机归档位置随机器变化，经 TANGBAO_EVAL_ARCHIVE_DIR 注入）
+  const archiveRoot = process.env.TANGBAO_EVAL_ARCHIVE_DIR || '';
+  const completed = archiveRoot ? path.join(archiveRoot, 'med-007-2026-08-07T08-22-22-651Z-27160-a5a642df') : '';
+  if (!completed || !fs.existsSync(completed)) { t.skip('评测历史存档不可用：设置 TANGBAO_EVAL_ARCHIVE_DIR 指向 eval-runs-archive-* 目录后启用'); return; }
   const done = judgeTask(task, { cwd: completed, status: 'blocked', events: [] });
   assert.equal(done.ok, true);
   const placeholder = judgeTask(task, { cwd: original, status: 'completed', events: [] });
