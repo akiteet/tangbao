@@ -24,6 +24,7 @@ const { beginModelCall, finishModelCall } = require('../../core/agent-runtime/mo
 const { calculateCost } = require('../../core/agent-runtime/cost-ledger');
 const TokenEstimator = require('../../core/models/tokenizer');
 const ImageCapabilities = require('../../core/models/image-capabilities');
+const capabilities = require('../../core/models/capabilities');
 
 const KIND = {
   chat:       { path: '/chat/completions',  method: 'POST' },
@@ -316,6 +317,10 @@ async function handleGateway(req, res) {
     // v4：非 OpenAI Chat 适配器走供应商原生流式，并在主进程转换为既有 OpenAI SSE 形状。
     if (kind === 'chat' && adapter !== 'openai') {
       const payload = providerPayload;
+      // v1.1.5（F1）：聊天路径与糖码 engine 的 callLLMStream 对齐——缓存注入前先过能力判定，
+      // reasoning 类（promptCachingMode === 'off'）不再携带 cache_control；渲染层仍可用 promptCaching:false 强制关闭。
+      const cachingMode = capabilities.promptCachingMode ? capabilities.promptCachingMode(payload.model, base) : 'auto';
+      const useCaching = payload.promptCaching !== false && cachingMode !== 'off';
       const req = buildRequest(adapter, {
         apiBase: base,
         apiKey: key,
@@ -324,7 +329,7 @@ async function handleGateway(req, res) {
         tools: payload.tools || [],
         stream: !!payload.stream,
         maxOutputTokens: payload.maxOutputTokens || payload.max_tokens,
-        promptCaching: payload.promptCaching !== false,
+        promptCaching: useCaching,
         cachedContentName: payload.cachedContentName || payload.cachedContent,
       });
       const upA = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: ctrl.signal });
