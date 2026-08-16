@@ -13,6 +13,7 @@ function readRuntimeSource(root) {
     fs.readFileSync(path.join(runtimeDir, 'agent-runtime-engine.js'), 'utf8'),
     fs.readFileSync(path.join(runtimeDir, 'tool-runtime.js'), 'utf8'),
     fs.readFileSync(path.join(runtimeDir, 'agent-server-http.js'), 'utf8'),
+    fs.readFileSync(path.join(runtimeDir, 'search-providers.js'), 'utf8'),
   ].join('\n');
 }
 
