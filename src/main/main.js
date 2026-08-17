@@ -2549,27 +2549,6 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
 
     // loadURL 在 did-fail-load 时 reject（错误页已由监听器接管），这里吞掉，仍返回 ok 让渲染层显示"已在子窗口打开"
     try { await win.loadURL(rawUrl); } catch (_) {}
-
-    // 启动自检（id=genshin）：页面加载完成后自动点击「下载游戏」，验证子窗口可承载真实下载交互。
-    if (id === 'genshin') {
-      win.webContents.on('did-finish-load', () => {
-        try {
-          win.webContents.executeJavaScript(`(function(){
-            try {
-              const links = Array.from(document.querySelectorAll('a[href]'));
-              const hit = links.find(function(el){
-                const t = (el.textContent||'').trim();
-                const h = (el.getAttribute('href')||'').toLowerCase();
-                return /\\.exe/.test(h) || (/下载/.test(t) && /launcher|client|download|mihoyo/.test(h)) || /下载游戏|立即下载|客户端下载|pc版/.test(t);
-              });
-              if (hit) { hit.click(); return 'clicked:' + (hit.getAttribute('href')||''); }
-              return 'no-target';
-            } catch(e){ return 'err:' + e.message; }
-          })()`).then(r => console.log('[startup-warmup]', r)).catch(() => {});
-        } catch (_) {}
-      });
-    }
-
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
