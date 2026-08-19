@@ -135,21 +135,40 @@ function run(storage, fileRepo, opts) {
 
 /**
  * M4 写穿：把当前 App.state 整库替换进 SQLite（主数据源）。
- * 与 run() 的区别：无 migrated_v1 门槛，每次 persist 都执行；事务内 clearAll + 全量 upsert，
- * 天然幂等。同时写 kv_meta['synced_at'] = now，供 storage:loadState 做新鲜度判断。
+ * v1.1.6（D2）：不再 clearAll 11 表 + 全量重插——改为增量 upsert + 清理已删除会话。
+ * upsert* 方法本身幂等（INSERT OR REPLACE），clearAll 只为删除「新 state 中不再存在的会话」。
+ * 小表（accounts/providers/agents/templates/workflows/imageHistory/docs/projects/threads）直接 upsert，
+ * 不清理已删除项（数量小、删除频率低、残留无害；若需精确清理可走各自 delete API）。
+ * 失败回退到 clearAll + 全量重插（既有路径）。
  */
 function syncState(storage, fileRepo, state) {
   if (!storage || !storage.ready || !storage.ready()) return { ok: false, reason: 'no-storage' };
   try {
     const tx = storage.transaction(() => {
-      storage.clearAll();
+      // 增量：清理已删除的会话（及其消息级联），保留其余表不动
+      const incomingIds = new Set((state && Array.isArray(state.conversations) ? state.conversations : []).map((c) => c && c.id).filter(Boolean));
+      const existingConvs = storage.listConversations(100000) || [];
+      for (const conv of existingConvs) {
+        if (conv && conv.id && !incomingIds.has(conv.id)) storage.deleteConversation(conv.id);
+      }
       insertState(storage, fileRepo, state || {});
       storage.setKV('synced_at', String(Date.now()));
     });
     tx();
     return { ok: true };
   } catch (e) {
-    return { ok: false, reason: 'sync-failed', error: e && e.message ? e.message : String(e) };
+    // 回退：clearAll + 全量重插（既有路径，保证一致性）
+    try {
+      const tx2 = storage.transaction(() => {
+        storage.clearAll();
+        insertState(storage, fileRepo, state || {});
+        storage.setKV('synced_at', String(Date.now()));
+      });
+      tx2();
+      return { ok: true, fallback: true };
+    } catch (e2) {
+      return { ok: false, reason: 'sync-failed', error: e2 && e2.message ? e2.message : String(e2) };
+    }
   }
 }
 

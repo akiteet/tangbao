@@ -126,6 +126,7 @@ function init(dbPath, fileRepoInstance) {
     opened = new Database(dbPath);
     opened.pragma('journal_mode = WAL');
     opened.pragma('foreign_keys = ON');
+    opened.pragma('synchronous = NORMAL'); // v1.1.6（D1）：WAL 模式下 NORMAL 安全，每次提交不再 fsync，降低主进程阻塞
     // M6：版本化迁移 —— 按 PRAGMA user_version 顺序执行 MIGRATIONS[cur..]，每步在事务内提交
     let cur = 0;
     try { cur = Number(opened.pragma('user_version', { simple: true })) || 0; } catch (_) {}
