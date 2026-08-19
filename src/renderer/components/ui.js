@@ -1175,6 +1175,19 @@
       }
     },
 
+    // v1.1.6（批次 A）：同步性能诊断开关与按钮态——每次打开/刷新设置面板时调用
+    syncPerfToggle() {
+      const on = !!(App.perf && App.perf.isEnabled && App.perf.isEnabled());
+      const toggle = $('perfToggle');
+      const status = $('perfStatus');
+      const exportBtn = $('perfExport');
+      const clearBtn = $('perfClear');
+      if (toggle) toggle.checked = on;
+      if (status) status.textContent = on ? '已开启（记录中）' : '未开启';
+      if (exportBtn) exportBtn.disabled = !on;
+      if (clearBtn) clearBtn.disabled = !on;
+    },
+
     refreshSettingsUI() {
       const s = App.state.settings;
       const apiModuleSel = $('apiModuleSel');
@@ -1186,6 +1199,7 @@
       App.ui.refreshSecretStoreStatus();
       App.ui.renderModelProfiles();
       App.ui.refreshModelMetrics();
+      App.ui.syncPerfToggle(); // v1.1.6：每次打开/刷新设置面板时同步性能诊断开关与按钮态
       const pr = App.state.settings.prompts || {};
       const DP = App.DEFAULT_PROMPTS;
       if ($('pChat')) { $('pChat').value = pr.chat || ''; $('pChat').placeholder = DP.chat; }
@@ -2297,24 +2311,15 @@
       // v1.1.6（批次 A）：性能诊断出口——开启/关闭 perf 仪表 + 导出快照 + 清空。
       // 仪表本身（perf.js）保持纯内存、不持久不通信；开关状态存 settings 跨重启保留。
       const perfToggle = $('perfToggle');
-      const perfStatus = $('perfStatus');
       const perfExport = $('perfExport');
       const perfClear = $('perfClear');
-      const syncPerfToggle = () => {
-        const on = !!(App.perf && App.perf.isEnabled && App.perf.isEnabled());
-        if (perfToggle) perfToggle.checked = on;
-        if (perfStatus) perfStatus.textContent = on ? '已开启（记录中）' : '未开启';
-        if (perfExport) perfExport.disabled = !on;
-        if (perfClear) perfClear.disabled = !on;
-      };
-      syncPerfToggle();
       if (perfToggle) perfToggle.addEventListener('change', () => {
         const on = !!perfToggle.checked;
         if (App.perf) { if (on) App.perf.enable(); else App.perf.disable(); }
         App.state.settings.perfEnabled = on;
         try { if (on) localStorage.setItem('perfEnabled', '1'); else localStorage.removeItem('perfEnabled'); } catch (_) {}
         App.persist();
-        syncPerfToggle();
+        App.ui.syncPerfToggle();
         App.ui.toast(on ? '性能诊断已开启' : '性能诊断已关闭');
       });
       if (perfExport) perfExport.addEventListener('click', () => {
