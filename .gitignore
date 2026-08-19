@@ -25,3 +25,6 @@ outputs/
 
 # Electron 临时用户数据目录（ui-smoke / 本地调试产生）
 .tmp-electron-user-data/
+
+# v1.1.6 实施计划：本地参考用，不入 git（用户指示）
+糖包v1.1.6实施计划.md

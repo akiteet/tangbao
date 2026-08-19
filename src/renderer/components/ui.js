@@ -2293,6 +2293,45 @@
       const backupStorage = $('backupStorage'); if (backupStorage) backupStorage.addEventListener('click', () => App.ui.backupStorage());
       const restoreStorage = $('restoreStorage'); if (restoreStorage) restoreStorage.addEventListener('click', () => App.ui.restoreStorage());
       const diagnostics = $('exportStorageDiagnostics'); if (diagnostics) diagnostics.addEventListener('click', () => App.ui.exportStorageDiagnostics());
+
+      // v1.1.6（批次 A）：性能诊断出口——开启/关闭 perf 仪表 + 导出快照 + 清空。
+      // 仪表本身（perf.js）保持纯内存、不持久不通信；开关状态存 settings 跨重启保留。
+      const perfToggle = $('perfToggle');
+      const perfStatus = $('perfStatus');
+      const perfExport = $('perfExport');
+      const perfClear = $('perfClear');
+      const syncPerfToggle = () => {
+        const on = !!(App.perf && App.perf.isEnabled && App.perf.isEnabled());
+        if (perfToggle) perfToggle.checked = on;
+        if (perfStatus) perfStatus.textContent = on ? '已开启（记录中）' : '未开启';
+        if (perfExport) perfExport.disabled = !on;
+        if (perfClear) perfClear.disabled = !on;
+      };
+      syncPerfToggle();
+      if (perfToggle) perfToggle.addEventListener('change', () => {
+        const on = !!perfToggle.checked;
+        if (App.perf) { if (on) App.perf.enable(); else App.perf.disable(); }
+        App.state.settings.perfEnabled = on;
+        try { if (on) localStorage.setItem('perfEnabled', '1'); else localStorage.removeItem('perfEnabled'); } catch (_) {}
+        App.persist();
+        syncPerfToggle();
+        App.ui.toast(on ? '性能诊断已开启' : '性能诊断已关闭');
+      });
+      if (perfExport) perfExport.addEventListener('click', () => {
+        if (!App.perf) return;
+        const samples = App.perf.snapshot();
+        if (!samples.length) { App.ui.toast('暂无性能样本（开启后操作几下再导出）'); return; }
+        const json = JSON.stringify({ exportedAt: new Date().toISOString(), version: '1.1.6', samples }, null, 2);
+        const a = document.createElement('a');
+        a.href = 'data:application/json;charset=utf-8,' + encodeURIComponent(json);
+        a.download = 'tangbao-perf-' + Date.now() + '.json';
+        a.click();
+        App.ui.toast('已导出 ' + samples.length + ' 条性能样本');
+      });
+      if (perfClear) perfClear.addEventListener('click', () => {
+        if (App.perf && App.perf.clear) App.perf.clear();
+        App.ui.toast('已清空性能样本');
+      });
       const diagnoseSecrets = $('diagnoseSecretStore'); if (diagnoseSecrets) diagnoseSecrets.addEventListener('click', () => App.ui.diagnoseSecretStore());
       const recoverSecrets = $('recoverLegacySecrets'); if (recoverSecrets) recoverSecrets.addEventListener('click', () => App.ui.recoverLegacySecrets());
       const resetSecretStore = $('resetSecretStore'); if (resetSecretStore) resetSecretStore.addEventListener('click', () => App.ui.resetSecretStore());

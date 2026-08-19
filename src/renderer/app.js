@@ -169,6 +169,9 @@
   }
 
   async function boot() {
+    // v1.1.6（批次 A）：按设置快速开启 perf 仪表，使 bootMs 本身能被记录。
+    // state 加载后会再同步一次（settings.perfEnabled）；此处先用 localStorage 兜底（state 加载前）。
+    try { if (App.perf && localStorage.getItem('perfEnabled') === '1') App.perf.enable(); } catch (_) {}
     const bootStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
     try {
       // 0) 先取本地服务端口与启动令牌：端口由系统随机分配，任何本地请求都依赖它
@@ -286,6 +289,8 @@
 
       // 2) 应用外观（主题/强调色/圆角）
       App.ui.applyAppearance();
+      // v1.1.6（批次 A）：state 加载后按 settings.perfEnabled 同步仪表开关
+      try { if (App.perf && App.state.settings.perfEnabled) App.perf.enable(); else if (App.perf && !App.state.settings.perfEnabled) App.perf.disable(); } catch (_) {}
       // 3) 绑定全局 UI 事件（侧边栏 / 顶栏 / 设置弹窗）
       App.ui.init();
       if (App.__moduleSessionRecovery && App.__moduleSessionRecovery.ok === false) {
