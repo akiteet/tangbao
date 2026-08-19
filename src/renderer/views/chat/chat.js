@@ -638,7 +638,7 @@
       resetTangguanMessageWindow(conv);
       App.chat.clearAttachments();
       App.chat.cancelEdit();
-       if (opts.persist !== false && !isModuleOwner(owner)) App.persist();
+       if (opts.persist !== false && !isModuleOwner(owner)) setTimeout(() => App.persist(), 0); // v1.1.6（B1）：去同步——与会话切换帧解耦
        if (opts.stay === 'tangguan') {
          if (App.state.view !== 'tangguan') App.router.go('tangguan', { persist: opts.persist !== false, skipDraftFlush: true });
        } else if (opts.stay === 'create') {
@@ -679,7 +679,7 @@
       resetTangguanMessageWindow(App.chat.activeConv());
       App.chat.clearAttachments();
       App.chat.cancelEdit();
-       if (opts.persist !== false && !isModuleOwner(owner)) App.persist();
+       if (opts.persist !== false && !isModuleOwner(owner)) setTimeout(() => App.persist(), 0); // v1.1.6（B1）：去同步——与会话切换帧解耦
        if (opts.stay === 'tangguan') {
          if (App.state.view !== 'tangguan') App.router.go('tangguan', { persist: opts.persist !== false, skipDraftFlush: true });
        } else if (opts.stay === 'create') {

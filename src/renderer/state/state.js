@@ -94,27 +94,27 @@
     return merged;
   }
 
+  // v1.1.6（B2）：手动脱敏替代 JSON.parse(JSON.stringify(state)) 第三次全量序列化。
+  // 只浅拷贝浮窗需要的顶层字段 + 删 apiKey，不再对整个 state（含全部消息/base64）做深拷贝。
   function sanitizeFloatState(value) {
-    let copy;
-    try { copy = JSON.parse(JSON.stringify(value || {})); } catch (_) { return {}; }
-    if (copy.settings && typeof copy.settings === 'object') {
-      if (copy.settings.search && typeof copy.settings.search === 'object') copy.settings.search = {};
-      if (Array.isArray(copy.settings.accounts)) {
-        copy.settings.accounts = copy.settings.accounts.map((account) => {
-          const next = Object.assign({}, account);
-          delete next.apiKey;
-          return next;
-        });
-      }
-      if (copy.settings.providers && typeof copy.settings.providers === 'object') {
-        copy.settings.providers = Object.fromEntries(Object.entries(copy.settings.providers).map(([key, provider]) => {
-          const next = Object.assign({}, provider || {});
-          delete next.apiKey;
-          return [key, next];
-        }));
-      }
+    const source = value || {};
+    const settings = source.settings && typeof source.settings === 'object' ? source.settings : {};
+    const sanitizedSettings = { appearance: settings.appearance || {}, view: settings.view || 'chat' };
+    if (settings.accounts && Array.isArray(settings.accounts)) {
+      sanitizedSettings.accounts = settings.accounts.map((account) => {
+        const next = Object.assign({}, account);
+        delete next.apiKey;
+        return next;
+      });
     }
-    return copy;
+    if (settings.providers && typeof settings.providers === 'object') {
+      sanitizedSettings.providers = Object.fromEntries(Object.entries(settings.providers).map(([key, provider]) => {
+        const next = Object.assign({}, provider || {});
+        delete next.apiKey;
+        return [key, next];
+      }));
+    }
+    return { activeId: source.activeId || null, view: source.view || 'chat', settings: sanitizedSettings };
   }
 
   function persistableState() {
