@@ -35,6 +35,7 @@ function textAnchors(cur, target) {
     ['.github/workflows/macos-release-assets.yml', 'tangbao-v' + cur + '-macos-', 'tangbao-v' + target + '-macos-', 1],
     ['README.md', 'tangbao-' + cur + '-setup.exe', 'tangbao-' + target + '-setup.exe', 1],
     ['README.en.md', 'tangbao-' + cur + '-setup.exe', 'tangbao-' + target + '-setup.exe', 1],
+    ['docs/DATA_MODEL.md', 'v' + cur, 'v' + target, 1], // check-release 断言 DATA_MODEL 含当前版本号
   ];
 }
 

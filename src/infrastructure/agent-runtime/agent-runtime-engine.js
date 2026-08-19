@@ -86,7 +86,7 @@ const { approvals, decisionsPending, jobs, approvedFiles, runAuthRegistry, sessi
 // v2（P1-4）：模块级 run 授权仅作未迁移兼容，正常路径走 runAuthRegistry 按 Run 隔离
 let approvedRun = false;
 
-const TOOL_REGISTRY_VERSION = '1.1.5';
+const TOOL_REGISTRY_VERSION = '1.1.6';
 const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'todo_write', 'propose_memory']);
 const toolRuntime = createToolRuntime({
   version: TOOL_REGISTRY_VERSION,
@@ -102,7 +102,7 @@ const TOOL_NAMES = toolRuntime.toolNames;
 const AgentPrompt = require('../../core/models/agent-prompt');
 const SYSTEM_PROMPT = AgentPrompt.SYSTEM_PROMPT;
 const PROMPT_VERSION = String(AgentPrompt.PROMPT_VERSION || 'legacy/unknown');
-const RUNTIME_VERSION = '1.1.5';
+const RUNTIME_VERSION = '1.1.6';
 
 // ===== 本地访问控制 =====
 // 由主进程在 startAgentServer 时注入：启动令牌 + 唯一允许的来源（静态服务的源）。
