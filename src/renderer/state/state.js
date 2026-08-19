@@ -94,8 +94,9 @@
     return merged;
   }
 
-  // v1.1.6（B2）：手动脱敏替代 JSON.parse(JSON.stringify(state)) 第三次全量序列化。
-  // 只浅拷贝浮窗需要的顶层字段 + 删 apiKey，不再对整个 state（含全部消息/base64）做深拷贝。
+  // v1.1.6（B2 修订）：手动脱敏替代 JSON.parse(JSON.stringify(state)) 第三次全量序列化。
+  // 浮窗需要 conversations（渲染对话）、view、activeId、web、thinkLevel、settings（外观+账户脱敏）。
+  // 只浅拷贝需要的顶层字段 + 删 apiKey，不再对整个 state 做深拷贝。
   function sanitizeFloatState(value) {
     const source = value || {};
     const settings = source.settings && typeof source.settings === 'object' ? source.settings : {};
@@ -114,7 +115,14 @@
         return [key, next];
       }));
     }
-    return { activeId: source.activeId || null, view: source.view || 'chat', settings: sanitizedSettings };
+    return {
+      activeId: source.activeId || null,
+      view: source.view || 'chat',
+      web: source.web,
+      thinkLevel: source.thinkLevel,
+      conversations: Array.isArray(source.conversations) ? source.conversations : [],
+      settings: sanitizedSettings,
+    };
   }
 
   function persistableState() {
