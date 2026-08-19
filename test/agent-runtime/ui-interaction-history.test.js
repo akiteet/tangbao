@@ -11,7 +11,8 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 test('全局按钮具备无需等待业务完成的即时按下反馈', () => {
   const css = read('styles.css');
   assert.match(css, /button:not\(:disabled\):active\s*\{[^}]*opacity:\s*\.72/);
-  assert.match(css, /button:not\(:disabled\):active\s*\{[^}]*transition-duration:\s*0s\s*!important/);
+  assert.match(css, /button:not\(:disabled\):active\s*\{[^}]*0s[^}]*!important/); // v1.1.6：0s 即时反馈（含 ease-spring）
+  assert.match(css, /button:not\(:disabled\):active\s*\{[^}]*scale\(/); // v1.1.6：弹簧按下缩放
 });
 
 test('糖码运行历史弹窗使用单一可见滚动容器', () => {
