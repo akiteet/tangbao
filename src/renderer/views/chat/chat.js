@@ -46,10 +46,51 @@
   };
   let recognition = null;   // 语音听写实例
   let listening = false;    // 语音听写状态
-  let pendingAttachments = []; // 待发送附件 [{id,name,type,text,size}]
+  let pendingAttachments = []; // 待发送附件 [{id,name,type,text,size,data?}]
   let messageVisibleCount = 100;
   let messageWindowConvId = '';
   let surfaceState = null;
+
+  // v1.1.6（批次 C）：聊天附件图片落盘——复用糖绘 D1 的 image-assets 基建。
+  // state 里只存 {name,type,...} 引用不存 base64 data，消除 state 序列化体积 = 图片体积的放大。
+  // 渲染/请求时经 cachedAttachmentDataUrl 按需取回（LRU 缓存最近 40 张）。
+  const attachmentCache = new Map();
+  const ATTACHMENT_CACHE_LIMIT = 40;
+  function stripDataUrl(value) { return String(value || '').replace(/^data:image\/[^;,]+;base64,/, ''); }
+  async function saveAttachmentAsset(dataUrl) {
+    const svc = App.services && App.services.images;
+    if (!svc || typeof svc.available === 'function' && !svc.available()) return null;
+    const b64 = stripDataUrl(dataUrl);
+    if (!b64) return null;
+    try {
+      const result = await svc.save(b64);
+      if (result && result.ok && result.name) return result.name;
+      if (result && result.code === 'quota') App.ui.toast('本地图片存储已达配额，该图保留内联');
+      return null;
+    } catch (_) { return null; }
+  }
+  async function cachedAttachmentDataUrl(name) {
+    if (!name) return '';
+    if (attachmentCache.has(name)) {
+      const v = attachmentCache.get(name);
+      attachmentCache.delete(name); attachmentCache.set(name, v);
+      return v;
+    }
+    const svc = App.services && App.services.images;
+    if (!svc || typeof svc.read !== 'function') return '';
+    const result = await svc.read(name);
+    const dataUrl = result && result.ok && result.dataUrl ? result.dataUrl : '';
+    if (!dataUrl) return '';
+    attachmentCache.set(name, dataUrl);
+    while (attachmentCache.size > ATTACHMENT_CACHE_LIMIT) attachmentCache.delete(attachmentCache.keys().next().value);
+    return dataUrl;
+  }
+  // 取附件的 data URL：有 data 直接返回（内联/旧数据），否则按 name 取回
+  function attachmentDataUrl(a) {
+    if (a && a.data) return a.data;
+    if (a && a.name) return cachedAttachmentDataUrl(a.name);
+    return '';
+  }
   let draftTimer = null;
   let draftConversationId = null;
   const markdownCache = new Map();
@@ -556,14 +597,24 @@
 
     // 把消息正文与附件拼成最终发给模型的 content
     // 纯文本返回字符串；含图片时返回 OpenAI vision 数组格式
+    // v1.1.6（批次 C2）：附件图片按需取回——有 data 直接用（内联/旧数据），否则按 name 取回。
+    // 同步版本（buildContent）：仅当 data 已就绪时返回图片；未就绪时该图被跳过（用于 token 估算等非关键路径）。
+    // 发送关键路径用 preloadAttachments 先把 name→data 预加载完毕，再调 buildContent 拿到完整图片。
+    async preloadAttachments(m) {
+      if (!m || !m.attachments || !m.attachments.length) return;
+      await Promise.all(m.attachments.filter(a => a.type === 'image' && !a.data && a.name).map(async (a) => {
+        const url = await cachedAttachmentDataUrl(a.name);
+        if (url) a.data = url; // 临时挂回 data 供本次 buildContent 使用（不 persist，仅内存态）
+      }));
+    },
     buildContent(m) {
       const textParts = [m.content || ''];
       const textAttachments = [];
       const images = [];
       if (m.attachments && m.attachments.length) {
         m.attachments.forEach(a => {
-          if (a.type === 'image') images.push(a.data);
-          else textAttachments.push(`【附件：${a.name}】\n${a.text || ''}`);
+          if (a.type === 'image' && a.data) images.push(a.data);
+          else if (a.type !== 'image') textAttachments.push(`【附件：${a.name}】\n${a.text || ''}`);
         });
       }
       if (textAttachments.length) textParts.push(textAttachments.join('\n\n'));
@@ -914,7 +965,7 @@
       } else {
         const imgHtml = (m.attachments && m.attachments.length)
           ? m.attachments.filter(a => a.type === 'image').map(a =>
-              `<img class="chat-img" src="${App.escapeHtml(a.data)}" alt="${App.escapeHtml(a.name)}" title="${App.escapeHtml(a.name)}">`).join('')
+              `<img class="chat-img" data-att-name="${App.escapeHtml(a.name || '')}" src="${App.escapeHtml(a.data || '')}" alt="${App.escapeHtml(a.origName || a.name || '')}" title="${App.escapeHtml(a.origName || a.name || '')}">`).join('')
           : '';
         const attHtml = (m.attachments && m.attachments.length)
           ? `<div class="attach-cards">` + m.attachments.filter(a => a.type !== 'image').map(a =>
@@ -995,6 +1046,23 @@
         }
        });
        messages.appendChild(fragment);
+      // v1.1.6（批次 C3）：惰性迁移——渲染后对有 name 但无 data 的图片附件异步取回并填充 src；
+      // 同时把取回的 data 落回 message 对象并异步 persist（先取回后改 state，可重入不丢数据）。
+      messages.querySelectorAll('img.chat-img[data-att-name]').forEach(async (img) => {
+        const name = img.dataset.attName;
+        if (!name || img.src) return;
+        img.removeAttribute('data-att-name');
+        const url = await cachedAttachmentDataUrl(name);
+        if (!url) return;
+        img.src = url;
+        let migrated = false;
+        for (const m of conv.messages) {
+          if (m.attachments) for (const a of m.attachments) {
+            if (a.type === 'image' && a.name === name && !a.data) { a.data = url; migrated = true; }
+          }
+        }
+        if (migrated) setTimeout(() => App.persist(), 0);
+      });
       renderedConvId = conv.id;
       renderedContentStamp = stamp; // 构建成功后才落戳，失败重入仍会完整重建
       if (streaming && streamConvId === conv.id && streamUi && streamUi.messageId) {
@@ -1599,6 +1667,9 @@
       const ui = App.chat.appendAssistant(message.content || '');
       streaming = true; streamConvId = conv.id; App.chat.setSending(true);
       try {
+        // v1.1.6（批次 C2）：重生成时预加载上一条用户消息的附件图片
+        const prevUser = conv.messages.slice(0, index).reverse().find(m => m.role === 'user');
+        if (prevUser) await App.chat.preloadAttachments(prevUser);
         await App.chat.streamChat(conv, ui, { liveMessage: message });
       } finally {
         streaming = false; streamConvId = null; App.chat.setSending(false);
@@ -1618,6 +1689,18 @@
       }
       const atts = pendingAttachments.slice();
       if (!text && !atts.length) return;
+      // v1.1.6（批次 C1）：图片附件落盘为文件引用——state 不再内联 base64。
+      // 落盘失败的回退保留 data 字段（数据不丢）。
+      const persistedAtts = [];
+      for (const a of atts) {
+        if (a.type === 'image' && a.data) {
+          const name = await saveAttachmentAsset(a.data);
+          if (name) persistedAtts.push({ name, type: a.type, origName: a.name, size: a.size });
+          else persistedAtts.push(Object.assign({}, a)); // 回退内联
+        } else {
+          persistedAtts.push(Object.assign({}, a));
+        }
+      }
       // 聊天修复 E：流式期间不再静默吞消息——明确提示忙碌来源，输入内容原样保留
       if (streaming) {
         // Legacy Chat contract: const busySame = streamConvId === (App.state.activeId || null);
@@ -1653,7 +1736,7 @@
         const um = conv.messages[editIdx];
         conv.messages.splice(editIdx + 1);
         um.content = text;
-        if (atts.length) um.attachments = atts;
+        if (persistedAtts.length) um.attachments = persistedAtts;
         App.chat.editingIndex = null;
         conv.updatedAt = Date.now();
         $('input').value = ''; App.chat.autoSize();
@@ -1681,7 +1764,7 @@
         return;
       }
       const userMsg = { role: 'user', content: text };
-      if (atts.length) userMsg.attachments = atts;
+      if (persistedAtts.length) userMsg.attachments = persistedAtts;
       conv.messages.push(userMsg);
       if (conv.messages.filter((item) => item && item.role === 'user').length === 1
         && conv.titleMode !== 'manual'
@@ -1698,6 +1781,8 @@
       $('messages').appendChild(App.chat.messageNode(userMsg, 0));
       const ui = App.chat.appendAssistant();
       App.chat.scrollBottom(true);
+      // v1.1.6（批次 C2）：发送前预加载附件图片（name→data），确保 buildContent 拿到完整图片
+      await App.chat.preloadAttachments(userMsg);
       streaming = true; streamConvId = conv.id; App.chat.setSending(true);
       try {
         await App.chat.streamChat(conv, ui);
