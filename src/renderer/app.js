@@ -161,11 +161,18 @@
   function applyFloatStateSnapshot(payload) {
     const state = payload && payload.state && typeof payload.state === 'object' ? payload.state : payload;
     if (!state || typeof state !== 'object') return false;
-    const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(state), { persist: false }) : { ok: false };
-    if (!result || !result.ok) return false;
-    if (App.chat && App.chat.onShow) App.chat.onShow();
-    if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
-    return true;
+    // v1.1.6：防止浮窗收到主窗推送后 loadStateFromRaw 触发副作用再回传形成循环。
+    // 用 __applyingFloatState 守卫：应用期间浮窗的 App.persist 只走本地渲染不走 sync。
+    App.__applyingFloatState = true;
+    try {
+      const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(state), { persist: false }) : { ok: false };
+      if (!result || !result.ok) return false;
+      if (App.chat && App.chat.onShow) App.chat.onShow();
+      if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
+      return true;
+    } finally {
+      App.__applyingFloatState = false;
+    }
   }
 
   async function boot() {
@@ -217,8 +224,9 @@
           });
         }
         // 浮窗不写本机 state.json，只把会话增量单向同步给主窗；账户设置永不回传。
+        // v1.1.6：应用主窗推送状态期间不回传 sync，防止 pushState→loadStateFromRaw→persist→sync→pushState 循环。
         App.persist = function () {
-          if (App.__floatReady) {
+          if (App.__floatReady && !App.__applyingFloatState) {
             App.services.float.sync({
               type: 'patch',
               conversations: App.state.conversations,
@@ -325,10 +333,18 @@
       if (!floatMode) {
         App.services.float.onApply((s) => {
           if (!s) return;
+          const prevConvCount = (App.state.conversations || []).length;
+          const prevActiveId = App.state.activeId;
           const conversations = mergeFloatConversations(App.state.conversations, s.conversations);
+          const newActiveId = conversations.some((item) => item && item.id === s.activeId) ? s.activeId : App.state.activeId;
+          // v1.1.6：去重——浮窗回传的内容与主窗现有一致时不 persist/pushState，防止循环
+          const noChange = conversations.length === prevConvCount && newActiveId === prevActiveId
+            && (typeof s.web !== 'boolean' || s.web === App.state.web)
+            && (!['off','low','medium','high'].includes(s.thinkLevel) || s.thinkLevel === App.state.thinkLevel);
+          if (noChange) return;
           Object.assign(App.state, {
             conversations,
-            activeId: conversations.some((item) => item && item.id === s.activeId) ? s.activeId : App.state.activeId,
+            activeId: newActiveId,
             web: typeof s.web === 'boolean' ? s.web : App.state.web,
             thinkLevel: ['off', 'low', 'medium', 'high'].includes(s.thinkLevel) ? s.thinkLevel : App.state.thinkLevel,
           });
