@@ -175,6 +175,7 @@
   ];
 
   const HISTORY_CAP = 200; // v1.1.5（批次 D1）：图片落盘后索引轻量，上限 30 → 200
+  const TERMINAL_TTL = 60000; // v1.1.6：失败/取消任务卡 60 秒后自动消失（留足阅读错误与重试的时间）
 
   // v1.1.5（批次 D1）：文件名 → data URL 的 LRU 缓存（历史缩略图/灯箱/对比按需取图）
   const assetCache = new Map();
@@ -930,16 +931,35 @@
         clearInterval(App.image._queueTimer);
         App.image._queueTimer = null;
       }
+      // v1.1.6：任务结束后若有终态卡（失败/取消），安排一次性兜底重绘，
+      // 确保无人再操作时失败卡也会在 TERMINAL_TTL 后自动消失
+      const hasTerminal = Object.values(App.image.tasks).some((t) => t && (t.status === 'error' || t.status === 'canceled'));
+      if (hasTerminal && !App.image._queueTimer && !App.image._terminalDismissTimer) {
+        App.image._terminalDismissTimer = setTimeout(() => {
+          App.image._terminalDismissTimer = null;
+          App.image.renderQueueCards();
+        }, TERMINAL_TTL + 500);
+      }
     },
 
     // v1.1.5（批次 B1）：任务卡列表——运行/排队可取消，失败可重试，显示已耗时
     renderQueueCards() {
       const box = $('imgQueueCards');
       if (!box) return;
+      // v1.1.6：先清理过期的终态任务（error/canceled 超过 TERMINAL_TTL 自动消失），避免失败卡永久残留
+      const now = Date.now();
+      Object.keys(App.image.tasks).forEach((id) => {
+        const t = App.image.tasks[id];
+        if (!t) return;
+        if ((t.status === 'error' || t.status === 'canceled') && t.endedAt && (now - t.endedAt) > TERMINAL_TTL) {
+          delete App.image.tasks[id];
+        }
+        if (t && (t.status === 'done' || t.status === 'removed')) delete App.image.tasks[id];
+      });
       const terminals = Object.values(App.image.tasks)
         .filter((t) => t && (t.status === 'error' || t.status === 'canceled'))
         .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
-        .slice(0, 3);
+        .slice(0, 2);
       const queuePos = (id) => App.image.queue.indexOf(id) + 1;
       const cards = [];
       const cur = App.image.currentId ? App.image.tasks[App.image.currentId] : null;
@@ -967,8 +987,8 @@
         let state = '', act = '';
         if (t.status === 'running') { state = '<span class="qc-dot qc-run"></span>生成中 ' + elapsed(t); act = '<button class="mini qc-act" data-qact="cancel" data-qid="' + t.id + '">取消</button>'; }
         else if (t.status === 'queued') { state = '<span class="qc-dot qc-wait"></span>排队第 ' + queuePos(t.id) + ' 位'; act = '<button class="mini qc-act" data-qact="remove" data-qid="' + t.id + '">移出</button>'; }
-        else if (t.status === 'error') { state = '<span class="qc-dot qc-err"></span>失败 ' + elapsed(t); act = '<button class="mini qc-act" data-qact="retry" data-qid="' + t.id + '">重试</button>'; }
-        else if (t.status === 'canceled') { state = '<span class="qc-dot qc-cancel"></span>已取消'; }
+        else if (t.status === 'error') { state = '<span class="qc-dot qc-err"></span>失败 ' + elapsed(t); act = '<button class="mini qc-act" data-qact="retry" data-qid="' + t.id + '">重试</button><button class="mini qc-act" data-qact="dismiss" data-qid="' + t.id + '" title="消除此记录">✕</button>'; }
+        else if (t.status === 'canceled') { state = '<span class="qc-dot qc-cancel"></span>已取消'; act = '<button class="mini qc-act" data-qact="dismiss" data-qid="' + t.id + '" title="消除此记录">✕</button>'; }
         const err = t.status === 'error' && t.error ? '<div class="qc-error" title="' + esc(String(t.error)) + '">' + esc(String(t.error).slice(0, 60)) + '</div>' : '';
         return `<div class="queue-card st-${t.status}" data-qid="${t.id}">
           <div class="qc-main"><span class="qc-prompt">${brief}</span><span class="qc-meta">${meta}</span>${state}</div>
@@ -987,6 +1007,11 @@
           App.image.renderQueue();
         } else if (b.dataset.qact === 'retry') {
           App.image.enqueue({ prompt: t.prompt, finalPrompt: t.finalPrompt, style: t.style, size: t.size, n: t.n, refImg: t.refImg, adv: t.adv });
+          delete App.image.tasks[id]; // 重试后清除原失败记录
+          App.image.renderQueue();
+        } else if (b.dataset.qact === 'dismiss') {
+          delete App.image.tasks[id];
+          App.image.renderQueue();
         }
       }));
     },

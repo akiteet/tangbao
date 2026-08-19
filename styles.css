@@ -3269,6 +3269,38 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   overscroll-behavior: contain;
 }
 
+/* v1.1.6：糖创「会话」标签的卡片气泡——此前会话行直接继承糖馆的浅底无气泡外观，
+   与「预设」标签的卡片风格割裂；补 catalog 内的会话列表滚动约束与卡片气泡样式 */
+#createView .create-catalog .create-session-list {
+  flex: 1 1 0;
+  height: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 0;
+  padding: 2px;
+}
+#createView .create-catalog .create-session-row {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-hi);
+  transition: border-color .15s, box-shadow .15s;
+}
+#createView .create-catalog .create-session-row:hover {
+  border-color: var(--primary);
+  box-shadow: var(--shadow);
+}
+#createView .create-catalog .create-session-row.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+#createView .create-catalog .create-session-open b { font-size: 13.5px; }
+#createView .create-catalog .create-session-open small { font-size: 11.5px; }
+#createView .create-catalog .create-empty { margin: 30px auto; }
+
 /* The collapsed state can live on the view, shell, or workspace root. */
 @media (min-width: 901px) {
   #createView.create-library-is-collapsed .create-workspace,
