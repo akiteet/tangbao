@@ -30,9 +30,8 @@ test('v1.1.6 Bug1：terminals 展示上限收敛为 2（防止历史失败堆积
   assert.match(IMG, /\.slice\(0, 2\)/, 'terminals 切片上限为 2');
 });
 
-test('v1.1.6 Bug2：糖创 catalog 内会话列表有卡片气泡覆盖样式', () => {
-  assert.match(CSS, /#createView \.create-catalog \.create-session-list \{/, '会话列表滚动约束样式存在');
-  assert.match(CSS, /#createView \.create-catalog \.create-session-row \{/, '会话行卡片气泡样式存在');
-  assert.match(CSS, /#createView \.create-catalog \.create-session-row:hover/, '会话行 hover 样式存在');
-  assert.match(CSS, /#createView \.create-catalog \.create-session-row\.active/, '会话行 active 样式存在');
+test('v1.1.6 Bug2：糖创「预设/会话」tab 按钮补胶囊样式 + 激活态（对齐 .create-tab）', () => {
+  assert.match(CSS, /\.create-library-tabs \[data-create-library-tab\] \{[^}]*border-radius: var\(--radius-pill\)/s, 'tab 按钮有胶囊圆角');
+  assert.match(CSS, /\.create-library-tabs \[data-create-library-tab\]\.active \{[^}]*background: var\(--primary-soft\)/s, 'tab 激活态有 primary-soft 背景');
+  assert.match(CSS, /\.create-library-tabs \[data-create-library-tab\]:hover/, 'tab 有 hover 态');
 });

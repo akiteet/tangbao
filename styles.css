@@ -3215,6 +3215,21 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* v1.1.6 修订：预设/会话 tab 补胶囊样式 + 激活态，对齐顶部 .create-tab 的设计语言 */
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+#createView .create-library-tabs [data-create-library-tab]:hover { background: var(--panel-bg); color: var(--text); }
+#createView .create-library-tabs [data-create-library-tab].active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
 }
 #createView .create-catalog .create-sec {
   margin: 0;
