@@ -66,6 +66,8 @@
     const settings = value && value.settings;
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true;
     if (!hasOwn(value, 'conversations') || !hasOwn(settings, 'accounts') || !hasOwn(settings, 'providers')) return true;
+    // v1.1.6：检查非 chat 数据是否丢失——agentThreads/projects/imageHistory/docs 缺失时触发 SQLite 恢复
+    if (!hasOwn(value, 'agentThreads') || !hasOwn(value, 'projects')) return true;
     // An empty account array is recoverable unless it was produced by the
     // explicit two-step "clear all" action. This protects against a partial
     // renderer snapshot that kept providers but lost the account list.
@@ -90,6 +92,22 @@
         const fp = fs.providers && typeof fs.providers === 'object' ? fs.providers : {};
         merged.settings.providers = Object.assign({}, fp, pp);
       }
+      // v1.1.6：非 chat 数据从 fallback 恢复——primary 空但 fallback 有数据时用 fallback
+      if (Array.isArray(ps.imageHistory) && ps.imageHistory.length === 0 && Array.isArray(fs.imageHistory) && fs.imageHistory.length > 0) {
+        merged.settings.imageHistory = fs.imageHistory;
+      }
+      if (Array.isArray(ps.docs) && ps.docs.length === 0 && Array.isArray(fs.docs) && fs.docs.length > 0) {
+        merged.settings.docs = fs.docs;
+      }
+    }
+    // v1.1.6：agentThreads/projects 从 fallback 恢复
+    if (Array.isArray(p.agentThreads) && p.agentThreads.length === 0 && Array.isArray(f.agentThreads) && f.agentThreads.length > 0) {
+      merged.agentThreads = f.agentThreads;
+      if (!p.activeThreadId && f.activeThreadId) merged.activeThreadId = f.activeThreadId;
+    }
+    if (Array.isArray(p.projects) && p.projects.length === 0 && Array.isArray(f.projects) && f.projects.length > 0) {
+      merged.projects = f.projects;
+      if (!p.activeProjectId && f.activeProjectId) merged.activeProjectId = f.activeProjectId;
     }
     return merged;
   }
