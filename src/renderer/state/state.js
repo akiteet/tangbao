@@ -66,10 +66,13 @@
     const settings = value && value.settings;
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true;
     if (!hasOwn(value, 'conversations') || !hasOwn(settings, 'accounts') || !hasOwn(settings, 'providers')) return true;
-    // v1.1.6：非 chat 数据丢失检测——仅在已有会话数据时才检查 agentThreads/projects 是否缺失。
+    // v1.1.6：非 chat 数据丢失检测——仅在已有会话数据时才检查 agentThreads/projects 是否缺失或为空。
     // 全新空状态（无会话）不触发恢复，避免首次安装误判。
     const hasConversations = Array.isArray(value.conversations) && value.conversations.length > 0;
-    if (hasConversations && (!hasOwn(value, 'agentThreads') || !hasOwn(value, 'projects'))) return true;
+    if (hasConversations) {
+      if (!hasOwn(value, 'agentThreads') || !Array.isArray(value.agentThreads) || value.agentThreads.length === 0) return true;
+      if (!hasOwn(value, 'projects') || !Array.isArray(value.projects) || value.projects.length === 0) return true;
+    }
     // An empty account array is recoverable unless it was produced by the
     // explicit two-step "clear all" action. This protects against a partial
     // renderer snapshot that kept providers but lost the account list.
