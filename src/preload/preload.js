@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld('electron', {
   flushChatPartial: (input) => ipcRenderer.invoke('chat:flushPartial', input || {}),
   // M4 读源：从 SQLite 重建 App.state（空/不可用 → {ok:false}）
   loadStorage: () => ipcRenderer.invoke('storage:loadState'),
+  // v1.1.6（糖读增强）：删除单篇文档（docs 行 + 文件仓 blob）
+  deleteDoc: (docId) => ipcRenderer.invoke('storage:deleteDoc', docId),
   // M6 导入导出：完整数据备份（经系统文件对话框）
   exportState: () => ipcRenderer.invoke('storage:exportState'),
   importState: () => ipcRenderer.invoke('storage:importState'),

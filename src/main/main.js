@@ -1360,6 +1360,9 @@ safeHandle('app:relaunch', () => {
 // 仅允许写到 userData 子目录，防止越权访问其他文件
 safeHandle('fs:writeState', async (e, jsonStr, revision) => {
   try {
+    // v1.1.6（P0 防御）：非字符串 json 一律拒绝——此前 flushPartial 断线时会把
+    // undefined 传到这里，writeStateFileAtomic 会把它写成空串，导致 state.json 被清空。
+    if (typeof jsonStr !== 'string' || !jsonStr.trim()) return { ok: false, code: 'invalid_json' };
     const gate = acceptStateRevision(jsonStr, revision);
     if (!gate.ok) return gate;
     const userData = app.getPath('userData');
@@ -1368,7 +1371,7 @@ safeHandle('fs:writeState', async (e, jsonStr, revision) => {
     const file = path.join(dir, 'state.json');
     // 安全检查：最终路径必须在 userData 子树内
     if (!file.startsWith(userData + path.sep)) return { ok: false, error: '路径越权' };
-    writeStateFileAtomic(file, jsonStr || '');
+    writeStateFileAtomic(file, jsonStr);
     cleanupChatPartials(gate.revision);
     return { ok: true, revision: gate.revision };
   } catch (err) {
@@ -1756,6 +1759,21 @@ safeHandle('storage:loadState', async () => {
     return { ok: true, state: r.state };
   } catch (err) {
     return { ok: false, reason: 'load-error', error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// v1.1.6（糖读增强）：删除单篇文档（docs 行 + 文件仓 documents/{id} blob），防止删除后从 SQLite fallback 复活
+safeHandle('storage:deleteDoc', async (_e, docId) => {
+  try {
+    const svc = getStorageService();
+    if (!svc) return { ok: false, reason: 'no-sqlite', fallback: 'state.json', storageFailure };
+    if (!docId || typeof docId !== 'string') return { ok: false, reason: 'invalid-id' };
+    const store = require('../infrastructure/storage/sqlite-store');
+    if (typeof store.StorageService.deleteDoc !== 'function') return { ok: false, reason: 'deleteDoc-unavailable' };
+    store.StorageService.deleteDoc(docId);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: 'delete-failed', error: err && err.message ? err.message : String(err) };
   }
 });
 
@@ -2448,7 +2466,7 @@ function buildChildErrorPage(status, statusText, originalUrl) {
   const html = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
     + '<title>加载失败 ' + esc(status) + '</title><style>'
     + 'body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
-     + 'background:#1e1e2e;color:#cdd6f4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif}'
+     + 'background:#1e1e2e;color:#cdd6f4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC","Helvetica Neue",Arial,sans-serif}'
     + '.b{max-width:560px;padding:32px;text-align:center}'
     + '.c{font-size:44px;font-weight:700;color:#f38ba8;margin:0 0 12px}'
     + '.m{font-size:15px;line-height:1.7;margin:0 0 18px}'

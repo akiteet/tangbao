@@ -22,8 +22,18 @@
     flushStorageSync(json, revision) {
       return ipc().invokeSync('flushStorageSync', [json, revision], { ok: false });
     },
+    // v1.1.6（P0 修复）：流式部分持久化接线。此前此方法缺失，fileWriteMethod 在
+    // flushPartial 时 fallback 写全量（snapshot.json 为 undefined）→ state.json 被写空。
+    // 主进程 chat:flushPartial 已存在（写 chat-partials 增量文件，不碰 state.json）。
+    flushChatPartial(input) {
+      return ipc().invokeSync('flushChatPartial', [input || {}], { ok: false, code: 'ipc_unavailable' });
+    },
     loadStorage() {
       return ipc().invokeSync('loadStorage', [], { ok: false });
+    },
+    // v1.1.6（糖读增强）：删除单篇文档（docs 行 + 文件仓 blob，best-effort）
+    deleteDoc(docId) {
+      return ipc().invokeSync('deleteDoc', [docId], { ok: false, code: 'ipc_unavailable' });
     },
     async checkWorkspaceHealth(workspaceId) {
       const project = App.agent && App.agent.activeProject ? App.agent.activeProject() : null;

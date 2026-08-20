@@ -690,7 +690,7 @@
           ? `<textarea id="${inputId}" rows="4" placeholder="${App.escapeHtml(o.placeholder)}"></textarea>`
           : `<input type="text" id="${inputId}" value="${App.escapeHtml(o.value)}" placeholder="${App.escapeHtml(o.placeholder)}" autocomplete="off" />`;
         modal.innerHTML = `
-          <div class="modal" role="dialog" aria-modal="true" style="width:420px">
+          <div class="modal modal-sm" role="dialog" aria-modal="true">
             <div class="modal-header"><span>${App.escapeHtml(o.title)}</span>
               <button class="icon-btn" id="pmClose" aria-label="关闭">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -1749,21 +1749,15 @@
       }, '.account-row');
     },
 
-    // 生成一行模型输入（拖拽手柄 + 模型名 + 上下文窗口 + 思考类型 + 能力预设 + 删除按钮）
-    makeModelRow(v) {
+    // 生成一行模型输入（对话/文本模型 或 图像生成模型）
+    makeModelRow(v, isImage) {
       const row = document.createElement('div');
-      row.className = 'model-row';
+      row.className = 'model-row' + (isImage ? ' model-row-image' : '');
       row.draggable = true;
       const handle = document.createElement('span');
       handle.className = 'drag-handle'; handle.textContent = '⠿'; handle.title = '拖拽排序';
       const name = (v && typeof v === 'object') ? v.name : (v || '');
       const cw = (v && typeof v === 'object' && v.contextWindow) ? v.contextWindow : '';
-      const maxOutput = (v && typeof v === 'object' && v.maxOutput) ? v.maxOutput : '';
-      const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
-      const caps = (v && typeof v === 'object' && v.caps) ? v.caps : '';
-      const imageProtocol = (v && typeof v === 'object' && v.imageProtocol) ? v.imageProtocol : 'auto';
-      const imageSizeStrategy = (v && typeof v === 'object' && v.imageSizeStrategy) ? v.imageSizeStrategy : 'auto';
-      const imageSizes = (v && typeof v === 'object' && Array.isArray(v.imageSizes)) ? v.imageSizes.join(', ') : '';
       const input = document.createElement('input');
       input.type = 'text'; input.className = 'accModelRow';
       input.placeholder = '如 doubao-seed-1-6'; input.autocomplete = 'off';
@@ -1773,49 +1767,142 @@
       cwInput.placeholder = '128000'; cwInput.min = '4000'; cwInput.step = '1000';
       cwInput.title = '上下文窗口（token）';
       cwInput.value = cw;
-      const outputInput = document.createElement('input');
-      outputInput.type = 'number'; outputInput.className = 'accModelOutput';
-      outputInput.placeholder = '默认'; outputInput.min = '256'; outputInput.step = '256';
-      outputInput.title = '最大输出 token（留空使用供应商默认）';
-      outputInput.value = maxOutput;
-      const ttSel = document.createElement('select');
-      ttSel.className = 'accModelThink';
-      ttSel.title = '深度思考参数类型：按模型厂商选，不确定选「自动」';
-      [['auto', '自动（推荐）'], ['openai', '强度档·OpenAI'], ['qwen', '开关式·Qwen'], ['none', '原生推理']]
-        .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; ttSel.appendChild(o); });
-      ttSel.value = tt;
-      // M6：能力预设（工具调用/视觉输入）。不确定时选「自动推断」。
-      const capsSel = document.createElement('select');
-      capsSel.className = 'accModelCaps';
-      capsSel.title = '能力预设：决定是否给该模型发工具定义、能否收图片（不确定选「自动推断」）';
-      [['', '自动推断'], ['tool_vision', '工具+视觉'], ['tool', '工具+文本'], ['vision', '仅视觉'], ['text', '纯文本']]
-        .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; capsSel.appendChild(o); });
-      capsSel.value = caps;
-      const imageDetails = document.createElement('details');
-      imageDetails.className = 'model-image-options';
-      imageDetails.style.gridColumn = '2 / -1';
-      imageDetails.innerHTML = `<summary>图像协议与尺寸（可选）</summary><div class="model-image-options-body"><label>协议<select class="accModelImageProtocol"><option value="auto">自动</option><option value="openai-images">OpenAI Images</option><option value="sensenova-images">SenseNova Images</option></select></label><label>尺寸策略<select class="accModelImageSizeStrategy"><option value="auto">自动</option><option value="allow-list">合法尺寸列表</option><option value="custom">自定义尺寸</option></select></label><label>自定义尺寸<input class="accModelImageSizes" type="text" placeholder="1024x1024, 1792x1024" /></label></div>`;
-      const imageProtocolSel = imageDetails.querySelector('.accModelImageProtocol');
-      const imageStrategySel = imageDetails.querySelector('.accModelImageSizeStrategy');
-      const imageSizesInput = imageDetails.querySelector('.accModelImageSizes');
-      if (imageProtocolSel) imageProtocolSel.value = imageProtocol;
-      if (imageStrategySel) imageStrategySel.value = imageSizeStrategy;
-      if (imageSizesInput) imageSizesInput.value = imageSizes;
+      row.appendChild(handle); row.appendChild(input); row.appendChild(cwInput);
+      if (isImage) {
+        // 图像生成模型（糖绘专用）：协议 + 尺寸策略 + 自定义尺寸（内联紧凑）
+        const imageProtocol = (v && typeof v === 'object' && v.imageProtocol) ? v.imageProtocol : 'auto';
+        const imageSizeStrategy = (v && typeof v === 'object' && v.imageSizeStrategy) ? v.imageSizeStrategy : 'auto';
+        const imageSizes = (v && typeof v === 'object' && Array.isArray(v.imageSizes)) ? v.imageSizes.join(', ') : '';
+        const protoSel = document.createElement('select');
+        protoSel.className = 'accModelImageProtocol';
+        [['auto', '自动'], ['openai-images', 'OpenAI Images'], ['sensenova-images', 'SenseNova Images']]
+          .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; protoSel.appendChild(o); });
+        protoSel.value = imageProtocol;
+        const strategySel = document.createElement('select');
+        strategySel.className = 'accModelImageSizeStrategy';
+        [['auto', '自动'], ['allow-list', '合法尺寸列表'], ['custom', '自定义尺寸']]
+          .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; strategySel.appendChild(o); });
+        strategySel.value = imageSizeStrategy;
+        const sizesInput = document.createElement('input');
+        sizesInput.type = 'text'; sizesInput.className = 'accModelImageSizes';
+        sizesInput.placeholder = '1024x1024, 1792x1024'; sizesInput.autocomplete = 'off';
+        sizesInput.value = imageSizes;
+        row.appendChild(protoSel); row.appendChild(strategySel); row.appendChild(sizesInput);
+      } else {
+        // 对话/文本模型：最大输出 + 思考类型 + 能力预设
+        const maxOutput = (v && typeof v === 'object' && v.maxOutput) ? v.maxOutput : '';
+        const tt = (v && typeof v === 'object' && v.thinkType) ? v.thinkType : 'auto';
+        const caps = (v && typeof v === 'object' && v.caps) ? v.caps : '';
+        const outputInput = document.createElement('input');
+        outputInput.type = 'number'; outputInput.className = 'accModelOutput';
+        outputInput.placeholder = '默认'; outputInput.min = '256'; outputInput.step = '256';
+        outputInput.title = '最大输出 token（留空使用供应商默认）';
+        outputInput.value = maxOutput;
+        const ttSel = document.createElement('select');
+        ttSel.className = 'accModelThink';
+        ttSel.title = '深度思考参数类型：按模型厂商选，不确定选「自动」';
+        [['auto', '自动（推荐）'], ['openai', '强度档·OpenAI'], ['qwen', '开关式·Qwen'], ['none', '原生推理']]
+          .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; ttSel.appendChild(o); });
+        ttSel.value = tt;
+        const capsSel = document.createElement('select');
+        capsSel.className = 'accModelCaps';
+        capsSel.title = '能力预设：决定是否给该模型发工具定义、能否收图片（不确定选「自动推断」）';
+        [['', '自动推断'], ['tool_vision', '工具+视觉'], ['tool', '工具+文本'], ['vision', '仅视觉'], ['text', '纯文本']]
+          .forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; capsSel.appendChild(o); });
+        capsSel.value = caps;
+        row.appendChild(outputInput); row.appendChild(ttSel); row.appendChild(capsSel);
+      }
+      const toggle = document.createElement('button');
+      toggle.type = 'button'; toggle.className = 'model-img-toggle';
+      toggle.dataset.imgToggle = '1';
+      toggle.textContent = isImage ? '→ 文本' : '→ 生图';
+      toggle.title = isImage ? '改为对话/文本模型' : '设为图像生成模型（可配置协议与尺寸）';
+      row.appendChild(toggle);
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'model-row-del'; btn.dataset.rm = '1'; btn.textContent = '×'; btn.title = '删除该模型';
-      row.appendChild(handle); row.appendChild(input); row.appendChild(cwInput); row.appendChild(outputInput); row.appendChild(ttSel); row.appendChild(capsSel); row.appendChild(btn);
-      row.appendChild(imageDetails);
+      row.appendChild(btn);
       return row;
     },
 
     renderModelRows(models) {
       const box = $('accModels');
-      if (!box) return;
-      box.innerHTML = '';
-      const rows = (models && models.length) ? models : [''];
-      rows.forEach(v => box.appendChild(App.ui.makeModelRow(v)));
-      // M8：模型行自由拖拽（saveAccount 按 DOM 顺序收集，顺序即保存顺序）
+      const imgBox = $('accImageModels');
+      if (!box || !imgBox) return;
+      box.innerHTML = ''; imgBox.innerHTML = '';
+      const list = (models && models.length) ? models : [''];
+      const isImageModel = (m) => !!(m && typeof m === 'object' && (m.imageModel === true || m.imageProtocol || m.imageSizeStrategy || (Array.isArray(m.imageSizes) && m.imageSizes.length)));
+      for (const m of list) {
+        const img = isImageModel(m);
+        (img ? imgBox : box).appendChild(App.ui.makeModelRow(m, img));
+      }
       App.ui.bindModuleDrag(box, null, '.model-row');
+      App.ui.bindModuleDrag(imgBox, null, '.model-row');
+    },
+
+    // 从两个分区收集当前模型行（对话行不带图像字段；生图行带 imageModel + 图像字段）
+    collectModelRows() {
+      const out = [];
+      const read = (container, isImage) => {
+        if (!container) return;
+        container.querySelectorAll('.model-row').forEach((row) => {
+          const nameInput = row.querySelector('.accModelRow');
+          const ctxInput = row.querySelector('.accModelCtx');
+          const n = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
+          if (!n) return;
+          const cw = (ctxInput && ctxInput.value) ? parseInt(ctxInput.value, 10) : 128000;
+          const m = { name: n, contextWindow: (cw > 0) ? cw : 128000 };
+          if (isImage) {
+            const protoSel = row.querySelector('.accModelImageProtocol');
+            const strategySel = row.querySelector('.accModelImageSizeStrategy');
+            const sizesInput = row.querySelector('.accModelImageSizes');
+            const p = (protoSel && protoSel.value) ? protoSel.value : 'auto';
+            const s = (strategySel && strategySel.value) ? strategySel.value : 'auto';
+            const sz = (sizesInput && sizesInput.value)
+              ? sizesInput.value.split(/[\s,;]+/).filter((x) => /^\d{3,5}x\d{3,5}$/.test(x)).slice(0, 32)
+              : [];
+            m.imageModel = true;
+            if (p !== 'auto') m.imageProtocol = p;
+            if (s !== 'auto') m.imageSizeStrategy = s;
+            if (sz.length) m.imageSizes = sz;
+          } else {
+            const outputInput = row.querySelector('.accModelOutput');
+            const ttSel = row.querySelector('.accModelThink');
+            const capsSel = row.querySelector('.accModelCaps');
+            const maxOutput = (outputInput && outputInput.value) ? parseInt(outputInput.value, 10) : 0;
+            const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
+            const caps = (capsSel && capsSel.value) ? capsSel.value : '';
+            m.thinkType = tt;
+            if (maxOutput > 0) m.maxOutput = maxOutput;
+            if (caps) m.caps = caps;
+          }
+          out.push(m);
+        });
+      };
+      read($('accModels'), false);
+      read($('accImageModels'), true);
+      return out;
+    },
+
+    // 行内切换对话/生图分区（保留已填内容，仅翻转 imageModel 并重渲染）
+    toggleModelImage(row) {
+      const wasImage = row.classList.contains('model-row-image');
+      const nameInput = row.querySelector('.accModelRow');
+      const name = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
+      const all = App.ui.collectModelRows();
+      let target = name ? all.find((m) => m.name === name) : null;
+      if (!target) {
+        target = { name, contextWindow: 128000 };
+        if (!wasImage) target.thinkType = 'auto';
+        all.push(target);
+      }
+      if (wasImage) {
+        // 生图 → 对话：清图像字段
+        delete target.imageProtocol; delete target.imageSizeStrategy; delete target.imageSizes; delete target.imageModel;
+        if (!target.thinkType) target.thinkType = 'auto';
+      } else {
+        target.imageModel = true;
+      }
+      App.ui.renderModelRows(all);
     },
 
     // M8：账户编辑改为 modal 弹窗（点击「添加账户/编辑」才弹出；已保存账户列表保持原位）
@@ -1838,6 +1925,19 @@
         App.ui.markKeyField($('accKey'), '__new__', '粘贴你的 API Key');
         App.ui.renderModelRows(['']);
       }
+      // 行内切换对话/生图分区（事件委托，只绑一次）
+      ['accModels', 'accImageModels'].forEach((cid) => {
+        const box = $(cid);
+        if (!box || box.dataset.imgToggleBound) return;
+        box.dataset.imgToggleBound = '1';
+        box.addEventListener('click', (e) => {
+          const t = e.target.closest('[data-img-toggle]');
+          if (!t) return;
+          e.stopPropagation();
+          const row = t.closest('.model-row');
+          if (row) App.ui.toggleModelImage(row);
+        });
+      });
       modal.hidden = false;
       $('accName').focus();
     },
@@ -1855,43 +1955,23 @@
       const name = $('accName').value.trim();
       const apiBase = $('accBase').value.trim();
       const apiKey = $('accKey').value.trim();
-      const models = [];
-      document.querySelectorAll('#accModels .model-row').forEach(row => {
-        const nameInput = row.querySelector('.accModelRow');
-        const ctxInput = row.querySelector('.accModelCtx');
-        const outputInput = row.querySelector('.accModelOutput');
-        const ttSel = row.querySelector('.accModelThink');
-        const capsSel = row.querySelector('.accModelCaps');
-        const imageProtocolSel = row.querySelector('.accModelImageProtocol');
-        const imageStrategySel = row.querySelector('.accModelImageSizeStrategy');
-        const imageSizesInput = row.querySelector('.accModelImageSizes');
-        const n = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
-        if (!n) return;
-        const cw = (ctxInput && ctxInput.value) ? parseInt(ctxInput.value, 10) : 128000;
-        const maxOutput = (outputInput && outputInput.value) ? parseInt(outputInput.value, 10) : 0;
-        const tt = (ttSel && ttSel.value) ? ttSel.value : 'auto';
-        const caps = (capsSel && capsSel.value) ? capsSel.value : '';
-        const imageProtocol = imageProtocolSel && imageProtocolSel.value ? imageProtocolSel.value : 'auto';
-        const imageSizeStrategy = imageStrategySel && imageStrategySel.value ? imageStrategySel.value : 'auto';
-        const imageSizes = imageSizesInput && imageSizesInput.value
-          ? imageSizesInput.value.split(/[\s,;]+/).filter((size) => /^\d{3,5}x\d{3,5}$/.test(size)).slice(0, 32)
-          : [];
-        const previous = previousAccount && Array.isArray(previousAccount.models)
-          ? previousAccount.models.find((item) => (typeof item === 'string' ? item : item && item.name) === n)
-          : null;
-        const m = { name: n, contextWindow: (cw > 0) ? cw : 128000, thinkType: tt };
-        if (imageProtocol !== 'auto') m.imageProtocol = imageProtocol;
-        if (imageSizeStrategy !== 'auto') m.imageSizeStrategy = imageSizeStrategy;
-        if (imageSizes.length) m.imageSizes = imageSizes;
-        if (caps) m.caps = caps; // M6：能力预设
-        if (maxOutput > 0) m.maxOutput = maxOutput;
-        if (previous && typeof previous === 'object') {
-          if (previous.timeoutMs > 0) m.timeoutMs = previous.timeoutMs;
-          if (previous.budgetMaxSteps > 0) m.budgetMaxSteps = previous.budgetMaxSteps;
-          if (previous.budgetMaxCostUsd >= 0) m.budgetMaxCostUsd = previous.budgetMaxCostUsd;
+      // 分区收集：对话/文本模型（无图像字段）+ 图像生成模型（imageModel + 协议/尺寸）
+      const models = App.ui.collectModelRows();
+      // 编辑已有账户时保留既有私有字段往返（timeoutMs/budget 等）；生图模型补回对话字段（切回对话不丢）
+      if (previousAccount && Array.isArray(previousAccount.models)) {
+        for (const m of models) {
+          const prev = previousAccount.models.find((item) => (typeof item === 'string' ? item : item && item.name) === m.name);
+          if (!prev || typeof prev !== 'object') continue;
+          if (prev.timeoutMs > 0) m.timeoutMs = prev.timeoutMs;
+          if (prev.budgetMaxSteps > 0) m.budgetMaxSteps = prev.budgetMaxSteps;
+          if (prev.budgetMaxCostUsd >= 0) m.budgetMaxCostUsd = prev.budgetMaxCostUsd;
+          if (m.imageModel) {
+            if (prev.thinkType) m.thinkType = prev.thinkType;
+            if (prev.caps) m.caps = prev.caps;
+            if (prev.maxOutput > 0) m.maxOutput = prev.maxOutput;
+          }
         }
-        models.push(m);
-      });
+      }
       // 编辑已有账户时 Key 允许留空，表示沿用密钥库里已保存的那把
       const hasSaved = !!(id && App.rt && App.rt.hasSecret && App.rt.hasSecret('acc:' + id));
       if (!name || !apiBase) { App.ui.toast('请填写名称和 API Base URL'); return; }
@@ -2693,8 +2773,13 @@
       const accModal = $('accountModal');
       if (accModal) accModal.addEventListener('click', (e) => { if (e.target === accModal) App.ui.closeAccountForm(); });
       // 动态模型行：添加 / 删除（排序为拖拽，见 renderModelRows 的 bindModuleDrag）
-      $('accModelAdd').addEventListener('click', () => { $('accModels').appendChild(App.ui.makeModelRow('')); });
+      $('accModelAdd').addEventListener('click', () => { $('accModels').appendChild(App.ui.makeModelRow('', false)); });
+      $('accImageModelAdd').addEventListener('click', () => { $('accImageModels').appendChild(App.ui.makeModelRow('', true)); });
       $('accModels').addEventListener('click', (e) => {
+        const rm = e.target.closest('[data-rm]');
+        if (rm) rm.closest('.model-row').remove();
+      });
+      $('accImageModels').addEventListener('click', (e) => {
         const rm = e.target.closest('[data-rm]');
         if (rm) rm.closest('.model-row').remove();
       });

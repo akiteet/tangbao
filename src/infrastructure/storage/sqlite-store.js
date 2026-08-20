@@ -264,6 +264,7 @@ function prepare() {
   stmt.listImgFiles = db.prepare('SELECT * FROM image_files WHERE history_id=? ORDER BY seq ASC');
   stmt.allImgFiles = db.prepare('SELECT data FROM image_files');
   stmt.listDocsAll = db.prepare('SELECT * FROM docs ORDER BY created_at DESC');
+  stmt.delDoc = db.prepare('DELETE FROM docs WHERE id=?');
   stmt.listThreadsAll = db.prepare('SELECT * FROM agent_threads ORDER BY updated_at DESC');
 
   // ---- M7（v1.0.8）：工作流运行历史（独立表，不随 App.state 写穿） ----
@@ -498,6 +499,11 @@ function getDocText(id) {
   if (!fileRepo) return null;
   const buf = fileRepo.get('documents', id);
   return buf ? buf.toString('utf8') : null;
+}
+// v1.1.6（糖读增强）：删除文档行 + 文件仓 documents/{id} blob，避免删除后从 SQLite fallback 复活
+function deleteDoc(id) {
+  stmt.delDoc.run(id);
+  try { fileRepo.remove('documents', id); } catch (_) { /* 文件仓删除失败不阻断 */ }
 }
 
 function upsertProject(p) {
@@ -1255,7 +1261,7 @@ const StorageService = {
   upsertTemplate, listTemplates, deleteTemplate,
   upsertWorkflow, listWorkflows, deleteWorkflow,
   upsertImageHistory, addImageFile,
-  upsertDoc, getDocText,
+  upsertDoc, getDocText, deleteDoc,
   upsertProject, listProjects,
   upsertThread,
   getAccountModels, listImageHistory, listImageFiles, listDocs, listThreads,

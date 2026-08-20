@@ -19,7 +19,7 @@ test('v1.1.4 Tangguan library collapse is runtime-only and uses the 900px deskto
   assert.match(css, /--module-library-rail-width:\s*40px/);
   assert.match(css, /--module-library-tab-width:\s*32px/);
   assert.match(css, /--module-library-tab-height:\s*58px/);
-  assert.match(css, /--module-library-tab-font-size:\s*12px/);
+  assert.match(css, /--module-library-tab-font-size:\s*var\(--fs-sm\)/);
   assert.match(css, /#tangguanView \.tg-workspace\.tg-library-is-collapsed[\s\S]*grid-template-columns: var\(--module-library-rail-width\)/);
   assert.match(css, /#createView \.create-library-head > div[\s\S]*flex-direction: column/);
   assert.match(css, /#createView \.create-library-head small[\s\S]*display: block/);

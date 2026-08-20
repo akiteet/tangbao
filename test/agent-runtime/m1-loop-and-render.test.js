@@ -62,5 +62,5 @@ test('M2：恢复会话时思考节点使用 agent-think class，且 CSS 提供 
   assert.match(restoreSeg, /className\s*=\s*'agent-think'/, 'restoreThread 的 thinking 节点必须使用 agent-think（小字样式）');
   assert.doesNotMatch(restoreSeg, /className\s*=\s*'agent-thinking'/, 'restoreThread 不应再用未定义样式的 agent-thinking');
   // 兜底：styles.css 同时为 agent-thinking 留 alias 规则，避免旧 DOM / 测试残留类目落到默认 body 字体
-  assert.match(styles, /\.agent-thinking\s*\{[^}]*font-size:\s*12\.5px/s, 'styles.css 必须给 agent-thinking 提供与 agent-think 一致的 12.5px 样式');
+  assert.match(styles, /\.agent-thinking\s*\{[^}]*font-size:\s*var\(--fs-sm\)/s, 'styles.css 必须给 agent-thinking 提供与 agent-think 一致的 12px 样式');
 });

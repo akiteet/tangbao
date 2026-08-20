@@ -8,10 +8,30 @@
   <br/>
   <sub><a href="README.en.md">English</a></sub>
 </p>
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.1.6-1a5cff" alt="Version" />
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License" />
+  <img src="https://img.shields.io/badge/Electron-31-47848f" alt="Electron" />
+  <img src="https://img.shields.io/badge/tests-487%20passing-2ea44f" alt="Tests" />
+  <img src="https://img.shields.io/badge/SQLite-3-green" alt="SQLite" />
+</p>
 
 ---
 
 > 一个「纯前端 + 本地后端」的 AI 桌面应用，用 Electron 打造，零云服务依赖。接入你自己的 API Key，让对话、编码、绘图、文档分析全部在本地完成——密钥不出本机，数据归你所有。
+
+## 目录
+
+- [简介](#简介)
+- [功能特性](#功能特性)
+- [安装](#安装)
+- [配置](#配置)
+- [糖码 · 编码助手](#糖码--编码助手)
+- [技能（Skills）](#技能skills)
+- [数据与升级提示](#数据与升级提示)
+- [开发](#开发)
+- [版本历史](#版本历史)
+- [License](#license)
 
 ## 简介
 
@@ -109,13 +129,49 @@ tangbao/
 └── package.json
 ```
 
-- **测试**：`npm test`（当前 472 个用例，467 个通过、5 个跳过——4 个 SQLite ABI 用例由 `npm run check:sqlite` 在 Electron 运行时真实执行、1 个评测存档用例需设 `TANGBAO_EVAL_ARCHIVE_DIR`——0 个失败）
+**运行时架构**：
+
+```
+┌───────────────────────────── 渲染进程（Renderer） ─────────────────────────────┐
+│  SPA（原生 HTML/CSS/JS）                                                        │
+│  聊天 / 糖码 / 糖绘 / 糖读 / 糖创 / 糖馆 ··· 模块视图                              │
+└──────────────┬────────────────────────────────────────────────────────────────┘
+               │ preload 安全桥（contextBridge，仅白名单 IPC）
+┌──────────────▼────────────────────────────────────────────────────────────────┐
+│  Electron 主进程（Main）                                                        │
+│  ├─ 模型网关 gateway（转发到 OpenAI 兼容 API，密钥只存主进程）                      │
+│  ├─ SQLite 存储（better-sqlite3）+ state.json 双写 + 文件仓（附件/图片/文档）       │
+│  ├─ 密钥库（OS safeStorage 加密，渲染进程拿不到明文）                              │
+│  └─ 糖码本地后端（agent-server：工具执行、权限、检查点、技能）                      │
+└──────────────┬────────────────────────────────────────────────────────────────┘
+               │ 本机 127.0.0.1 随机端口（Bearer 启动令牌鉴权）
+┌──────────────▼────────────────────────────────────────────────────────────────┐
+│  模型供应商（OpenAI / 豆包 / 通义千问 / Claude / Gemini / 兼容中转）               │
+└────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **测试**：`npm test`（当前 487 个用例，482 个通过、5 个跳过——4 个 SQLite ABI 用例由 `npm run check:sqlite` 在 Electron 运行时真实执行、1 个评测存档用例需设 `TANGBAO_EVAL_ARCHIVE_DIR`——0 个失败）
 - **评测存档**：`eval-task-contracts` 里的 med-007 历史产物用例需设置 `TANGBAO_EVAL_ARCHIVE_DIR` 指向本机 `eval-runs-archive-*` 目录后才会真实执行，未设置时优雅跳过
 - **闭环门禁**：`npm run check:version`、`npm run check:storage`、`npm run check:perf`、`npm run check:electron-abi`、`npm run check:sqlite`（Electron 运行时跑 SQLite 用例，补纯 Node 的 ABI 跳过）、`npm run check:ui`、`npm run check:release`、`npm run bench:offline`
 - **打包**：`npm run dist`（Electron 31 + electron-builder，产物在 `dist/`）
 - **数据模型**：见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.5
+## 版本历史
+
+### v1.1.6（性能与数据瘦身）
+
+- **切换卡顿根治**：`activate()` 同步全量序列化（三次 `JSON.stringify`，含 base64 附件）是切换卡顿的根因——持久化移出切换帧、浮窗脱敏改为手动浅拷贝、附件外置后不再拖累每次保存。
+- **聊天附件外置**：图片附件发送即落盘（复用糖绘 image-assets 基础设施），state 只存引用；惰性迁移旧内联附件，超配额回退内联不丢数据。
+- **性能可观测**：设置 → 数据 → 性能诊断（开关 + 导出快照 + 清空），11 项性能指标可查。
+- **SQLite 优化**：`PRAGMA synchronous=NORMAL` + `syncState` 增量 upsert（失败回退 clearAll），主进程写穿不再阻塞。
+- **UI 灵动晶莹升级**：设计令牌补全、弹簧微动效、晶莹质感分层、组件风格统一；语义色令牌（危险/成功/警告）体系化。
+- **字体体系升级**：引入本地 JetBrains Mono（OFL，离线可用）作为代码/数据字体，中文回退补全，字号收敛为令牌阶梯。
+- **糖读模块增强**：Q&A 历史持久化、停止生成、翻译方向选择、长文档分段分析、Word/PPT 解析、文档重命名/导出/上限提示。
+- **数据可靠性**：修复流式部分持久化断线（P0，曾导致 state.json 被写空）；SQLite 兜底恢复完整，启动自动治愈。
+
+详细说明见 [docs/CHANGELOG-v1.1.6.md](docs/CHANGELOG-v1.1.6.md)。
+
+### v1.1.5
 
 - 架构减重：4158 行的糖码引擎拆分出四个聚焦模块（HTTP 传输层 agent-server-http、工具协议定义正名迁入 tool-runtime、搜索供应商 search-providers、运行态注册表 run-registry），全部行为零变化——离线基准与 v1.1.4 逐字节一致（seed 1337，成功率 0.875）。
 - 基础设施收敛：主进程与糖码后端共用一份 HTTP 鉴权实现（常数时间比较 + 回环校验），readJson/clone/escapeHtml 与渲染层 IPC 容错包装各自收敛为单一实现。
@@ -125,7 +181,7 @@ tangbao/
 
 详细说明见 [docs/CHANGELOG-v1.1.5.md](docs/CHANGELOG-v1.1.5.md)。
 
-## v1.1.4（历史版本）
+### v1.1.4（历史版本）
 
 - 糖馆角色工作区：提供角色卡预设、AI 草稿预览、脏状态保护、JSON 导入/导出，以及 Tavern/SillyTavern 常见字段和 `character_book.entries` 兼容。
 - 角色隔离会话：糖馆角色会话与普通聊天分离；糖创任务会话也使用独立侧车，切换模块、删除会话和空状态均保持所属边界。
@@ -139,7 +195,7 @@ tangbao/
 
 详细说明与升级注意事项见 [docs/CHANGELOG-v1.1.4.md](docs/CHANGELOG-v1.1.4.md)。
 
-## v1.1.3（历史版本）
+### v1.1.3（历史版本）
 
 - 稳定性闭环：数据目录迁移状态、临时复制校验、失败回滚、恢复中心、SQLite/state 一致性审计、备份与隔离清理预览。
 - 模型与 Cache 管理：Provider Health、模型配置档案、统一模型调用指标，以及用户主动触发的真实 Cache Probe；Provider 未返回 Usage 时保持未知。
@@ -147,7 +203,7 @@ tangbao/
 - Agent 工程：只读 Trace Inspector、协作树、Budget/Abort/Error 归一化、脱敏导出和可重复的 Runtime Offline Benchmark。
 - 数据目录迁移后会在条件满足时自动恢复旧 Windows 密钥上下文，不要求重新填写 API Key；密钥不进入普通备份、诊断包或 Trace 导出。
 
-## v1.1.1（历史版本）
+### v1.1.1（历史版本）
 
 - 并行 `explore / test / review` 子代理最多 8 个任务、3 个并发，超出并发进入队列；子代理只读，父代理统一修改。
 - 子代理结果包含 findings、证据、checks、耗时和失败原因；部分成功会标记为 degraded/blocked，并可在运行历史中查看协作树。

@@ -15,6 +15,9 @@
   <script src="vendor/purify.min.js"></script>
   <!-- PDF.js（本地 vendored，ESM 离线可用；缺失时糖读降级为粘贴文本）。脚本外提为 src/renderer/views/documents/pdf-boot.mjs，否则 CSP 的 script-src 'self' 会拦截内联模块脚本 -->
   <script type="module" src="src/renderer/views/documents/pdf-boot.mjs"></script>
+  <!-- v1.1.6（糖读增强）：Word(.docx) / PPT(.pptx) 本地解析库（vendor 静态文件，离线可用） -->
+  <script src="vendor/mammoth.browser.min.js"></script>
+  <script src="vendor/jszip.min.js"></script>
 </head>
 <body>
   <div class="app" id="app">
@@ -455,45 +458,52 @@
               <div class="help-section-title">模块一览</div>
               <div class="help-grid">
                 <div class="help-module">
-                  <div class="help-module-icon" style="background:#e8f0fe;color:#1a73e8;">💬</div>
+                  <div class="help-module-icon help-module-icon--chat">💬</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖包 · 聊天</div>
                     <div class="help-module-desc">多轮对话。顶部可切换模型、开启「深度思考」与「联网搜索」，对话可通过顶部 ⋯ 菜单导出或复制为 Markdown。</div>
                   </div>
                 </div>
                 <div class="help-module">
-                  <div class="help-module-icon" style="background:#fce8f3;color:#d81b8c;">🎨</div>
+                  <div class="help-module-icon help-module-icon--image">🎨</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖绘 · 图像</div>
                     <div class="help-module-desc">输入文字描述生成图片。</div>
                   </div>
                 </div>
                 <div class="help-module">
-                  <div class="help-module-icon" style="background:#e6f4ea;color:#137333;">📖</div>
+                  <div class="help-module-icon help-module-icon--doc">📖</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖读 · 文档</div>
                     <div class="help-module-desc">上传文档后，可对内容进行总结、提取要点、翻译、生成提纲等分析。</div>
                   </div>
                 </div>
                 <div class="help-module">
-                  <div class="help-module-icon" style="background:#fef7e0;color:#b06000;">🤖</div>
+                  <div class="help-module-icon help-module-icon--create">🤖</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖创 · 智能体</div>
                     <div class="help-module-desc">面向任务型智能体、工具和工作流。可使用预设或自建智能体，配置系统提示词、语气、模型与多步骤执行；角色卡和沉浸式会话请使用糖馆。</div>
                   </div>
                 </div>
                 <div class="help-module">
-                  <div class="help-module-icon" style="background:#fff0e6;color:#c45b16;">🏯</div>
+                  <div class="help-module-icon help-module-icon--tangguan">🏯</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖馆 · 角色会话</div>
                     <div class="help-module-desc">角色卡与沉浸式角色会话。角色设定、开场白、快捷 starter 和专属世界书只作用于当前角色，不会自动出现在糖创中。</div>
                   </div>
                 </div>
                 <div class="help-module">
-                  <div class="help-module-icon" style="background:#f3e8fd;color:#7c3aed;">⚡</div>
+                  <div class="help-module-icon help-module-icon--agent">⚡</div>
                   <div class="help-module-body">
                     <div class="help-module-name">糖码 · 本地智能体</div>
                     <div class="help-module-desc">本地运行的 agentic 编码助手。在限定工作目录内自主调用工具——读写文件、执行命令、运行 git、联网检索；以「项目 + 多会话」组织，每步受权限管控。</div>
+                  </div>
+                </div>
+                <div class="help-module">
+                  <div class="help-module-icon help-module-icon--create">🔌</div>
+                  <div class="help-module-body">
+                    <div class="help-module-name">自定义模块</div>
+                    <div class="help-module-desc">在设置 → 自定义模块中，通过 iframe / webview 嵌入你自己的应用或网页，与内置模块并排使用。</div>
                   </div>
                 </div>
               </div>
@@ -559,7 +569,7 @@
               <div class="help-section-title">关于糖包</div>
               <div class="set-card about-card">
                 <div class="about-logo">糖</div>
-                <div class="about-name">糖包 <span class="about-ver">v1.1.4</span></div>
+                <div class="about-name">糖包 <span class="about-ver">v1.1.6</span></div>
                 <div class="about-meta">创作者：<b>世界上最帅的人</b></div>
                 <div class="about-slogan">糖包 · 把想要的 AI，装进你自己的桌面</div>
                 <div class="about-meta" style="margin-top:6px;font-size:11.5px;color:var(--text-tertiary)">Local-first AI workstation · 密钥不出本机</div>
@@ -570,31 +580,31 @@
               <p class="hint" style="margin:0 0 10px">数据、安全、技能与版本说明——点击卡片查看仓库文档：</p>
               <div class="help-grid">
                 <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/DATA_MODEL.md" target="_blank" rel="noopener">
-                  <div class="help-module-icon" style="background:#e8f0fe;color:#1a73e8">📊</div>
+                  <div class="help-module-icon help-module-icon--chat">📊</div>
                   <div class="help-module-body">
                     <div class="help-module-name">数据模型 · DATA_MODEL</div>
                     <div class="help-module-desc">数据库表结构、关键字段与数据流向。</div>
                   </div>
                 </a>
                 <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/CROSS_MODULE.md" target="_blank" rel="noopener">
-                  <div class="help-module-icon" style="background:#fef3e0;color:#b26a00">🛡️</div>
+                  <div class="help-module-icon help-module-icon--create">🛡️</div>
                   <div class="help-module-body">
                     <div class="help-module-name">跨模块安全 · CROSS_MODULE</div>
-                    <div class="help-module-desc">当前版本安全设计：密钥、权限与跨模块隔离。</div>
+                    <div class="help-module-desc">安全设计演进记录：密钥、权限与跨模块隔离。</div>
                   </div>
                 </a>
                 <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/SKILLS.md" target="_blank" rel="noopener">
-                  <div class="help-module-icon" style="background:#e6f7ee;color:#0a7a43">⚙️</div>
+                  <div class="help-module-icon help-module-icon--doc">⚙️</div>
                   <div class="help-module-body">
                     <div class="help-module-name">技能 · SKILLS</div>
                     <div class="help-module-desc">糖码技能安装与调用指南（/skills、/skill、/ 菜单）。</div>
                   </div>
                 </a>
-                <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/CHANGELOG-v1.0.8.md" target="_blank" rel="noopener">
-                  <div class="help-module-icon" style="background:#f3e8fd;color:#7c3aed">📜</div>
+                <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/CHANGELOG-v1.1.6.md" target="_blank" rel="noopener">
+                  <div class="help-module-icon help-module-icon--agent">📜</div>
                   <div class="help-module-body">
                     <div class="help-module-name">更新日志 · CHANGELOG</div>
-                    <div class="help-module-desc">v1.0.8 版本演进与变更记录。</div>
+                    <div class="help-module-desc">各版本演进与变更记录（最新 v1.1.6）。</div>
                   </div>
                 </a>
               </div>
@@ -662,10 +672,15 @@
           <div class="field"><span class="field-label">API Base URL</span><input type="text" id="accBase" placeholder="https://ark.cn-beijing.volces.com/api/v3" autocomplete="off" /></div>
           <div class="field"><span class="field-label">API Key</span><div class="key-field"><input type="password" id="accKey" placeholder="粘贴你的 API Key" autocomplete="off" /><button type="button" class="key-eye" data-eye="accKey" title="显示/隐藏" aria-label="显示/隐藏 API Key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
           <div class="field"><span class="field-label">模型列表（可多个，拖动 ⠿ 排序）</span>
+            <div class="model-sec-title">对话 / 文本模型</div>
             <div class="model-row-head"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-output">最大输出</span><span class="h-think">思考类型</span><span class="h-caps">能力预设</span><span class="h-del"></span></div>
             <div id="accModels"></div>
             <button type="button" class="btn-ghost mini-add" id="accModelAdd">+ 添加模型</button>
-            <p class="hint model-row-hint">「模型名」填供应商给的模型 ID；「上下文窗口」填该模型最大 token（如 128000，留空用默认）；「思考类型」决定糖包如何发送深度思考指令：<b>强度档·OpenAI</b> 可调低/中/高，<b>开关式·Qwen</b> 只有开/关，<b>原生推理</b>（grok、deepseek、豆包 等）模型自己会思考、无需参数，其中豆包在「思考·关」时可显式关闭，不确定就选 <b>自动</b>；「能力预设」决定是否给该模型发送工具定义、能否接收图片输入：<b>工具+视觉 / 工具+文本 / 仅视觉 / 纯文本</b>，不确定就选 <b>自动推断</b>。</p>
+            <div class="model-sec-title model-sec-title--image">图像生成模型<span class="model-sec-sub">（糖绘专用，可配置协议与尺寸）</span></div>
+            <div class="model-row-head model-row-head--image"><span class="h-name">模型名</span><span class="h-ctx">上下文窗口</span><span class="h-proto">协议</span><span class="h-strategy">尺寸策略</span><span class="h-sizes">自定义尺寸</span><span class="h-del"></span></div>
+            <div id="accImageModels"></div>
+            <button type="button" class="btn-ghost mini-add" id="accImageModelAdd">+ 添加生图模型</button>
+            <p class="hint model-row-hint">「模型名」填供应商给的模型 ID；「上下文窗口」填该模型最大 token（如 128000，留空用默认）；「思考类型」决定糖包如何发送深度思考指令：<b>强度档·OpenAI</b> 可调低/中/高，<b>开关式·Qwen</b> 只有开/关，<b>原生推理</b>（grok、deepseek、豆包 等）模型自己会思考、无需参数，其中豆包在「思考·关」时可显式关闭，不确定就选 <b>自动</b>；「能力预设」决定是否给该模型发送工具定义、能否接收图片输入：<b>工具+视觉 / 工具+文本 / 仅视觉 / 纯文本</b>，不确定就选 <b>自动推断</b>。图像生成模型仅在「糖绘」模块使用，可单独配置协议与尺寸。</p>
           </div>
         </div>
       </div>

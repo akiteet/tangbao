@@ -12,7 +12,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 test('state loading rejects malformed snapshots and recovers missing account fields from a fallback', () => {
   const state = read('src/renderer/state/state.js');
   assert.match(state, /function parseStateCandidate\(raw, oldFormat\)/);
-  assert.match(state, /function stateNeedsRecovery\(value\)/);
+  assert.match(state, /function stateNeedsRecovery\(value(?:, opts)?\)/);
   assert.match(state, /function mergeMissingState\(primary, fallback\)/);
   assert.match(state, /if \(primary\.oldFormat \|\| recovered\) App\.persist\(\)/);
   assert.match(state, /App\.state = ns;\s*if \(opts\.persist === true\) App\.persist\(\)/);
@@ -36,7 +36,7 @@ test('state writes are atomic and stale revisions are ignored', () => {
   assert.match(main, /function acceptStateRevision\(payload, explicitRevision\)/);
   assert.match(main, /function writeStateFileAtomic\(file, content\)/);
   assert.match(main, /reason: 'stale_state_revision'/);
-  assert.match(main, /writeStateFileAtomic\(file, jsonStr \|\| ''\)/);
+  assert.match(main, /writeStateFileAtomic\(file, jsonStr\)/);
   assert.match(preload, /saveStateJSON: \(jsonStr, revision\)/);
   assert.match(preload, /syncStorage: \(json, revision\)/);
   assert.match(preload, /flushStorageSync: \(json, revision\)/);
@@ -58,7 +58,7 @@ test('account model rows keep a visible model name column and scroll instead of 
   const styles = read('styles.css');
   assert.match(html, /class="h-output">/);
   assert.match(styles, /\.model-row, \.model-row-head \{[^}]*display:\s*grid/);
-  assert.match(styles, /grid-template-columns:\s*16px minmax\(190px, 1fr\) 88px 88px 124px 110px 30px/);
+  assert.match(styles, /grid-template-columns:\s*16px minmax\(190px, 1fr\) 88px 88px 124px 110px 56px 30px/);
   assert.match(styles, /\.model-row \.accModelRow \{[^}]*min-width:\s*150px/);
   assert.match(styles, /\.model-row \.accModelOutput \{[^}]*width:\s*88px[^}]*flex:\s*none/);
   assert.match(styles, /#accountModal \.account-form \{[^}]*overflow-x:\s*auto/);

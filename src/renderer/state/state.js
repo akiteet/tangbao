@@ -62,7 +62,8 @@
     return !!(value && value._persistence && value._persistence.allowAccountReset === true);
   }
 
-  function stateNeedsRecovery(value) {
+  function stateNeedsRecovery(value, opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
     const settings = value && value.settings;
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true;
     if (!hasOwn(value, 'conversations') || !hasOwn(settings, 'accounts') || !hasOwn(settings, 'providers')) return true;
@@ -72,6 +73,9 @@
     if (hasConversations) {
       if (!hasOwn(value, 'agentThreads') || !Array.isArray(value.agentThreads) || value.agentThreads.length === 0) return true;
       if (!hasOwn(value, 'projects') || !Array.isArray(value.projects) || value.projects.length === 0) return true;
+      // v1.1.6 加固：有会话但 customModules 为空 → 触发恢复（fallback 有数据则补回，防自定义模块再次静默丢失）。
+      // opts.ignoreCustomModules=true 时跳过——用于 loadState 的 incomplete 判定，避免打扰"无自定义模块"的新用户。
+      if (!o.ignoreCustomModules && Array.isArray(settings.customModules) && settings.customModules.length === 0) return true;
     }
     // An empty account array is recoverable unless it was produced by the
     // explicit two-step "clear all" action. This protects against a partial
@@ -103,6 +107,11 @@
       }
       if (Array.isArray(ps.docs) && ps.docs.length === 0 && Array.isArray(fs.docs) && fs.docs.length > 0) {
         merged.settings.docs = fs.docs;
+      }
+      // v1.1.6 补丁：customModules 同 imageHistory/docs——字段缺失或为空且 fallback 有数据时恢复，
+      // 避免 state.json 被覆盖后用户自定义模块（糖九球等）从主源消失。
+      if ((!Array.isArray(ps.customModules) || ps.customModules.length === 0) && Array.isArray(fs.customModules) && fs.customModules.length > 0) {
+        merged.settings.customModules = fs.customModules;
       }
     }
     // v1.1.6：agentThreads/projects 从 fallback 恢复
@@ -285,6 +294,14 @@
           conversationId: opts.conversationId,
           messageId: opts.messageId,
         });
+    }
+    // v1.1.6（P0 修复）：部分持久化后端缺失时跳过，绝不 fallback 写全量——
+    // 部分快照（createPartialSnapshot）没有 json 字段，fallback 会把 undefined 交给
+    // saveStateJSON → fs:writeState → writeStateFileAtomic(undefined) → state.json 被写空。
+    // 这是"三番五次数据丢失"的确定性根因：流式中途应用退出后，state.json 保持空，
+    // 下次启动走残缺 fallback，非 chat 数据永久丢失。
+    if (opts.flushPartial) {
+      return () => ({ ok: true, skipped: 'partial_backend_unavailable' });
     }
     if (App.services.fs && App.services.fs.saveStateJSON) {
       return (snapshot) => App.services.fs.saveStateJSON(snapshot.json, snapshot.revision);
@@ -883,7 +900,7 @@
       }
     }
 
-    const stillIncomplete = stateNeedsRecovery(value);
+    const stillIncomplete = stateNeedsRecovery(value, { ignoreCustomModules: true });
     App.__stateRecovery = (recovered || stillIncomplete)
       ? { code: stillIncomplete ? 'partial_state' : 'state_recovered', source: primary.source, needsUserReview: stillIncomplete }
       : null;

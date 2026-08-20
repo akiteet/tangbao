@@ -91,7 +91,7 @@ test('M6：运行出错状态卡左上角图标不再用 ✕（避免与右侧�
   const seg = agentJs.slice(idx, idx + 400);
   assert.match(seg, /agent-status-ico">⚠</, 'error 卡左上角图标必须是 ⚠');
   assert.doesNotMatch(seg, /agent-status-ico">✕</, 'error 卡左上角不得再用 ✕');
-  assert.match(styles, /\.agent-status-row\.is-error \.agent-status-ico \{[^}]*color:\s*#f5222d/, 'error 图标应有红色强调');
+  assert.match(styles, /\.agent-status-row\.is-error \.agent-status-ico \{[^}]*color:\s*var\(--danger\)/, 'error 图标应有红色强调（v1.1.6 统一收尾：令牌化）');
 });
 
 test('M7：「发送前还差」就地提示条已删除，校验改为轻量 toast', () => {

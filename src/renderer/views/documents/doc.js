@@ -9,6 +9,7 @@
   const TOP_K = 6;
   const PREVIEW_CAP = 20000;      // 预览显示上限
   const FULLTEXT_THRESHOLD = 9000;
+  const SEGMENT_TARGET = 8000;    // v1.1.6：长文档分段分析的单段目标长度（≤ FULLTEXT_THRESHOLD 避免二次截断）
   const LOW_SCORE_THRESHOLD = 0.05; // BM25 top1 得分低于此值 → 低相关提示
 
   // M7：文档分块缓存（外部 Map，避免 _chunks 字段污染 doc 对象被 persist 序列化）
@@ -16,10 +17,22 @@
 
   const AnalysisPrompts = App.DEFAULT_PROMPTS.doc;
 
+  // v1.1.6（糖读增强）：翻译方向预设（值 → { label, target }）
+  const TRANSLATE_DIRS = {
+    zh2en: { label: '中 → 英', target: '英文' },
+    en2zh: { label: '英 → 中', target: '中文' },
+    zh2ja: { label: '中 → 日', target: '日文' },
+    ja2zh: { label: '日 → 中', target: '中文' },
+    zh2ko: { label: '中 → 韩', target: '韩文' },
+    ko2zh: { label: '韩 → 中', target: '中文' },
+    auto: { label: '自动', target: '中文（自动检测源语言）' },
+  };
+
   App.doc = {
     activeId: null,
     streaming: false,
     previewText: '',
+    __abort: null,     // v1.1.6：当前流式请求的 AbortController（停止生成用）
 
     onShow() { App.doc.render(); },
 
@@ -33,6 +46,17 @@
       return list[0] || null;
     },
 
+    // v1.1.6（糖读增强）：按文档持久化的 Q&A 消息
+    chatOf(docId) {
+      const all = App.state.settings.docChat || (App.state.settings.docChat = {});
+      if (!all[docId]) all[docId] = [];
+      return all[docId];
+    },
+    clearChat(docId) {
+      const all = App.state.settings.docChat;
+      if (all && all[docId]) delete all[docId];
+    },
+
     render() {
       const wrap = document.getElementById('docView');
       if (!wrap) return;
@@ -43,11 +67,20 @@
         ? docModels.map(m => `<option value="${App.escapeHtml(m)}"${m === docSel ? ' selected' : ''}>${App.escapeHtml(m)}</option>`).join('')
         : '<option value="" disabled selected>未配置文档模型，请到设置填写</option>';
 
+      // v1.1.6：翻译方向下拉选项
+      const dirSel = App.state.settings.docTranslateDir || 'zh2en';
+      const transDirOpts = Object.entries(TRANSLATE_DIRS)
+        .map(([k, v]) => `<option value="${k}"${k === dirSel ? ' selected' : ''}>${v.label}</option>`).join('');
+
       const list = App.doc.docs();
       const docChips = list.map(d => `
         <div class="doc-chip${d.id === (App.doc.activeDoc() && App.doc.activeDoc().id) ? ' active' : ''}" data-doc="${d.id}">
-          <span class="doc-chip-name">${App.escapeHtml(d.name)}</span>
-          <button class="doc-chip-del" data-del="${d.id}" title="删除">✕</button>
+          <span class="doc-chip-name" title="${App.escapeHtml(d.name)}">${App.escapeHtml(d.name)}</span>
+          <span class="doc-chip-acts">
+            <button class="doc-chip-act" data-ren="${d.id}" title="重命名">✎</button>
+            <button class="doc-chip-act" data-exp="${d.id}" title="导出文本">↓</button>
+            <button class="doc-chip-del" data-del="${d.id}" title="删除">✕</button>
+          </span>
         </div>`).join('');
 
       wrap.innerHTML = `
@@ -73,8 +106,8 @@
               <div class="doc-sec doc-sec-upload">
                 <div class="doc-toolbar">
                   <div class="dropzone compact" id="docDropzone">
-                    <input type="file" id="docFile" accept=".txt,.md,.csv,.json,.jsonl,.log,.pdf,text/*" multiple>
-                    <span class="dz-text-sm">＋ 上传文件（可多选，支持 PDF）</span>
+                    <input type="file" id="docFile" accept=".txt,.md,.csv,.json,.jsonl,.log,.pdf,.docx,.pptx,text/*" multiple>
+                    <span class="dz-text-sm">＋ 上传文件（可多选，支持 PDF / Word / PPT / 文本）</span>
                   </div>
                   <button class="btn-ghost mini" id="docPasteBtn">粘贴文本</button>
                 </div>
@@ -86,7 +119,10 @@
                 <div class="doc-analysis-bar" id="docAnalysisBar" style="display:${App.doc.activeDoc() ? 'flex' : 'none'}">
                   <button data-act="summary">摘要</button>
                   <button data-act="points">要点</button>
-                  <button data-act="translate">翻译</button>
+                  <span class="doc-trans-wrap">
+                    <button data-act="translate">翻译</button>
+                    <select id="docTransDir" class="doc-trans-dir" title="翻译方向">${transDirOpts}</select>
+                  </span>
                   <button data-act="outline">拆解</button>
                 </div>
               </div>
@@ -98,7 +134,7 @@
               <div class="doc-empty" id="docEmpty">
                 <div class="doc-empty-ico">📄</div>
                 <div class="doc-empty-text">上传文档开始糖读</div>
-                <div class="doc-empty-sub">支持 TXT / Markdown / PDF，上传后可提问、摘要、引用溯源</div>
+                <div class="doc-empty-sub">支持 TXT / Markdown / PDF / Word / PPT，上传后可提问、摘要、引用溯源</div>
                 <button class="btn-primary" id="docEmptyBtn">选择文件</button>
               </div>
               <div class="doc-chat-area" id="docChatArea" style="display:none">
@@ -153,6 +189,13 @@
         App.persist();
       });
 
+      // v1.1.6：翻译方向选择持久化
+      const dirSel = document.getElementById('docTransDir');
+      if (dirSel) dirSel.addEventListener('change', () => {
+        App.state.settings.docTranslateDir = dirSel.value;
+        App.persist();
+      });
+
       const paste = document.getElementById('docPasteBtn');
       if (paste) paste.addEventListener('click', () => App.doc.pasteText());
 
@@ -160,6 +203,10 @@
       if (list) list.addEventListener('click', (e) => {
         const del = e.target.closest('.doc-chip-del');
         if (del) { e.stopPropagation(); App.doc.removeDoc(del.dataset.del); return; }
+        const ren = e.target.closest('[data-ren]');
+        if (ren) { e.stopPropagation(); App.doc.renameDoc(ren.dataset.ren); return; }
+        const exp = e.target.closest('[data-exp]');
+        if (exp) { e.stopPropagation(); App.doc.exportDoc(exp.dataset.exp); return; }
         const chip = e.target.closest('.doc-chip');
         if (chip) App.doc.switchDoc(chip.dataset.doc);
       });
@@ -183,7 +230,6 @@
       if (toggle) toggle.addEventListener('click', () => App.doc.toggleSidebar());
       const emptyBtn = document.getElementById('docEmptyBtn');
       if (emptyBtn) emptyBtn.addEventListener('click', () => {
-        const dz = document.getElementById('docDropzone');
         const inp = document.getElementById('docFile');
         if (inp) inp.click();
       });
@@ -230,13 +276,23 @@
       App.doc.renderOutline();
     },
 
+    // v1.1.6（糖读增强）：上传分流——PDF / Word(.docx) / PPT(.pptx) / 文本
     async readFile(file) {
       if (!file) return;
       let text = '';
-      const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+      const name = file.name || '';
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      const isPdf = file.type === 'application/pdf' || ext === 'pdf';
       try {
         if (isPdf) {
           text = await App.doc.extractPdf(file);
+        } else if (ext === 'docx') {
+          text = await App.doc.extractDocx(file);
+        } else if (ext === 'pptx') {
+          text = await App.doc.extractPptx(file);
+        } else if (ext === 'doc' || ext === 'ppt' || ext === 'xls' || ext === 'xlsx') {
+          App.ui.toast('旧版 ' + ext.toUpperCase() + ' 格式暂不支持，请另存为 .docx / .pptx 或纯文本后导入');
+          return;
         } else {
           text = await new Promise((resolve, reject) => {
             const r = new FileReader();
@@ -246,12 +302,13 @@
           });
         }
       } catch (e) {
-        App.ui.toast('读取失败：' + (e.message || e) + '（PDF 需后端或联网，请尝试粘贴文本）');
+        App.ui.toast('读取失败：' + (e.message || e) + (ext === 'pdf' ? '（PDF 解析失败，可尝试粘贴文本）' : ''));
         return;
       }
       if (file.size > MAX_DOC_CHARS) App.ui.toast('文档较大，已截断处理');
       text = text.slice(0, MAX_DOC_CHARS);
-      App.doc.addDoc({ name: file.name, text, size: file.size });
+      if (!text.trim()) { App.ui.toast('未能从文件中提取到文本内容'); return; }
+      App.doc.addDoc({ name, text, size: file.size });
     },
 
     async extractPdf(file) {
@@ -272,6 +329,40 @@
       }
     },
 
+    // v1.1.6（糖读增强）：.docx → mammoth 提取正文
+    async extractDocx(file) {
+      if (!window.mammoth) throw new Error('Word 解析库未加载');
+      try {
+        const buf = await file.arrayBuffer();
+        const result = await window.mammoth.extractRawText({ arrayBuffer: buf });
+        return String(result && result.value ? result.value : '');
+      } catch (e) {
+        throw new Error('Word 解析失败：' + (e.message || e));
+      }
+    },
+
+    // v1.1.6（糖读增强）：.pptx → jszip 解包后按 slide 顺序提取 <a:t> 文本
+    async extractPptx(file) {
+      if (!window.JSZip) throw new Error('PPT 解析库未加载');
+      try {
+        const buf = await file.arrayBuffer();
+        const zip = await window.JSZip.loadAsync(buf);
+        const slides = Object.keys(zip.files)
+          .filter(n => /^ppt\/slides\/slide\d+\.xml$/i.test(n))
+          .sort((a, b) => parseInt(a.match(/\d+/)[0], 10) - parseInt(b.match(/\d+/)[0], 10));
+        if (!slides.length) throw new Error('未找到幻灯片内容');
+        let text = '';
+        for (const n of slides) {
+          const xml = await zip.file(n).async('string');
+          const texts = Array.from(xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)).map(m => m[1]).filter(t => t.trim());
+          if (texts.length) text += texts.join(' ') + '\n';
+        }
+        return text;
+      } catch (e) {
+        throw new Error('PPT 解析失败：' + (e.message || e));
+      }
+    },
+
     pasteText() {
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
@@ -284,7 +375,7 @@
             </button>
           </div>
           <div class="modal-body">
-            <textarea id="docPasteArea" rows="8" placeholder="把文档文本粘贴到这里…" style="width:100%;min-height:160px;resize:vertical;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:14px;outline:none;"></textarea>
+            <textarea id="docPasteArea" class="paste-area" rows="8" placeholder="把文档文本粘贴到这里…"></textarea>
           </div>
           <div class="modal-footer">
             <button class="btn-ghost" id="docPasteCancel">取消</button>
@@ -321,21 +412,61 @@
       const list = App.doc.docs();
       const doc = { id: App.uid(), name, text, size, createdAt: Date.now() };
       list.unshift(doc);
-      while (list.length > MAX_DOCS) list.pop();
+      // v1.1.6：达上限不再静默丢弃——明确提示被移除的最旧文档
+      if (list.length > MAX_DOCS) {
+        const evicted = list.pop();
+        App.doc.clearChat(evicted && evicted.id);
+        App.ui.toast('文档已达上限 ' + MAX_DOCS + ' 篇，最旧的「' + (evicted && evicted.name) + '」已移除');
+      }
       App.doc.activeId = doc.id;
       App.persist();
       App.ui.toast('已添加：' + name);
       App.doc.render();
     },
 
+    // v1.1.6（糖读增强）：重命名文档
+    renameDoc(id) {
+      const d = App.doc.docs().find(x => x.id === id);
+      if (!d) return;
+      const name = window.prompt('文档新名称', d.name);
+      if (name == null) return;
+      const t = String(name).trim();
+      if (!t) { App.ui.toast('名称不能为空'); return; }
+      d.name = t;
+      App.persist();
+      App.doc.render();
+      App.ui.toast('已重命名');
+    },
+
+    // v1.1.6（糖读增强）：导出原始文本
+    exportDoc(id) {
+      const d = App.doc.docs().find(x => x.id === id);
+      if (!d) return;
+      App.doc.downloadText(d.text, (d.name || '文档').replace(/[\\/:*?"<>|]/g, '_') + '.txt');
+    },
+
+    downloadText(text, filename) {
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+
     removeDoc(id) {
       const list = App.doc.docs();
       const idx = list.findIndex(x => x.id === id);
       if (idx >= 0) list.splice(idx, 1);
+      App.doc.clearChat(id);
       chunkCache.delete(id);
       if (App.doc.activeId === id) App.doc.activeId = list[0] ? list[0].id : null;
       App.persist();
       App.doc.render();
+      // v1.1.6：best-effort 清理 SQLite docs 行 + 文件仓 blob，防止删除后从 fallback 复活
+      if (App.services && App.services.fs && typeof App.services.fs.deleteDoc === 'function') {
+        App.services.fs.deleteDoc(id).catch(() => {});
+      }
     },
 
     switchDoc(id) {
@@ -357,6 +488,52 @@
       if (empty) empty.style.display = 'none';
       document.getElementById('docChatArea').style.display = 'flex';
       App.doc.renderOutline();
+      // v1.1.6：渲染该文档持久化的 Q&A 历史
+      App.doc.renderChat();
+    },
+
+    // v1.1.6（糖读增强）：按当前文档重建 Q&A 历史消息
+    renderChat() {
+      const area = document.getElementById('docMessages');
+      if (!area) return;
+      const d = App.doc.activeDoc();
+      const msgs = d ? App.doc.chatOf(d.id) : [];
+      area.innerHTML = '';
+      for (const m of msgs) {
+        if (!m || typeof m.text !== 'string') continue;
+        if (m.role === 'user') {
+          const node = document.createElement('div');
+          node.className = 'doc-msg msg user';
+          node.innerHTML = '<div class="msg-body"><div class="bubble user-bubble"></div></div>';
+          node.querySelector('.bubble').textContent = m.text;
+          area.appendChild(node);
+        } else {
+          const node = document.createElement('div');
+          node.className = 'doc-msg msg assistant';
+          node.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
+            <div class="msg-body"><div class="msg-card">
+              <div class="bubble"></div>
+              <div class="msg-actions"><button data-doc-copy="1">复制</button><button data-doc-export="1">导出 .md</button></div>
+            </div></div>`;
+          node.querySelector('.bubble').innerHTML = App.renderMarkdown(m.text);
+          if (m.cites && m.cites.length) App.doc.renderCites(node, m.text, m.cites);
+          const copyBtn = node.querySelector('[data-doc-copy]');
+          if (copyBtn) copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(m.text).then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
+          });
+          const expBtn = node.querySelector('[data-doc-export]');
+          if (expBtn) expBtn.addEventListener('click', () => App.doc.exportAnswerMd(m.text, d && d.name));
+          area.appendChild(node);
+        }
+      }
+      area.scrollTop = area.scrollHeight;
+    },
+
+    // v1.1.6（糖读增强）：回答导出 Markdown
+    exportAnswerMd(text, docName) {
+      const stamp = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/:]/g, '-');
+      const safeName = (docName || '文档').replace(/[\\/:*?"<>|]/g, '_');
+      App.doc.downloadText(text || '', `糖读-${safeName}-${stamp}.md`);
     },
 
     renderOutline() {
@@ -518,12 +695,68 @@
       };
     },
 
-    async send(custom) {
+    // v1.1.6（糖读增强）：翻译方向化提示词（仅返回指令，资料由调用方拼接）
+    translatePrompt(base, isCustom) {
+      const dir = App.state.settings.docTranslateDir || 'zh2en';
+      const meta = TRANSLATE_DIRS[dir] || TRANSLATE_DIRS.zh2en;
+      if (isCustom) return `（翻译方向：${meta.label}）\n\n` + base;
+      return `请把下面的资料完整翻译成${meta.target}，保留原有结构与格式，只输出译文。`;
+    },
+
+    // v1.1.6（糖读增强）：长文档 → 分段（按结构化块聚合，单段 ≤ SEGMENT_TARGET）
+    segmentsOf(d) {
+      if (!d || !d.text) return [];
+      const chunks = App.doc.chunksOf(d);
+      const segs = [];
+      let cur = '';
+      for (const c of chunks) {
+        const block = (c.heading ? '【' + c.heading + '】\n' : '') + c.content;
+        if (block.length > SEGMENT_TARGET) {
+          // 单块超长：先落当前段，再把该块按字符截断成段
+          if (cur) { segs.push(cur); cur = ''; }
+          for (let i = 0; i < block.length; i += SEGMENT_TARGET) segs.push(block.slice(i, i + SEGMENT_TARGET));
+          continue;
+        }
+        if (cur && (cur + '\n' + block).length > SEGMENT_TARGET) { segs.push(cur); cur = block; }
+        else cur = cur ? cur + '\n' + block : block;
+      }
+      if (cur) segs.push(cur);
+      if (!segs.length && d.text) segs.push(d.text.slice(0, FULLTEXT_THRESHOLD));
+      return segs;
+    },
+
+    // v1.1.6（糖读增强）：分段分析——逐段串行请求，翻译类直接拼接，其余最后合并
+    async analyzeSegments(act, prompt, d) {
+      const segments = App.doc.segmentsOf(d);
+      if (segments.length <= 1) {
+        App.doc.send(prompt + '\n\n资料：\n' + d.text.slice(0, FULLTEXT_THRESHOLD));
+        return;
+      }
+      const parts = [];
+      for (let i = 0; i < segments.length; i++) {
+        if (App.doc.__abort) break; // 已被用户停止
+        App.ui.toast(`文档较长，正在分析第 ${i + 1}/${segments.length} 段…`);
+        const segText = segments[i];
+        const note = `（长文档分段处理：第 ${i + 1}/${segments.length} 段）`;
+        const text = prompt + '\n\n资料（' + note + '）：\n' + segText;
+        const result = await App.doc.send(text, { segment: true, note });
+        if (result == null) break; // 发送失败或停止
+        if (result.trim()) parts.push(result.trim());
+      }
+      if (parts.length > 1 && act !== 'translate') {
+        App.ui.toast('正在综合各段结果…');
+        const merged = parts.map((t, i) => `【第 ${i + 1} 段结果】\n${t}`).join('\n\n---\n\n');
+        await App.doc.send(`以下是同一文档分 ${parts.length} 段分析后的各段结果。请综合各段、去重合并、连贯呈现，输出一份完整的最终结果。\n\n各段结果：\n` + merged, { merge: true });
+      }
+    },
+
+    async send(custom, opts) {
       const input = document.getElementById('docInput');
       const text = (custom != null) ? custom : (input ? input.value.trim() : '');
-      if (!text || App.doc.streaming) return;
+      const o = opts && typeof opts === 'object' ? opts : {};
+      if (!text || App.doc.streaming) return null;
       const d = App.doc.activeDoc();
-      if (!d) { App.ui.toast('请先上传或粘贴文档'); return; }
+      if (!d) { App.ui.toast('请先上传或粘贴文档'); return null; }
 
       const area = document.getElementById('docMessages');
       // M10：复用聊天模块视觉（.msg.user 反向布局 + user-bubble）
@@ -532,21 +765,33 @@
       userNode.innerHTML = '<div class="msg-body"><div class="bubble user-bubble"></div></div>';
       userNode.querySelector('.bubble').textContent = text;
       area.appendChild(userNode);
-      if (input) { input.value = ''; document.getElementById('docSendBtn').disabled = true; }
+      if (input) { input.value = ''; const sendBtn = document.getElementById('docSendBtn'); if (sendBtn) sendBtn.disabled = true; }
       area.scrollTop = area.scrollHeight;
+
+      // v1.1.6：分段/合并请求是内部消息，不写入 Q&A 历史
+      if (!o.segment && !o.merge) {
+        App.doc.chatOf(d.id).push({ id: App.uid(), role: 'user', text, createdAt: Date.now() });
+      }
 
       const p = App.getProvider('doc');
       if (!p.ref || !p.hasKey || !p.model) {
         App.doc.appendError('尚未配置文档 API。请先在设置里填写“文档”或“默认”的 API 信息。');
-        return;
+        return null;
       }
-      const ctx = App.doc.buildContext(text, App.state.settings.docScope === 'all' ? 'all' : 'current');
+      // v1.1.6：分段/合并请求的资料已完整内联在消息里，不再走 BM25 检索
+      let ctx = null;
       let sysExtra;
-      if (ctx.full) {
-        sysExtra = '请仅依据以下完整资料回答用户问题。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
+      if (o.segment || o.merge) {
+        ctx = { full: false, refs: [] };
+        sysExtra = '请根据用户消息中提供的资料完成其要求。资料已完整给出，无需检索或引用其他内容。';
       } else {
-        sysExtra = '请仅依据以下带编号的资料片段回答（引用请用 [1]..[n] 格式标注来源）。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
-        if (ctx.lowConf) sysExtra = '⚠️ 检索到的资料片段与问题相关性较低，资料中很可能没有答案。请如实告知用户，不要编造。\n\n' + sysExtra;
+        ctx = App.doc.buildContext(text, App.state.settings.docScope === 'all' ? 'all' : 'current');
+        if (ctx.full) {
+          sysExtra = '请仅依据以下完整资料回答用户问题。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
+        } else {
+          sysExtra = '请仅依据以下带编号的资料片段回答（引用请用 [1]..[n] 格式标注来源）。如果资料中没有答案，请明确说明。\n\n资料：\n' + ctx.context;
+          if (ctx.lowConf) sysExtra = '⚠️ 检索到的资料片段与问题相关性较低，资料中很可能没有答案。请如实告知用户，不要编造。\n\n' + sysExtra;
+        }
       }
 
       const payload = {
@@ -554,24 +799,41 @@
         messages: [{ role: 'system', content: sysExtra }, { role: 'user', content: text }],
       };
       App.doc.streaming = true;
+      // v1.1.6：流式可中断（停止生成）
+      const controller = new AbortController();
+      App.doc.__abort = controller;
       // M10：复用聊天视觉（头像 + 卡片气泡 + 复制按钮）
       const ai = document.createElement('div');
       ai.className = 'doc-msg msg assistant';
       ai.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
         <div class="msg-body"><div class="msg-card">
           <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
-          <div class="msg-actions" style="display:none"><button data-doc-copy="1">复制</button></div>
+          <div class="msg-actions" style="display:flex">
+            <button data-doc-stop="1">停止</button>
+            <button data-doc-copy="1" style="display:none">复制</button>
+            <button data-doc-export="1" style="display:none">导出 .md</button>
+          </div>
         </div></div>`;
       area.appendChild(ai);
       const aiBubble = ai.querySelector('.bubble');
-      let acc = '', started = false;
+      const stopBtn = ai.querySelector('[data-doc-stop]');
+      const copyBtn = ai.querySelector('[data-doc-copy]');
+      const exportBtn = ai.querySelector('[data-doc-export]');
+      let acc = '', started = false, stopped = false;
+      if (stopBtn) stopBtn.addEventListener('click', () => {
+        stopped = true;
+        controller.abort();
+        stopBtn.disabled = true;
+        stopBtn.textContent = '已停止';
+      });
       try {
         // 走主进程模型网关（原来是渲染进程直连，既暴露密钥又受 CORS 限制）
-        const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', telemetry: { scope: 'documents', callType: 'document_qa' }, payload });
+        const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', telemetry: { scope: 'documents', callType: 'document_qa' }, payload, signal: controller.signal });
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
           aiBubble.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
-          App.doc.streaming = false; return;
+          App.doc.streaming = false; App.doc.__abort = null;
+          return null;
         }
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -597,29 +859,59 @@
             }
           }
         }
-        // 引用溯源
-        if (!ctx.full && ctx.refs.length) App.doc.renderCites(ai, acc, ctx.refs);
-        // 完成：显示复制按钮
-        const actions = ai.querySelector('.msg-actions');
-        if (actions) actions.style.display = 'flex';
-        const copyBtn = ai.querySelector('[data-doc-copy]');
-        if (copyBtn) copyBtn.addEventListener('click', () => {
-          navigator.clipboard.writeText(acc || '').then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
-        });
       } catch (err) {
-        aiBubble.innerHTML = `<span class="error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</span>`;
+        if (err && err.name === 'AbortError') {
+          // 用户主动停止：保留已累积内容
+        } else {
+          aiBubble.innerHTML = `<span class="error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</span>`;
+        }
       }
       App.doc.streaming = false;
+      App.doc.__abort = null;
+      if (!started && !acc && !stopped) {
+        // 空响应（可能 [DONE] 立即到达或请求异常无内容）
+        if (stopBtn) stopBtn.style.display = 'none';
+        return null;
+      }
+      if (acc) {
+        // 引用溯源（仅自由提问/非分段流程才有检索 refs）
+        if (!o.segment && !o.merge && !ctx.full && ctx.refs.length) App.doc.renderCites(ai, acc, ctx.refs);
+        // v1.1.6：持久化完成的消息（内部段消息不入库）
+        if (!o.segment && !o.merge) {
+          App.doc.chatOf(d.id).push({
+            id: App.uid(), role: 'assistant', text: acc,
+            cites: (!ctx.full && ctx.refs.length) ? ctx.refs : undefined,
+            createdAt: Date.now(),
+          });
+          App.persist();
+        }
+        // 完成：显示复制/导出，隐藏停止
+        if (stopBtn) stopBtn.style.display = 'none';
+        if (copyBtn) { copyBtn.style.display = ''; copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(acc || '').then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
+        }); }
+        if (exportBtn) { exportBtn.style.display = ''; exportBtn.addEventListener('click', () => App.doc.exportAnswerMd(acc, d.name)); }
+        return acc;
+      }
+      if (stopBtn) stopBtn.style.display = 'none';
+      return null;
     },
 
     analyze(act) {
       const pr = App.state.settings.prompts;
       const custom = pr && pr.doc && pr.doc[act];
-      const prompt = (custom && String(custom).trim()) ? String(custom).trim() : AnalysisPrompts[act];
+      let prompt = (custom && String(custom).trim()) ? String(custom).trim() : AnalysisPrompts[act];
       const d = App.doc.activeDoc();
       if (!d) { App.ui.toast('请先上传或粘贴文档'); return; }
-      const full = d.text.length <= FULLTEXT_THRESHOLD ? d.text : d.text.slice(0, CHUNK_TARGET * TOP_K);
-      App.doc.send(prompt + '\n\n资料：\n' + full);
+      if (act === 'translate') {
+        prompt = App.doc.translatePrompt(prompt, !!(custom && String(custom).trim()));
+      }
+      // v1.1.6：长文档不再静默截断——分段分析
+      if (d.text.length > FULLTEXT_THRESHOLD) {
+        App.doc.analyzeSegments(act, prompt, d);
+        return;
+      }
+      App.doc.send(prompt + '\n\n资料：\n' + d.text);
     },
 
     renderCites(aiNode, answer, refs) {

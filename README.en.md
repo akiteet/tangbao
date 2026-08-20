@@ -54,7 +54,6 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 ## Configuration
 
-v1.1.4 keeps six permission levels: `plan`, `default`, `acceptEdits`, `auto`, `bypass`, and `sandbox`.
 
 Click the gear icon in the bottom-left → **Settings**:
 
@@ -111,12 +110,27 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (472 cases; 467 pass, 5 skipped — 4 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
+- **Tests**: `npm test` (487 cases; 482 pass, 5 skipped — 4 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
 - **Release gates**: `npm run check:version`, `npm run check:storage`, `npm run check:perf`, `npm run check:electron-abi`, `npm run check:sqlite`, `npm run check:ui`, `npm run check:release`, and `npm run bench:offline`
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
-## v1.1.5
+## Version history
+
+### v1.1.6 (performance & data slimming)
+
+- **Switch-path jank root cause fixed**: `activate()` synchronously triggered three full-state serializations (incl. base64 attachments) — persistence moved off the switch frame, float sanitization switched to manual shallow copy, attachments externalized.
+- **Chat attachments externalized**: images are saved to file storage on send (reusing the image-assets infrastructure); state stores references only, lazy migration for old inline base64, over-quota falls back to inline without loss.
+- **Performance observability**: Settings → Data → Performance Diagnostics (toggle / export snapshot / clear), 11 metrics visible.
+- **SQLite write-through optimized**: `PRAGMA synchronous=NORMAL` + incremental upsert in `syncState` (clearAll fallback), main-process blocking reduced.
+- **UI refresh**: design tokens, spring micro-motions, glass layering, unified component styles; semantic color tokens (danger/success/warning).
+- **Typography**: bundled JetBrains Mono (OFL, offline) for code/data, CJK fallbacks completed, font-size ladder tokenized.
+- **Doc Reader enhanced**: persistent Q&A history, stop generation, translation direction, long-document segmentation, Word/PPT parsing, rename/export/doc-limit hints.
+- **Data reliability**: fixed the streaming partial-persistence wiring gap (P0, once blanked state.json); SQLite fallback restored, startup auto-heals.
+
+See [docs/CHANGELOG-v1.1.6.md](docs/CHANGELOG-v1.1.6.md).
+
+### v1.1.5
 
 - Architecture slimming: the 4158-line agent runtime engine now delegates to four focused modules (HTTP transport `agent-server-http`, tool protocol definitions renamed and relocated into `tool-runtime`, search providers `search-providers`, runtime state registry `run-registry`) with zero behavior change — the offline benchmark stays byte-identical to v1.1.4 (seed 1337, success rate 0.875).
 - Infrastructure convergence: the main process and the agent backend share one HTTP auth implementation (timing-safe compare + loopback checks); readJson/clone/escapeHtml and the renderer IPC fault-tolerant wrappers each collapse to a single implementation.
@@ -126,7 +140,7 @@ tangbao/
 
 See [docs/CHANGELOG-v1.1.5.md](docs/CHANGELOG-v1.1.5.md) for details.
 
-## v1.1.4 (historical)
+### v1.1.4 (historical)
 
 - Tangguan character workspace: presets, AI draft preview, dirty-state protection, JSON import/export, and common Tavern/SillyTavern fields including `character_book.entries`.
 - Isolated module sessions: Tangguan character chats and Tangcreate task sessions stay in their own sidecar, with safe switching, deletion, and empty-state behavior.
@@ -140,7 +154,7 @@ See [docs/CHANGELOG-v1.1.5.md](docs/CHANGELOG-v1.1.5.md) for details.
 
 See [docs/CHANGELOG-v1.1.4.md](docs/CHANGELOG-v1.1.4.md) for the detailed release notes and upgrade guidance.
 
-## v1.1.3 (historical)
+### v1.1.3 (historical)
 
 - Stability loop: migration state, staged copy verification, rollback, recovery center, SQLite/state audits, backups, and quarantine cleanup previews.
 - Model and Cache management: Provider Health, model profiles, unified model-call metrics, and a user-triggered real Cache Probe. Missing provider Usage remains unknown.
@@ -148,7 +162,7 @@ See [docs/CHANGELOG-v1.1.4.md](docs/CHANGELOG-v1.1.4.md) for the detailed releas
 - Agent engineering: read-only Trace Inspector, collaboration tree, normalized Budget/Abort/Error handling, redacted exports, and reproducible Runtime Offline Benchmarks.
 - After a data-location migration, the app can automatically recover the legacy Windows secret context when the ciphertext matches. API keys never enter ordinary backups, diagnostics, or Trace exports.
 
-## v1.1.1 (historical)
+### v1.1.1 (historical)
 
 - Parallel `explore / test / review` subagents support up to 8 tasks and 3 active workers; extra tasks are queued. Subagents are read-only and the parent owns all writes.
 - Results include findings, evidence, checks, duration, and failure reasons. Partial success is marked `degraded`/`blocked` and the collaboration tree is available in run history.

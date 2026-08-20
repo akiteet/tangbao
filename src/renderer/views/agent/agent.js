@@ -95,7 +95,7 @@
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.innerHTML = `
-        <div class="modal" role="dialog" aria-modal="true" style="width:400px">
+        <div class="modal modal-sm" role="dialog" aria-modal="true">
           <div class="modal-header"><span>${title}</span>
             <button class="icon-btn" id="cdClose"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
           </div>
@@ -176,7 +176,7 @@
       modal.className = 'modal-mask';
       modal.id = 'projectModalMask';
       modal.innerHTML = `
-        <div class="modal" role="dialog" aria-modal="true" style="width:660px">
+        <div class="modal modal-lg" role="dialog" aria-modal="true">
           <div class="modal-header"><span>项目设置</span>
             <button class="icon-btn" id="projClose"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
           </div>
@@ -1572,7 +1572,7 @@
       modal.id = 'agentEvalMask';
       const options = tasks.map((task) => `<option value="${App.escapeHtml(task.id)}">${App.escapeHtml(task.id + ' · ' + task.title)}</option>`).join('');
       modal.innerHTML = `
-        <div class="modal" role="dialog" aria-modal="true" style="width:580px">
+        <div class="modal modal-mid" role="dialog" aria-modal="true">
           <div class="modal-header"><span>糖码安全评测</span><button class="icon-btn" id="agentEvalClose" aria-label="关闭">✕</button></div>
           <div class="modal-body">
             <p class="hint" style="margin-top:0">仅运行内置白名单 fixture。评测会复制到独立目录，不接触当前项目，不向渲染层暴露启动令牌或密钥。</p>
@@ -3572,7 +3572,7 @@
       const modal = document.createElement('div');
       modal.className = 'modal-mask';
       modal.innerHTML = `
-        <div class="modal" role="dialog" aria-modal="true" style="width:400px">
+        <div class="modal modal-sm" role="dialog" aria-modal="true">
           <div class="modal-header"><span>清空上下文</span>
             <button class="icon-btn" id="clrCtxClose"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
           </div>

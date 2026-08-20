@@ -212,7 +212,7 @@
           frame.className = 'cv-iframe';
           frame.title = m.label;
           if (isExternalChild) {
-            frame.srcdoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;color:#888;background:#f5f5f5}</style></head><body><div style="text-align:center"><p style="font-size:18px;margin:0 0 8px">已在糖包子窗口打开</p><p style="font-size:13px;margin:0">请留意糖包子窗口</p></div></body></html>';
+            frame.srcdoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC","Helvetica Neue",Arial,sans-serif;color:#888;background:#f5f5f5}</style></head><body><div style="text-align:center"><p style="font-size:18px;margin:0 0 8px">已在糖包子窗口打开</p><p style="font-size:13px;margin:0">请留意糖包子窗口</p></div></body></html>';
           } else {
             frame.src = src;
             frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-presentation');
