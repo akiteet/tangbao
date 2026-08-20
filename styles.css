@@ -1317,8 +1317,9 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
 /* ===== 设置弹窗：左导航 + 内容两栏 ===== */
 #settingsModal .modal { width: 1000px; max-width: 95vw; height: min(720px, 86vh); }
 #settingsModal .modal-body { overflow: hidden; padding: 0; }
+#settingsModal .modal { background: var(--panel-bg); } /* v1.1.6：设置弹窗大面积，保持不透明避免色差 */
 .settings-shell { flex: 1 1 auto; min-height: 0; height: 100%; display: flex; overflow: hidden; gap: 0; }
-.settings-footer-notes { flex: 0 0 auto; padding: 10px 20px 12px; border-top: 1px solid var(--border); background: var(--panel-bg); } /* v1.1.6：实底面板色，不随弹窗半透明 */
+.settings-footer-notes { flex: 0 0 auto; padding: 10px 20px 12px; border-top: 1px solid var(--border); background: var(--panel-bg); }
 .settings-footer-notes .hint { margin: 0; line-height: 1.55; }
 .settings-footer-notes .hint + .hint { margin-top: 4px; }
 .settings-nav {
