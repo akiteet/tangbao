@@ -957,12 +957,19 @@ safeHandle('search:query', async (_e, input) => {
     const opts = input && typeof input === 'object' ? input : {};
     const requestedScopes = Array.isArray(opts.scopes) && opts.scopes.length ? opts.scopes.map(String) : [];
     const wantsSkills = !requestedScopes.length || requestedScopes.includes('skill');
+    const skillOnly = requestedScopes.length === 1 && requestedScopes[0] === 'skill';
     const dbScopes = requestedScopes.filter((scope) => scope !== 'skill');
-    const dbResult = svc.searchLocal(opts.query, Object.assign({}, opts, {
-      scopes: dbScopes.length ? dbScopes : (wantsSkills ? [] : requestedScopes),
-      cursor: wantsSkills ? 0 : opts.cursor,
-      limit: wantsSkills ? 100 : opts.limit,
-    }));
+    let dbResult;
+    if (skillOnly) {
+      // 用户只选了「Skill」范围：跳过数据库搜索，只合并技能行
+      dbResult = { ok: true, items: [], nextCursor: null, total: 0 };
+    } else {
+      dbResult = svc.searchLocal(opts.query, Object.assign({}, opts, {
+        scopes: dbScopes.length ? dbScopes : (wantsSkills ? [] : requestedScopes),
+        cursor: wantsSkills ? 0 : opts.cursor,
+        limit: wantsSkills ? 100 : opts.limit,
+      }));
+    }
     if (!wantsSkills) return dbResult;
     let skillItems = [];
     try {
