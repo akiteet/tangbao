@@ -426,4 +426,4 @@ safeHandle('skills:toggle', async (_e, payload) => {
 
 }
 
-module.exports = { registerMainSkills, userSkillsDirsList };
+module.exports = { registerMainSkills, userSkillsDirsList, managedSkillRoots };
