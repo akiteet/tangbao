@@ -2406,6 +2406,37 @@ function linkAbortSignal(controller, signal) {
   return () => signal.removeEventListener('abort', abort);
 }
 
+// v1.1.7（修复 LLM 连接）：连接超时 30s→60s + 自动重试 5 次（指数退避 1s/2s/4s/8s）；流式空闲超时 120s 不变、不重试。
+// 重试仅作用于连接阶段（fetch 阻塞或连接超时）；连接建立后的空闲超时/服务端错误/读流中断不重试。
+const LLM_CONNECT_TIMEOUT_MS = 60000;
+const LLM_IDLE_TIMEOUT_MS = 120000;
+const LLM_MAX_RETRY_ATTEMPTS = 5;
+const LLM_RETRY_BASE_DELAY_MS = 1000;
+
+function _isConnectTimeout(e) {
+  return String(e && e.message || '').includes('连接超时');
+}
+
+async function _connectWithRetry(connectFn, opts) {
+  const max = (opts && opts.maxAttempts) || LLM_MAX_RETRY_ATTEMPTS;
+  let lastErr;
+  for (let attempt = 1; attempt <= max; attempt++) {
+    try {
+      return await connectFn(attempt);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < max && _isConnectTimeout(e)) {
+        const delay = LLM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        console.warn('[LLM] 连接超时，第 ' + attempt + ' 次，' + delay + 'ms 后重试（共 ' + max + ' 次）');
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw e;
+      }
+    }
+  }
+  throw lastErr;
+}
+
 // 调用 LLM（OpenAI 兼容，流式），返回 { content, toolCalls: [{id,name,arguments}] }
 async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thinkType, tools, promptCaching, signal }) {
   // v4：官方 Responses / Anthropic / Gemini 均走供应商原生流式；自定义中转继续保持 OpenAI Chat 路径。
@@ -2413,20 +2444,25 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   const useCaching = promptCaching !== false && cap.promptCachingMode && cap.promptCachingMode(model, apiBase) !== 'off';
   if (adapter !== 'openai') {
     const req = buildRequest(adapter, { apiBase, apiKey, model, messages, tools: tools || TOOLS, stream: true, promptCaching: useCaching });
-    // v1.1.0（修复 M4）：连接超时 30s + 流式空闲超时 120s，避免模型假死把整次 run 拖到总步数上限
-    const streamController = new AbortController();
-    const unlinkAbort = linkAbortSignal(streamController, signal);
-    const connectTimer = setTimeout(() => { try { streamController.abort(new Error('LLM 连接超时（30 秒内未建立响应）')); } catch (_) {} }, 30000);
+    // v1.1.7（修复 LLM 连接）：连接超时 60s + 自动重试 5 次（指数退避 1s/2s/4s/8s）+ 流式空闲超时 120s
+    let res, streamController, unlinkAbort;
+    ({ res, streamController, unlinkAbort } = await _connectWithRetry(async () => {
+      const streamController = new AbortController();
+      const ua = linkAbortSignal(streamController, signal);
+      const ct = setTimeout(() => { try { streamController.abort(new Error('LLM 连接超时（60 秒内未建立响应）')); } catch (_) {} }, LLM_CONNECT_TIMEOUT_MS);
+      let r;
+      try {
+        r = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: streamController.signal });
+      } catch (e) {
+        clearTimeout(ct); ua();
+        throw new Error('LLM 请求失败（' + adapter + '）：' + (e && e.message ? e.message : String(e)));
+      }
+      clearTimeout(ct);
+      return { res: r, streamController, unlinkAbort: ua };
+    }, { maxAttempts: LLM_MAX_RETRY_ATTEMPTS }));
     let idleTimer = null;
-    const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { streamController.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, 120000); };
-    let res;
-    try {
-      res = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: streamController.signal });
-    } catch (e) {
-      clearTimeout(connectTimer); if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
-      throw new Error('LLM 请求失败（' + adapter + '）：' + (e && e.message ? e.message : String(e)));
-    }
-    clearTimeout(connectTimer); resetIdle();
+    const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { streamController.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, LLM_IDLE_TIMEOUT_MS); };
+    resetIdle();
     if (!res.ok) {
       if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
       const txt = await res.text().catch(() => '');
@@ -2490,25 +2526,30 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   //  'openai' → reasoning_effort；'qwen' → enable_thinking；'none'/null → 不注入（原生推理，如 grok/deepseek）；豆包关闭开关按模型名识别（thinking.type=disabled）
   const sup = thinkType || (cap.thinkSupport(model) || 'none');
   Object.assign(payload, cap.buildThinkParamWithSup(sup, thinkLevel, model));
-  const controller = new AbortController();
-  const unlinkAbort = linkAbortSignal(controller, signal);
-  // v1.1.0（修复 M4）：连接超时 30s + 流式空闲超时 120s
-  const connectTimer = setTimeout(() => { try { controller.abort(new Error('LLM 连接超时（30 秒内未建立响应）')); } catch (_) {} }, 30000);
+  // v1.1.7（修复 LLM 连接）：连接超时 60s + 自动重试 5 次（指数退避 1s/2s/4s/8s）+ 流式空闲超时 120s
+  let res, controller, unlinkAbort;
+  ({ res, controller, unlinkAbort } = await _connectWithRetry(async () => {
+    const controller = new AbortController();
+    const ua = linkAbortSignal(controller, signal);
+    const ct = setTimeout(() => { try { controller.abort(new Error('LLM 连接超时（60 秒内未建立响应）')); } catch (_) {} }, LLM_CONNECT_TIMEOUT_MS);
+    let r;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      clearTimeout(ct); ua();
+      throw new Error('LLM 请求失败：' + (e && e.message ? e.message : String(e)));
+    }
+    clearTimeout(ct);
+    return { res: r, controller, unlinkAbort: ua };
+  }, { maxAttempts: LLM_MAX_RETRY_ATTEMPTS }));
   let idleTimer = null;
-  const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { controller.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, 120000); };
-  let res;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-  } catch (e) {
-    clearTimeout(connectTimer); if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
-    throw new Error('LLM 请求失败：' + (e && e.message ? e.message : String(e)));
-  }
-  clearTimeout(connectTimer); resetIdle();
+  const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { controller.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, LLM_IDLE_TIMEOUT_MS); };
+  resetIdle();
   if (!res.ok) {
     if (idleTimer) clearTimeout(idleTimer); unlinkAbort();
     const txt = await res.text().catch(() => '');

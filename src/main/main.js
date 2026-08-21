@@ -959,7 +959,7 @@ safeHandle('search:query', async (_e, input) => {
     const wantsSkills = !requestedScopes.length || requestedScopes.includes('skill');
     const dbScopes = requestedScopes.filter((scope) => scope !== 'skill');
     const dbResult = svc.searchLocal(opts.query, Object.assign({}, opts, {
-      scopes: dbScopes.length ? dbScopes : (wantsSkills ? ['__none__'] : requestedScopes),
+      scopes: dbScopes.length ? dbScopes : (wantsSkills ? [] : requestedScopes),
       cursor: wantsSkills ? 0 : opts.cursor,
       limit: wantsSkills ? 100 : opts.limit,
     }));
