@@ -47,7 +47,8 @@ test('v1.1.3 state retains project/session metadata while the UI stays on the co
   assert.match(index, /id="localSearchBtn"/);
   assert.match(index, /src\/renderer\/components\/search\.js/);
   assert.match(styles, /\.local-search-modal/);
-  assert.match(search, /event\.key\.toLowerCase\(\) === 'k'/);
+  assert.match(index, /id="commandPalette"/);
+  assert.match(ui, /String\(e\.key\)\.toLowerCase\(\) === 'k'/);
   assert.match(search, /scope === 'conversation'/);
   assert.match(search, /scope === 'document'/);
   assert.match(search, /scope === 'workflow'/);

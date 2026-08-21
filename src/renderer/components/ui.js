@@ -595,6 +595,24 @@
         App.chat.activate(id, stay ? { stay } : undefined);
         return;
       }
+      if (value.startsWith('local:document:')) {
+        const id = value.slice('local:document:'.length);
+        App.router.go('doc');
+        if (App.doc && typeof App.doc.switchDoc === 'function') App.doc.switchDoc(id);
+        return;
+      }
+      if (value.startsWith('local:project:')) {
+        const id = value.slice('local:project:'.length);
+        App.router.go('agent');
+        if (App.agent && typeof App.agent.switchProject === 'function') App.agent.switchProject(id);
+        return;
+      }
+      if (value.startsWith('local:run:')) {
+        const id = value.slice('local:run:'.length);
+        App.router.go('agent');
+        if (App.agent && typeof App.agent.switchThread === 'function') App.agent.switchThread(id);
+        return;
+      }
       if (value === 'settings' || value === 'data') {
         App.ui.openSettings();
         if (value !== 'settings') App.ui.selectSettingsPanel(value);

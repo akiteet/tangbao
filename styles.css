@@ -1367,6 +1367,27 @@ body.float-mode .chat-scroll { scrollbar-width: thin; }
   display: flex; align-items: center; justify-content: center; z-index: 300;
 }
 .modal-mask[hidden] { display: none; }
+/* v1.1.7：命令面板（Ctrl/Cmd + K）——顶部弹出的快速命令/搜索 */
+.command-mask { align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.command-palette {
+  width: min(580px, 92vw); background: var(--panel-bg);
+  border: var(--glow-border); border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-3), var(--inner-highlight); overflow: hidden;
+}
+#commandPaletteInput {
+  width: 100%; padding: 14px 16px; border: none; border-bottom: 1px solid var(--border);
+  background: transparent; color: var(--text); font-size: var(--fs-lg); outline: none;
+}
+#commandPaletteInput:focus { border-color: var(--primary); }
+.command-results { max-height: 52vh; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.command-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 12px; border: none; background: transparent; color: var(--text);
+  border-radius: var(--radius-md); font-size: var(--fs-base); text-align: left; cursor: pointer;
+}
+.command-item.active, .command-item:hover { background: var(--hover-bg); color: var(--primary); }
+.command-item small { color: var(--text-tertiary); font-size: var(--fs-sm); }
+.command-empty { padding: 18px; text-align: center; color: var(--text-tertiary); font-size: var(--fs-base); }
 .modal {
   width: 480px; max-width: 92vw; max-height: 86vh; position: relative;
   background: var(--modal-bg); backdrop-filter: blur(var(--blur)) saturate(180%); /* v1.1.6：半透明让 blur 真正可见 */

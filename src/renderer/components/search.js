@@ -193,10 +193,5 @@
   App.search = { open: openSearch };
   const button = document.getElementById('localSearchBtn');
   if (button) button.addEventListener('click', openSearch);
-  document.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-      event.preventDefault();
-      openSearch();
-    }
-  });
+  // v1.1.7：Ctrl/Cmd + K 归命令面板（ui.js），本地搜索保留按钮入口，避免双绑定同时弹出两个遮罩
 })();

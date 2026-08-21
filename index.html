@@ -80,7 +80,7 @@
           <span class="agent-run-text" id="agentRunText">⏳ 运行中</span>
         </div>
         <div class="topbar-actions">
-          <button class="icon-btn local-search-trigger" id="localSearchBtn" type="button" title="本地搜索（Ctrl/Cmd + K）" aria-label="本地搜索">
+          <button class="icon-btn local-search-trigger" id="localSearchBtn" type="button" title="本地搜索（会话 / 文档 / 记录）" aria-label="本地搜索">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           </button>
           <div class="topbar-menu-wrap">
@@ -688,6 +688,14 @@
         <button class="btn-ghost" id="accCancel">取消</button>
         <button class="btn-primary" id="accSave">保存</button>
       </div>
+    </div>
+  </div>
+
+  
+  <div class="modal-mask command-mask" id="commandPalette" hidden>
+    <div class="command-palette">
+      <input id="commandPaletteInput" type="text" placeholder="输入命令，或搜索会话 / 文档 / 糖码项目 / 糖码会话…" autocomplete="off" spellcheck="false" />
+      <div id="commandPaletteResults" class="command-results"></div>
     </div>
   </div>
 
