@@ -2745,10 +2745,18 @@ function handleAgent(req, res, body) {
   };
   // 每个事件同步持久化，并保留真实最大序号供 Summary/Checkpoint 覆盖范围使用。
   let lastEventSeq = 0;
+  let eventPersistWarned = false;
   const emit = (type, data) => {
     emitRaw(type, data);
     if (runStore) {
-      try { lastEventSeq = runStore.appendAgentEvent(runId, type, data || {}) || lastEventSeq; } catch (e) { /* 忽略 */ }
+      try { lastEventSeq = runStore.appendAgentEvent(runId, type, data || {}) || lastEventSeq; }
+      catch (e) {
+        // v1.1.7：落库失败不阻断流式，但首次失败显式告警（便于诊断磁盘/权限问题）
+        if (!eventPersistWarned) {
+          eventPersistWarned = true;
+          console.warn('[agent-runtime] 事件落库失败（仅提示一次）：', e && e.message ? e.message : e);
+        }
+      }
     }
   };
   const traceRecorder = new TraceRecorder({ runId, emit });

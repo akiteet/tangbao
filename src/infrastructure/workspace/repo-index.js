@@ -14,7 +14,8 @@ function normalize(rel) { return String(rel || '').replace(/\\/g, '/').replace(/
 function cacheFile(root, cacheDir) { const dir = cacheDir || path.join(os.tmpdir(), 'tangbao-repo-index'); return path.join(dir, sha(path.resolve(root)).slice(0, 24) + '.json'); }
 function listFiles(root) {
   let files = [];
-  try { files = execFileSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter(Boolean); } catch (_) {}
+  try { files = execFileSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter(Boolean); }
+  catch (e) { console.warn('[repo-index] git ls-files 失败，回退目录遍历：', e && e.message ? e.message : e); } // v1.1.7：显式提示，便于诊断非 git 目录/权限问题
   if (files.length) return Array.from(new Set(files.map(normalize))).filter((f) => !SKIP_RE.test(f));
   const walk = (dir, depth) => { if (depth > 8) return; let entries=[]; try { entries=fs.readdirSync(dir,{withFileTypes:true}); } catch (_) { return; } for (const entry of entries) { const full=path.join(dir,entry.name); const rel=normalize(path.relative(root,full)); if(SKIP_RE.test(rel))continue; if(entry.isDirectory())walk(full,depth+1); else files.push(rel); } };
   walk(root,0); return files;
