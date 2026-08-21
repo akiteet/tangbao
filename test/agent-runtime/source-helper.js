@@ -18,4 +18,25 @@ function readRuntimeSource(root) {
   ].join('\n');
 }
 
-module.exports = { readRuntimeSource };
+// v1.1.7（批次 E）：渲染层拆分——拼接 src/renderer/views/agent/ 目录下全部 .js（按文件名排序），
+// 拆分后的模块（agent-run-history.js / agent-bubbles.js 等）自动纳入断言源。
+function readRendererSource(root) {
+  const base = root || path.join(__dirname, '../..');
+  return readDirSource(path.join(base, 'src/renderer/views/agent'));
+}
+
+// v1.1.7（批次 E）：主进程拆分——拼接 src/main/ 目录下全部 .js（按文件名排序）。
+function readMainSource(root) {
+  const base = root || path.join(__dirname, '../..');
+  return readDirSource(path.join(base, 'src/main'));
+}
+
+function readDirSource(dir) {
+  return fs.readdirSync(dir)
+    .filter((name) => name.endsWith('.js'))
+    .sort()
+    .map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
+    .join('\n');
+}
+
+module.exports = { readRuntimeSource, readRendererSource, readMainSource };

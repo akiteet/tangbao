@@ -33,3 +33,6 @@ outputs/
 # 内部交接文档与临时备份（不入库）
 HANDOFF-*.md
 styles.css.pre-*.bak
+
+# agent 拆分前备份（不入库）
+*.pre-split.bak

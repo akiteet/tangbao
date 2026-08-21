@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -99,7 +100,7 @@ test('Module session actions delete instead of toggling legacy archived state', 
 
 test('普通 UI uses the unified font token while code remains monospace', () => {
   const css = read('styles.css');
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const modules = read('src/renderer/components/modules.js');
   assert.match(css, /--font-ui:/);
   assert.match(css, /body \{[\s\S]*font-family: var\(--font-ui\)/);

@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -43,7 +44,7 @@ test('运行历史滚动容器约束高度：flex-basis:0 + height:0，子项不
 });
 
 test('运行历史点击后先显示弹窗加载态，再异步查询第一页', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const createAt = agent.indexOf("const modal = document.createElement('div');", agent.indexOf('async showRunHistory()'));
   const appendAt = agent.indexOf('document.body.appendChild(modal);', createAt);
   const awaitAt = agent.indexOf('await loadPage();', createAt);
@@ -52,12 +53,12 @@ test('运行历史点击后先显示弹窗加载态，再异步查询第一页',
 });
 
 test('运行历史默认展开项立即加载事件，不必折叠后再展开', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   assert.match(agent, /d\.addEventListener\('toggle', loadWhenOpen\);\s*loadWhenOpen\(\);/);
 });
 
 test('运行历史支持每页30条并明确加载更多或全部加载', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   assert.match(agent, /const PAGE_SIZE = 30/);
   assert.match(agent, /listAgentRuns\(thread\.id, PAGE_SIZE, runs\.length\)/);
   assert.match(agent, /id="agentHistLoadMore">加载更多历史/);
@@ -66,7 +67,7 @@ test('运行历史支持每页30条并明确加载更多或全部加载', () => 
 });
 
 test('运行历史长内容默认摘要并可展开全文且不创建嵌套滚动', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const css = read('styles.css');
   assert.match(agent, /const longText = \(value, limit, className\) =>/);
   assert.match(agent, /class="agent-hist-long/);
@@ -80,7 +81,7 @@ test('运行历史长内容默认摘要并可展开全文且不创建嵌套滚�
 });
 
 test('运行历史思考展开后显示全部已保存文本且不受高度或内部滚动裁剪', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const css = read('styles.css');
   assert.match(agent, /longText\(pl\.text \|\| '', 400, 'thinking-text'\)/);
   assert.match(agent, /class="agent-hist-full">\$\{esc\(text\)\}/);
@@ -90,7 +91,7 @@ test('运行历史思考展开后显示全部已保存文本且不受高度或�
 });
 
 test('糖码会话卡片移除消息数并将空间留给会话名称', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const css = read('styles.css');
   const start = agent.indexOf('renderSessions()');
   const end = agent.indexOf('restoreThread()', start);
@@ -102,7 +103,7 @@ test('糖码会话卡片移除消息数并将空间留给会话名称', () => {
 });
 
 test('运行历史顶部目标与统计分行完整显示', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const css = read('styles.css');
   assert.doesNotMatch(agent, /run\.userGoal \|\| ''\)\.slice\(0, 40\)/);
   assert.match(agent, /App\.escapeHtml\(run\.userGoal \|\| '（未记录任务目标）'\)/);
@@ -116,7 +117,7 @@ test('运行历史顶部目标与统计分行完整显示', () => {
 });
 
 test('运行历史协作树按 parentRunId 递归嵌套子 Run', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   assert.match(agent, /const byParent = new Map\(\)/);
   assert.match(agent, /node\.run && node\.run\.parentRunId/);
   assert.match(agent, /const renderNode = \(node\) =>/);
@@ -126,7 +127,7 @@ test('运行历史协作树按 parentRunId 递归嵌套子 Run', () => {
 test('Agent Run 分页 offset 贯穿 renderer、preload、main 与 SQLite', () => {
   const service = read('src/application/services/fs.js');
   const preload = read('src/preload/preload.js');
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const store = read('src/infrastructure/storage/sqlite-store.js');
   assert.match(service, /listAgentRuns\(threadId, limit, offset\)/);
   assert.match(preload, /listAgentRuns: \(threadId, limit, offset\).*threadId, limit, offset/);

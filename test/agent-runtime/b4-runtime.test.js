@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const CM = require('../../src/core/agent-runtime/context-manager');

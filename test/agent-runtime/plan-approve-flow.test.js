@@ -4,13 +4,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
 const agentServer = readRuntimeSource(ROOT);
-const agentJs = read('src/renderer/views/agent/agent.js');
+const agentJs = readRendererSource();
 const styles = read('styles.css');
 
 test('Plan 模式：首次写工具时发出 plan_approval_request 并等待用户批准', () => {

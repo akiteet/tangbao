@@ -4,14 +4,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
 const agentServer = readRuntimeSource(ROOT);
 const styles = read('styles.css');
-const agentJs = read('src/renderer/views/agent/agent.js');
+const agentJs = readRendererSource();
 
 test('M1：Plan 模式写工具拦截必须返回结构化失败（避免完成门误判成功死循环）', () => {
   // v1.1.0（优化 Plan 模式）：planBlocked 提取为模块级 PLAN_BLOCKED_TOOLS，runTool 内改为引用

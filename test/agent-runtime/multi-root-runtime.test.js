@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const root = path.resolve(__dirname, '..', '..');
 const server = readRuntimeSource(root);
 

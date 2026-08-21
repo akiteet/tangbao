@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const AS = require('../../src/infrastructure/agent-runtime/agent-server');

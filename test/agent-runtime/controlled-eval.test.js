@@ -1,5 +1,6 @@
 'use strict';
 const test = require('node:test');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -213,10 +214,10 @@ test('拒绝非回环后端、空账户引用和任意非白名单 taskId', asyn
 });
 
 test('主进程、preload、service 与糖码 UI 均接入受控 Eval', () => {
-  const main = fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8');
+  const main = readMainSource();
   const preload = fs.readFileSync(path.join(ROOT, 'src/preload/preload.js'), 'utf8');
   const service = fs.readFileSync(path.join(ROOT, 'src/application/services/fs.js'), 'utf8');
-  const agent = fs.readFileSync(path.join(ROOT, 'src/renderer/views/agent/agent.js'), 'utf8');
+  const agent = readRendererSource();
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.ok(main.includes("safeHandle('agent:evalTasks'"));
   assert.ok(main.includes("safeHandle('agent:runEval'"));

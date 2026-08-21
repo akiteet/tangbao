@@ -1,5 +1,6 @@
 'use strict';
 const test = require('node:test');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -8,7 +9,7 @@ const ROOT = path.join(__dirname, '../..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 test('安全评测面板包含「全部运行」按钮且默认可用', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   assert.match(agent, /id="agentEvalRunAll"/);
   assert.match(agent, /全部运行/);
   // 按钮与单任务按钮同列，任务非空时可用（与单任务按钮同一 disabled 条件）
@@ -16,7 +17,7 @@ test('安全评测面板包含「全部运行」按钮且默认可用', () => {
 });
 
 test('批量运行合并能力复测与指标补测并跳过历史完整通过', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   assert.match(agent, /const runtimeSkipped = tasks\.filter\(\(t\) => !t\.alreadyPassed && t\.infrastructureSkipped\);/);
   assert.match(agent, /const metricRetests = tasks\.filter\(\(t\) => t\.alreadyPassed && t\.metricIncomplete && !t\.infrastructureSkipped\);/);
   assert.match(agent, /const capabilityRetests = tasks\.filter\(\(t\) => !t\.alreadyPassed && !t\.infrastructureSkipped\);/);
@@ -30,7 +31,7 @@ test('批量运行合并能力复测与指标补测并跳过历史完整通过',
 });
 
 test('批量运行按 3 路并发池串批执行并实时更新进度', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   // 并发上限 3，分批 Promise.all
   assert.match(agent, /const CONCURRENCY = 3;/);
   assert.match(agent, /for \(let i = 0; i < pending\.length; i \+= CONCURRENCY\)/);
@@ -44,7 +45,7 @@ test('批量运行按 3 路并发池串批执行并实时更新进度', () => {
 });
 
 test('批量运行期间互斥禁用按钮，结束后恢复并汇总通过数', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   // 开始：禁用单任务与全部按钮
   assert.match(agent, /runBtn\.disabled = true; allBtn\.disabled = true;/);
   // 结束：恢复两个按钮
@@ -57,7 +58,7 @@ test('批量运行期间互斥禁用按钮，结束后恢复并汇总通过数',
 });
 
 test('批量运行不绕过主进程受控入口（仍走 runAgentEval IPC）', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const snippet = agent.slice(agent.indexOf("modal.querySelector('#agentEvalRunAll').onclick"), agent.indexOf("modal.querySelector('#agentEvalRunAll').onclick") + 2400);
   assert.doesNotMatch(snippet, /base:|token:|cwd:/);
   assert.match(snippet, /taskId: task\.id, ref: provider\.ref, model/);

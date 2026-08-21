@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -9,7 +10,7 @@ const root = path.resolve(__dirname, '../..');
 
 test('糖码布局保留稳定的收缩、换行和横向滚动契约', () => {
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-  const agent = fs.readFileSync(path.join(root, 'src/renderer/views/agent/agent.js'), 'utf8');
+  const agent = readRendererSource();
 
   assert.match(styles, /\.agent-layout\s*\{[^}]*min-width:\s*0/);
   assert.match(styles, /\.agent-main\s*\{[^}]*min-width:\s*0/);

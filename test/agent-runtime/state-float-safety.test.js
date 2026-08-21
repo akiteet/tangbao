@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -20,7 +21,7 @@ test('state loading rejects malformed snapshots and recovers missing account fie
 
 test('float sync is a conversation patch and cannot overwrite main-window settings', () => {
   const app = read('src/renderer/app.js');
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   assert.match(app, /type: 'patch'/);
   assert.match(app, /function mergeFloatConversations\(current, incoming\)/);
   assert.match(app, /Number\(next && next\.updatedAt\)/);
@@ -31,7 +32,7 @@ test('float sync is a conversation patch and cannot overwrite main-window settin
 });
 
 test('state writes are atomic and stale revisions are ignored', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const preload = read('src/preload/preload.js');
   assert.match(main, /function acceptStateRevision\(payload, explicitRevision\)/);
   assert.match(main, /function writeStateFileAtomic\(file, content\)/);
@@ -43,7 +44,7 @@ test('state writes are atomic and stale revisions are ignored', () => {
 });
 
 test('chat partial 只允许恢复 assistant，并可补回尚未进入完整快照的消息', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const state = read('src/renderer/state/state.js');
   assert.match(main, /const chatPartialRoot = \(\) => path\.join\(dataLocation\.recordsRoot\(app\.getPath\('userData'\)\), 'chat-partials'\)/);
   assert.match(main, /const mergePartialMessage = \(target, incoming, messageId\)/);

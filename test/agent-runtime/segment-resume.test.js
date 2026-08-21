@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const root = path.resolve(__dirname, '..', '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
@@ -58,7 +58,7 @@ test('精确恢复对来源 Run 与 Checkpoint 做结构化校验，不静默重
 });
 
 test('前端三个继续入口统一携带来源 Run 并声明 checkpoint 恢复', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   assert.match(agent, /resumeRun\(runId\)/);
   assert.match(agent, /t\.lastRunId/);
   assert.match(agent, /App\.agent\._resumeRunId = String\(runId\)/);

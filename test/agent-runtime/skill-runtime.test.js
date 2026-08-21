@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 
 const server = require('../../src/infrastructure/agent-runtime/agent-server');
 const Tx = require('../../src/core/agent-runtime/change-transaction');

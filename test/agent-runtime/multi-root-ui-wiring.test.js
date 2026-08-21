@@ -1,5 +1,6 @@
 'use strict';
 const test = require('node:test');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +8,7 @@ const root = path.resolve(__dirname, '..', '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
 test('多根工作区通过主进程 IPC 和 preload 暴露最小管理接口', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const preload = read('src/preload/preload.js');
   const shell = read('src/application/services/shell.js');
   assert.match(main, /workspace:addRoot/);
@@ -24,7 +25,7 @@ test('多根工作区通过主进程 IPC 和 preload 暴露最小管理接口', 
 });
 
 test('项目界面保存主根兼容字段并显示多根管理', () => {
-  const agent = read('src/renderer/views/agent/agent.js');
+  const agent = readRendererSource();
   const state = read('src/renderer/state/state.js');
   assert.match(agent, /projRoots/);
   assert.match(agent, /添加文件夹/);

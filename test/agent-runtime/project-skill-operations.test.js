@@ -4,13 +4,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readRuntimeSource } = require('./source-helper');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 
 const ROOT = path.join(__dirname, '../..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 test('项目级 Skill 以 .workbuddy/skills 为标准根并保留旧目录兼容', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const runtime = readRuntimeSource(ROOT);
   assert.match(main, /path\.join\(cwd, '\.workbuddy', 'skills'\)/);
   assert.match(main, /path\.join\(cwd, '\.tangbao-skills'\)/);
@@ -21,7 +21,7 @@ test('项目级 Skill 以 .workbuddy/skills 为标准根并保留旧目录兼容
 });
 
 test('用户级 Skill 纳入 ~/.workbuddy/skills 且项目操作绑定作用域与工作区', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const ui = read('src/renderer/components/ui.js');
   assert.match(main, /path\.join\(os\.homedir\(\), '\.workbuddy', 'skills'\)/);
   assert.match(ui, /data-skill-scope=/);
@@ -39,7 +39,7 @@ test('Skill panel repairs a stale workspace id before retrying enumeration', () 
 });
 
 test('Skill 管理只允许已知根下的直接单个目录并重新枚举精确匹配', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   assert.match(main, /fs\.realpathSync\.native\(resolved\)/);
   // B5（P2）：Windows 盘符大小写归一后再比较（原 === 直比在 realpathSync.native 盘符大小写不一致时误判）
   assert.match(main, /norm\(path\.dirname\(resolvedTarget\)\) === norm\(resolvedRoot\)/);
@@ -51,7 +51,7 @@ test('Skill 管理只允许已知根下的直接单个目录并重新枚举精�
 });
 
 test('详情、启停、编辑、定位和隔离卸载贯穿 renderer/preload/main', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const preload = read('src/preload/preload.js');
   const service = read('src/application/services/skills.js');
   const ui = read('src/renderer/components/ui.js');
@@ -73,7 +73,7 @@ test('详情、启停、编辑、定位和隔离卸载贯穿 renderer/preload/ma
 
 test('项目级 Skill 卸载跨盘回退：rename 失败时复制+删除（EXDEV 根因修复）', () => {
   const registry = read('src/core/skills/skill-registry.js');
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const ui = read('src/renderer/components/ui.js');
   // registry：uninstall 必须捕获跨盘/占用错误并回退复制+删除
   const unIdx = registry.indexOf('async function uninstall');
@@ -91,7 +91,7 @@ test('项目级 Skill 卸载跨盘回退：rename 失败时复制+删除（EXDEV
 
 test('项目级 Skill 恢复跨盘回退：隔离区 → 项目盘 rename 失败时复制+删除（对称修复）', () => {
   const registry = read('src/core/skills/skill-registry.js');
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const ui = read('src/renderer/components/ui.js');
   const rsIdx = registry.indexOf('async function restoreFromQuarantine');
   const rsSeg = registry.slice(rsIdx, rsIdx + 900);
@@ -104,7 +104,7 @@ test('项目级 Skill 恢复跨盘回退：隔离区 → 项目盘 rename 失败
 });
 
 test('同名Skill全部展示并由主进程按Runtime根顺序标记生效状态', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   const runtime = readRuntimeSource(ROOT);
   const ui = read('src/renderer/components/ui.js');
   assert.match(main, /SkillRegistry\.enumerateInstalled\(\[\{ scope: 'builtin', dir: builtinRoot \}\]\)/);
@@ -120,7 +120,7 @@ test('同名Skill全部展示并由主进程按Runtime根顺序标记生效状�
 });
 
 test('编辑和定位只能作用于解析后的 SKILL.md，卸载需确认并移入隔离区', () => {
-  const main = read('src/main/main.js');
+  const main = readMainSource();
   assert.match(main, /const managed = await resolveManagedSkill\(payload\)/);
   assert.match(main, /path\.join\(managed\.skill\.dir, 'SKILL\.md'\)/);
   assert.match(main, /path\.join\(managed\.skill\.dir, 'SKILL\.md\.disabled'\)/);

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -31,7 +32,7 @@ test('v1.1.3 model health exposes first-byte and full-response timings', async (
 
 test('v1.1.3 state retains project/session metadata while the UI stays on the compact v1.1.2 layout', () => {
   const state = fs.readFileSync(path.join(root, 'src/renderer/state/state.js'), 'utf8');
-  const agent = fs.readFileSync(path.join(root, 'src/renderer/views/agent/agent.js'), 'utf8');
+  const agent = readRendererSource();
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
   const search = fs.readFileSync(path.join(root, 'src/renderer/components/search.js'), 'utf8');
