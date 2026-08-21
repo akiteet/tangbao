@@ -117,6 +117,16 @@ tangbao/
 
 ## Version history
 
+### v1.1.7 (engineering & experience)
+
+- **Batch E renderer split**: agent.js 3736 → 2075 lines, render methods extracted into 6 modules (run-history/bubbles/approvals/engine-observer/layout/status); main.js skills IPC moved to main-skills.js; 340 source-text assertions covered via directory-joining source-helper.
+- **Command palette (Ctrl/Cmd + K)**: landed the orphaned implementation — module switch, settings, cache probe, local search over conversations/docs/projects/threads; fixed the double-binding clash with local search.
+- **Image history pagination**: 20 per page + load more; no more linear DOM growth from inline base64.
+- **Tanguan worldbook enable/disable**: per-entry toggle (disabled entries skip retrieval).
+- **Tech debt**: agent event persistence and git ls-files failures now warn explicitly instead of being swallowed.
+
+See [docs/CHANGELOG-v1.1.7.md](docs/CHANGELOG-v1.1.7.md).
+
 ### v1.1.6 (performance & data slimming)
 
 - **Switch-path jank root cause fixed**: `activate()` synchronously triggered three full-state serializations (incl. base64 attachments) — persistence moved off the switch frame, float sanitization switched to manual shallow copy, attachments externalized.
