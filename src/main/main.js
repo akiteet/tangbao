@@ -26,6 +26,7 @@ const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
 const dataLocation = require('../infrastructure/storage/data-location');
 const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
+const { userSkillsDirsList } = require('./main-skills'); // v1.1.7 批次 E：技能目录辅助随拆分模块导出
 const legacySecretContext = require('../infrastructure/secrets/legacy-context');
 const TangguanCore = require('../core/tangguan/tangguan-store');
 const TangguanStore = require('../infrastructure/tangguan/tangguan-store');
@@ -2454,7 +2455,7 @@ const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'g
       resolveWorkspace,
       runStore: runStoreProxy,
       // v3（批次4）：用户级 skill 目录——「放目录即被加载」的体验
-      userSkillsDirs: userSkillsDirsList(),
+      userSkillsDirs: userSkillsDirsList(app),
     });
 
     // M5（#254）：tangbao-file:// 自定义协议处理器——按 fileId 回磁盘文件，URL 不暴露任何真实路径

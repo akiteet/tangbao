@@ -7,17 +7,20 @@ const os = require('os');
 const SkillPackage = require('../core/skills/skill-package');
 const SkillRegistry = require('../core/skills/skill-registry');
 
+function userSkillsDirsList(app) {
+  return [
+    path.join(app.getPath('userData'), 'tangbao-data', 'skills'),
+    path.join(os.homedir(), '.tangbao-skills'),
+    path.join(os.homedir(), '.workbuddy', 'skills'),
+  ];
+}
+
 function registerMainSkills(deps) {
   const { safeHandle, app, getStorageService } = deps;
   const mainWindow = () => (deps.getMainWindow ? deps.getMainWindow() : null);
 
 /* ---------- v4（技能面板）：技能导入 / 启停（renderer 无文件写权限，经主进程执行） ---------- */
 const SKILL_NAME_RE = /^[\p{L}\p{N}_-]{1,64}$/u; // v2（ZIP 兼容）：允许中文等 Unicode 名称，仍拒绝路径/引号等非法字符
-const userSkillsDirsList = () => [
-  path.join(app.getPath('userData'), 'tangbao-data', 'skills'),
-  path.join(os.homedir(), '.tangbao-skills'),
-  path.join(os.homedir(), '.workbuddy', 'skills'),
-];
 const projectSkillRoots = (cwd) => cwd ? [
   path.join(cwd, '.workbuddy', 'skills'),
   path.join(cwd, '.tangbao-skills'),
@@ -60,7 +63,7 @@ safeHandle('skills:list', async (_e, workspaceId) => {
       .concat(builtin.map((s) => ({ name: s.name, description: s.description, level: 'builtin', scope: 'builtin', dir: s.dir, enabled: s.enabled !== false })));
     const orderedRoots = [];
     if (cwd) projectSkillRoots(cwd).forEach((dir, index) => orderedRoots.push({ scope: 'project', dir, label: ['项目 .workbuddy', '项目 .tangbao', '项目 .claude', '项目 .codex'][index] || '项目 Skill' }));
-    userSkillsDirsList().forEach((dir, index) => orderedRoots.push({ scope: 'user', dir, label: ['糖包用户目录', '用户 .tangbao', '用户 .workbuddy'][index] || '用户 Skill' }));
+    userSkillsDirsList(app).forEach((dir, index) => orderedRoots.push({ scope: 'user', dir, label: ['糖包用户目录', '用户 .tangbao', '用户 .workbuddy'][index] || '用户 Skill' }));
     orderedRoots.push({ scope: 'builtin', dir: builtinRoot, label: '内置 Skill' });
     const resolvedAll = SkillRegistry.annotateDuplicateResolution(all, orderedRoots);
     const conflicts = SkillSecurity.triggerConflicts(resolvedAll);
@@ -96,7 +99,7 @@ safeHandle('skills:list', async (_e, workspaceId) => {
 const isAllowedSkillDir = (dir, workspaceId, scope) => {
   const roots = [];
   const expectedScope = String(scope || '');
-  if (!expectedScope || expectedScope === 'user') roots.push(...userSkillsDirsList());
+  if (!expectedScope || expectedScope === 'user') roots.push(...userSkillsDirsList(app));
   if (!expectedScope || expectedScope === 'project') {
     if (workspaceId) {
       const ws = resolveWorkspace(String(workspaceId));
@@ -112,7 +115,7 @@ const isAllowedSkillDir = (dir, workspaceId, scope) => {
 // 与运行时 scanSkills 分离：管理枚举不去重、不要求目录名=name，保证被覆盖实例与别名目录可管理。
 const managedSkillRoots = (workspaceId) => {
   const roots = [];
-  for (const base of userSkillsDirsList()) roots.push({ scope: 'user', dir: base });
+  for (const base of userSkillsDirsList(app)) roots.push({ scope: 'user', dir: base });
   const pushProject = (cwd) => {
     for (const dir of projectSkillRoots(cwd)) roots.push({ scope: 'project', dir });
   };
@@ -159,7 +162,7 @@ safeHandle('skills:import', async (_e, payload) => {
     if (!ws || !ws.cwd) return { ok: false, error: '请先打开有效项目，再导入项目级 Skill' };
     targetRoot = projectSkillTargetRoot(ws.cwd);
   } else if (scope === 'user') {
-    targetRoot = userSkillsDirsList()[0];
+    targetRoot = userSkillsDirsList(app)[0];
   } else {
     return { ok: false, error: '无效的 Skill 安装范围' };
   }
@@ -297,7 +300,7 @@ safeHandle('skills:restore', async (_e, payload) => {
       targetRoot = projectSkillTargetRoot(ws.cwd);
     } else {
       scope = 'user';
-      targetRoot = userSkillsDirsList()[0];
+      targetRoot = userSkillsDirsList(app)[0];
     }
     const confirm = await dialog.showMessageBox(mainWindow(), { type: 'warning', title: '恢复 Skill', message: '恢复「' + path.basename(target) + '」？', detail: '将恢复到' + (scope === 'project' ? '当前项目' : '用户级') + '技能目录；若已存在同名技能则恢复失败。', buttons: ['取消', '恢复'], defaultId: 0, cancelId: 0, noLink: true });
     if (confirm.response !== 1) return { ok: false, canceled: true };
@@ -357,7 +360,7 @@ safeHandle('skills:move', async (_e, payload) => {
       if (!ws || !ws.cwd) return { ok: false, error: '请先打开有效项目，再移动为项目级 Skill' };
       targetRoot = projectSkillTargetRoot(ws.cwd);
     } else if (toScope === 'user') {
-      targetRoot = userSkillsDirsList()[0];
+      targetRoot = userSkillsDirsList(app)[0];
     } else {
       return { ok: false, error: '无效的目标 Skill 范围' };
     }
@@ -392,7 +395,7 @@ safeHandle('skills:importExternal', async (_e, payload) => {
     const source = candidates.find((item) => item.name === String(payload.name || '') && item.source === String(payload.source || ''));
     if (!source) return { ok: false, error: '未找到外部 Skill' };
     const pkg = await SkillRegistry.packageFromDirectory(source.dir, { sourceType: source.source });
-    const targetRoot = payload.scope === 'user' ? userSkillsDirsList()[0] : projectSkillTargetRoot(ws.cwd);
+    const targetRoot = payload.scope === 'user' ? userSkillsDirsList(app)[0] : projectSkillTargetRoot(ws.cwd);
     const targetDir = path.join(targetRoot, pkg.skill.name); const replace = fs.existsSync(targetDir);
     const installed = await SkillPackage.installPackage(pkg, targetRoot, { replace });
     await SkillRegistry.writeManifest(installed.dir, { scope: payload.scope === 'user' ? 'user' : 'project', sourceType: source.source, sourcePath: source.dir });
@@ -422,4 +425,4 @@ safeHandle('skills:toggle', async (_e, payload) => {
 
 }
 
-module.exports = { registerMainSkills };
+module.exports = { registerMainSkills, userSkillsDirsList };
