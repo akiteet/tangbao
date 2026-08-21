@@ -1,11 +1,12 @@
 'use strict';
 /* 自 main.js 拆分（v1.1.7 批次 E）：技能面板 IPC（v4）——renderer 无文件写权限，经主进程执行。
- * 依赖经 registerMainSkills(deps) 注入：safeHandle / app / getStorageService / getMainWindow。 */
+ * 依赖经 registerMainSkills(deps) 注入：safeHandle / app / getStorageService / getMainWindow / resolveWorkspace / BrowserWindow / dialog / shell / workspaceRegistry。 */
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const SkillPackage = require('../core/skills/skill-package');
 const SkillRegistry = require('../core/skills/skill-registry');
+const SkillSecurity = require('../core/skills/skill-security');
 
 function userSkillsDirsList(app) {
   return [
@@ -16,7 +17,7 @@ function userSkillsDirsList(app) {
 }
 
 function registerMainSkills(deps) {
-  const { safeHandle, app, getStorageService, resolveWorkspace } = deps;
+  const { safeHandle, app, getStorageService, resolveWorkspace, BrowserWindow, dialog, shell, workspaceRegistry } = deps;
   const mainWindow = () => (deps.getMainWindow ? deps.getMainWindow() : null);
 
 /* ---------- v4（技能面板）：技能导入 / 启停（renderer 无文件写权限，经主进程执行） ---------- */

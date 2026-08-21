@@ -2544,4 +2544,8 @@ require('./main-skills').registerMainSkills({
   getStorageService,
   getMainWindow: () => mainWindow,
   resolveWorkspace,
+  BrowserWindow,
+  dialog,
+  shell,
+  workspaceRegistry,
 });
