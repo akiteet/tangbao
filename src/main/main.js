@@ -2546,7 +2546,7 @@ const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'g
 }
 
 // v1.1.7（批次 E）：技能面板 IPC 拆分模块（renderer 无文件写权限，经主进程执行）
-({ managedSkillRoots } = require('./main-skills').registerMainSkills({
+const _mainSkillsInit = require('./main-skills').registerMainSkills({
   safeHandle,
   app,
   getStorageService,
@@ -2557,3 +2557,4 @@ const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'g
   shell,
   workspaceRegistry,
 });
+managedSkillRoots = _mainSkillsInit.managedSkillRoots;
