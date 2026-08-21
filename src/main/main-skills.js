@@ -16,7 +16,7 @@ function userSkillsDirsList(app) {
 }
 
 function registerMainSkills(deps) {
-  const { safeHandle, app, getStorageService } = deps;
+  const { safeHandle, app, getStorageService, resolveWorkspace } = deps;
   const mainWindow = () => (deps.getMainWindow ? deps.getMainWindow() : null);
 
 /* ---------- v4（技能面板）：技能导入 / 启停（renderer 无文件写权限，经主进程执行） ---------- */
