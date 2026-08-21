@@ -26,8 +26,8 @@ const ControlledEval = require('../core/agent-runtime/controlled-eval');
 const WorkspaceRoots = require('../core/workspace/workspace-roots');
 const dataLocation = require('../infrastructure/storage/data-location');
 const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
-const { userSkillsDirsList } = require('./main-skills'); // v1.1.7 批次 E：技能目录辅助随拆分模块导出
-let managedSkillRoots = null; // 由 registerMainSkills 调用后捕获（其内部定义，通过返回值暴露）
+const { userSkillsDirsList, createMainSkills } = require('./main-skills'); // v1.1.7 批次 E：技能目录辅助 + 技能 IPC 工厂
+let managedSkillRoots; // 由底部 createMainSkills 初始化后赋值，搜索 handler 请求时读取
 const legacySecretContext = require('../infrastructure/secrets/legacy-context');
 const TangguanCore = require('../core/tangguan/tangguan-store');
 const TangguanStore = require('../infrastructure/tangguan/tangguan-store');
@@ -2546,7 +2546,8 @@ const runStoreMethods = ['createAgentRun', 'updateAgentRun', 'listAgentRuns', 'g
 }
 
 // v1.1.7（批次 E）：技能面板 IPC 拆分模块（renderer 无文件写权限，经主进程执行）
-const _mainSkillsInit = require('./main-skills').registerMainSkills({
+// 纯工厂模式：createMainSkills 注册所有技能 IPC handler 并返回主进程需要的 helper
+managedSkillRoots = createMainSkills({
   safeHandle,
   app,
   getStorageService,
@@ -2556,5 +2557,4 @@ const _mainSkillsInit = require('./main-skills').registerMainSkills({
   dialog,
   shell,
   workspaceRegistry,
-});
-managedSkillRoots = _mainSkillsInit.managedSkillRoots;
+}).managedSkillRoots;

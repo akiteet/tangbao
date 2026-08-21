@@ -1,6 +1,7 @@
 'use strict';
 /* 自 main.js 拆分（v1.1.7 批次 E）：技能面板 IPC（v4）——renderer 无文件写权限，经主进程执行。
- * 依赖经 registerMainSkills(deps) 注入：safeHandle / app / getStorageService / getMainWindow / resolveWorkspace / BrowserWindow / dialog / shell / workspaceRegistry。 */
+ * 纯工厂模式：createMainSkills(deps) 一次性返回主进程需要的所有函数（managedSkillRoots）+ 注册所有 IPC handler。
+ * deps 注入：safeHandle / app / getStorageService / getMainWindow / resolveWorkspace / BrowserWindow / dialog / shell / workspaceRegistry。 */
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -16,7 +17,7 @@ function userSkillsDirsList(app) {
   ];
 }
 
-function registerMainSkills(deps) {
+function createMainSkills(deps) {
   const { safeHandle, app, getStorageService, resolveWorkspace, BrowserWindow, dialog, shell, workspaceRegistry } = deps;
   const mainWindow = () => (deps.getMainWindow ? deps.getMainWindow() : null);
 
@@ -427,4 +428,4 @@ safeHandle('skills:toggle', async (_e, payload) => {
 return { managedSkillRoots };
 }
 
-module.exports = { registerMainSkills, userSkillsDirsList };
+module.exports = { createMainSkills, userSkillsDirsList };
