@@ -424,6 +424,7 @@ safeHandle('skills:toggle', async (_e, payload) => {
   }
 });
 
+return { managedSkillRoots };
 }
 
-module.exports = { registerMainSkills, userSkillsDirsList, managedSkillRoots };
+module.exports = { registerMainSkills, userSkillsDirsList };
