@@ -2016,6 +2016,7 @@ th { background: var(--hover-bg); font-weight: 600; }
 .tg-memory-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 .tg-memory-row > div { min-width: 0; }
 .tg-memory-row b, .tg-memory-row p, .tg-memory-row small { overflow-wrap: anywhere; word-break: break-word; }
+.tg-memory-ops { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .tg-memory-row b { font-size: var(--fs-sm); }
 .tg-memory-row p { margin: 3px 0; color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; }
 .tg-memory-row small { color: var(--text-tertiary); font-size: var(--fs-xs); }

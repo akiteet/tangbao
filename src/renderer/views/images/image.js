@@ -239,7 +239,7 @@
     refImage: null,   // 参考图片 base64 data URL（用于图片编辑）
     // v1.1.5：A2 草稿态（切视图不丢输入）/ D2 历史管理态 / B1 队列计时器
     _draftPrompt: '', _draftRefName: '',
-    _historySearch: '', _expandedHistory: new Set(), _migrating: false, _migrated: false,
+    _historySearch: '', _expandedHistory: new Set(), _migrating: false, _migrated: false, _historyLimit: 20,
     _queueTimer: null, _lbKeyHandler: null,
 
     onShow() {
@@ -1109,13 +1109,17 @@
       const cmpN = App.image.compareList.length;
       const esc = App.escapeHtml;
       if (!all.length) { box.innerHTML = ''; return; }
+      // v1.1.7：分页渲染（默认 20 条 + 加载更多），避免内联 base64 历史随记录数线性膨胀
+      const limit = Math.max(1, Number(App.image._historyLimit) || 20);
+      const visible = hist.slice(0, limit);
+      const hasMore = hist.length > visible.length;
       box.innerHTML = `
         <div class="history-head">历史记录<span class="history-count">最近 ${all.length} 次</span>
           <input type="search" id="imgHistorySearch" class="history-search" placeholder="搜索提示词…" value="${esc(App.image._historySearch)}" />
           ${cmpN ? `<button type="button" class="mini" id="imgCmpClear">清空对比（${cmpN}/2）</button>` : ''}
           <button type="button" class="mini" id="imgHistoryClear" title="删除全部历史（含本地图片文件）">清空历史</button>
         </div>
-        ${hist.length ? hist.map((e) => {
+        ${visible.length ? visible.map((e) => {
           const total = (e.files || e.images || []).length;
           const expanded = App.image._expandedHistory.has(e.id);
           const shown = expanded ? total : Math.min(total, 4);
@@ -1139,7 +1143,8 @@
             </div>
             <div class="history-thumbs">${thumbs.join('')}${more}</div>
           </div>`;
-        }).join('') : '<div class="history-empty">没有匹配的历史记录</div>'}`;
+        }).join('') : '<div class="history-empty">没有匹配的历史记录</div>'}
+        ${hasMore ? `<button type="button" class="btn-ghost mini history-more-page" data-history-more>加载更早记录（${hist.length - visible.length}）</button>` : ''}`;
 
       // 落盘文件按需取图（LRU 缓存命中则同步返回）
       box.querySelectorAll('img[data-file]').forEach(async (img) => {
@@ -1153,10 +1158,17 @@
       const search = box.querySelector('#imgHistorySearch');
       if (search) search.addEventListener('input', () => {
         App.image._historySearch = search.value;
+        App.image._historyLimit = 20; // v1.1.7：搜索时回到第一页
         App.image.renderHistory();
         const next = box.querySelector('#imgHistorySearch');
         if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
       });
+
+      // v1.1.7：分页加载更早记录
+      box.querySelectorAll('[data-history-more]').forEach((b) => b.addEventListener('click', () => {
+        App.image._historyLimit = (Number(App.image._historyLimit) || 20) + 20;
+        App.image.renderHistory();
+      }));
 
       // 展开/收起全部缩略图（批次 D3）
       box.querySelectorAll('.history-more').forEach((b) => b.addEventListener('click', (e) => {

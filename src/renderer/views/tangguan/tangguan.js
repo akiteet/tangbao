@@ -306,7 +306,7 @@
 
   function memoryHtml() {
     if (!selected) return '<div class="tg-empty">保存角色后，可添加该角色专属世界书条目。</div>';
-    const rows = memories.length ? memories.map((item) => `<div class="tg-memory-row"><div><b>${esc(item.title || '未命名条目')}</b><p>${esc(item.content)}</p><small>优先级 ${item.priority} · ${(item.tags || []).map(esc).join('、') || '无标签'}</small></div><button type="button" class="icon-btn" title="删除" data-tg-memory-delete="${esc(item.id)}">×</button></div>`).join('') : '<div class="tg-empty">暂无世界书条目。只会检索当前角色的条目。</div>';
+    const rows = memories.length ? memories.map((item) => `<div class="tg-memory-row"><div><b>${esc(item.title || '未命名条目')}</b><p>${esc(item.content)}</p><small>优先级 ${item.priority} · ${(item.tags || []).map(esc).join('、') || '无标签'}${item.enabled === false ? ' · 已停用' : ''}</small></div><div class="tg-memory-ops"><label class="mini-chk" title="启用后才会参与检索"><input type="checkbox" data-tg-memory-toggle="${esc(item.id)}" ${item.enabled === false ? '' : 'checked'} />启用</label><button type="button" class="icon-btn" title="删除" data-tg-memory-delete="${esc(item.id)}">×</button></div></div>`).join('') : '<div class="tg-empty">暂无世界书条目。只会检索当前角色的条目。</div>';
     return `<div class="tg-memory-list">${rows}</div>
       <div class="tg-memory-form"><input id="tgMemoryTitle" type="text" placeholder="条目标题" autocomplete="off" /><textarea id="tgMemoryContent" rows="2" placeholder="只写该角色需要知道的世界观、关系或长期事实"></textarea><div class="tg-memory-actions"><input id="tgMemoryTags" type="text" placeholder="标签，用逗号分隔" autocomplete="off" /><input id="tgMemoryPriority" type="number" min="0" max="100" value="60" title="优先级" /><button type="button" class="btn-ghost mini" data-tg-memory-save>添加条目</button><button type="button" class="btn-ghost mini" data-tg-memory-test>检索预览</button></div><div id="tgMemoryStatus" class="tg-status"></div></div>`;
   }
@@ -750,7 +750,7 @@
     const result = await Promise.resolve(call('saveMemory', { ok: false }, { characterId: selected.id, expectedRevision: revision, memory: {
       title: (($('tgMemoryTitle') && $('tgMemoryTitle').value) || '').trim(), content,
       tags: (($('tgMemoryTags') && $('tgMemoryTags').value) || '').split(/[,，]/).map((item) => item.trim()).filter(Boolean),
-      priority: Number(($('tgMemoryPriority') && $('tgMemoryPriority').value) || 60), source: 'user',
+      priority: Number(($('tgMemoryPriority') && $('tgMemoryPriority').value) || 60), source: 'user', enabled: true,
     } }));
     if (!result || !result.ok) { App.ui.toast('世界书保存失败，请重新载入角色'); return; }
     invalidateCharacterDetail(selected.id);
@@ -1013,6 +1013,17 @@
       const memorySave = target.closest('[data-tg-memory-save]'); if (memorySave) { await saveMemory(); return; }
       const memoryDelete = target.closest('[data-tg-memory-delete]');
       if (memoryDelete && selected) { const result = await Promise.resolve(call('deleteMemory', { ok: false }, { characterId: selected.id, memoryId: memoryDelete.dataset.tgMemoryDelete, expectedRevision: revision })); if (result && result.ok) { invalidateCharacterDetail(selected.id); await loadCharacters(selected.id); } else App.ui.toast('世界书删除失败'); return; }
+      const memoryToggle = target.closest('[data-tg-memory-toggle]');
+      if (memoryToggle && selected) {
+        // v1.1.7：启停世界书条目（upsert 更新 enabled）
+        const item = memories.find((m) => m && m.id === memoryToggle.dataset.tgMemoryToggle);
+        if (!item) return;
+        const result = await Promise.resolve(call('saveMemory', { ok: false }, { characterId: selected.id, expectedRevision: revision, memory: Object.assign({}, item, { enabled: memoryToggle.checked }) }));
+        if (!result || !result.ok) { App.ui.toast('世界书启停失败，请重新载入角色'); return; }
+        invalidateCharacterDetail(selected.id);
+        await loadCharacters(selected.id);
+        return;
+      }
       const memoryTest = target.closest('[data-tg-memory-test]');
       if (memoryTest && selected) { const query = window.prompt('输入要检索的内容'); if (!query) return; const result = await Promise.resolve(call('retrieveContext', { ok: false }, { characterId: selected.id, query, tokenBudget: 600, limit: 5 })); const status = $('tgMemoryStatus'); if (status) status.textContent = result && result.ok && result.items.length ? `命中 ${result.items.length} 条（${result.mode}）\n${result.context}` : '没有命中当前角色的世界书条目。'; return; }
       const worldbookImport = target.closest('[data-tg-worldbook-import]');
