@@ -276,6 +276,22 @@ function acceptStateRevision(payload, explicitRevision) {
       if (currentAccounts.length > 0) return { ok: false, code: 'account_loss_guard', reason: 'account_loss_guard', error: '拒绝用空账户快照覆盖已有账户' };
     } catch (_) {}
   }
+  // v1.1.8 Q1：customModules/visionModels 空快照守卫——会话数 >0 且磁盘当前值非空时，
+  // 拒绝用空列表覆盖（同 account_loss_guard 模式；2026-08-22 事故：拖拽写空 + 写穿同步三处同时清空）。
+  // 合法的"清空全部模块/视觉模型"操作目前不存在（编辑器只有逐个删除），故无需 one-shot 豁免标记。
+  if (incomingSettings && Array.isArray(incoming.conversations) && incoming.conversations.length > 0) {
+    try {
+      const current = readActiveStateObject();
+      const cs = current && current.settings || {};
+      for (const field of ['customModules', 'visionModels']) {
+        const incomingList = incomingSettings[field];
+        const currentList = cs[field];
+        if (Array.isArray(incomingList) && incomingList.length === 0 && Array.isArray(currentList) && currentList.length > 0) {
+          return { ok: false, code: 'settings_loss_guard', reason: 'settings_loss_guard', error: '拒绝用空 ' + field + ' 覆盖已有配置' };
+        }
+      }
+    } catch (_) {}
+  }
   const revision = extractStateRevision(payload, explicitRevision);
   if (revision > 0 && latestStateRevision > 0 && revision < latestStateRevision) {
     return { ok: false, skipped: true, reason: 'stale_state_revision', revision, latestRevision: latestStateRevision };

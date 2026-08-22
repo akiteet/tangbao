@@ -198,13 +198,17 @@
     const active = item.id === selectedId ? ' active' : '';
     const tags = (item.tags || []).slice(0, 2).map((tag) => `<span>${esc(tag)}</span>`).join('');
     const recentLabel = item.lastUsedAt ? '最近使用' : '尚未使用';
-    // v1.1.8 P3：对齐统一横条卡片语言（左头像容器/名称/标签右置/最近使用小字/hover 显操作）
+    // v1.1.8 Q2：两行自适应卡——行1 图标+名称；行2 标签/最近使用+常显操作（窄栏零溢出）
     return `<div class="tg-character-card lib-bar${active}" data-tg-select="${esc(item.id)}" role="button" tabindex="0">
-      ${avatar(item, 'lib-bar-icon tg-card-avatar')}
-      <span class="lib-bar-main"><b class="lib-bar-name">${esc(item.name)}</b></span>
-      <span class="lib-bar-meta tg-tags">${tags}</span>
-      <small class="lib-bar-desc" data-tg-recent style="flex:0 0 auto;">${recentLabel}</small>
-      <span class="lib-bar-ops tg-card-actions"><button type="button" class="tg-card-action" data-tg-card-action data-tg-favorite="${esc(item.id)}" title="${item.favorite ? '取消收藏' : '收藏'}" aria-label="${item.favorite ? '取消收藏' : '收藏'}">${item.favorite ? '★' : '☆'}</button><button type="button" class="tg-card-action" data-tg-card-action data-tg-copy="${esc(item.id)}" title="复制角色卡" aria-label="复制角色卡">⧉</button><button type="button" class="tg-card-action danger" data-tg-card-action data-tg-delete-card="${esc(item.id)}" title="删除角色卡" aria-label="删除角色卡">×</button></span>
+      <div class="lib-bar-row1">
+        ${avatar(item, 'lib-bar-icon tg-card-avatar')}
+        <span class="lib-bar-main"><b class="lib-bar-name">${esc(item.name)}</b></span>
+      </div>
+      <div class="lib-bar-row2">
+        <span class="tg-tags lib-bar-desc">${tags}</span>
+        <small class="lib-bar-desc" data-tg-recent>${recentLabel}</small>
+        <span class="lib-bar-ops tg-card-actions"><button type="button" class="tg-card-action" data-tg-card-action data-tg-favorite="${esc(item.id)}" title="${item.favorite ? '取消收藏' : '收藏'}" aria-label="${item.favorite ? '取消收藏' : '收藏'}">${item.favorite ? '★' : '☆'}</button><button type="button" class="tg-card-action" data-tg-card-action data-tg-copy="${esc(item.id)}" title="复制角色卡" aria-label="复制角色卡">⧉</button><button type="button" class="tg-card-action danger" data-tg-card-action data-tg-delete-card="${esc(item.id)}" title="删除角色卡" aria-label="删除角色卡">×</button></span>
+      </div>
     </div>`;
   }
 

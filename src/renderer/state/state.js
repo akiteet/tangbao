@@ -76,6 +76,8 @@
       // v1.1.6 加固：有会话但 customModules 为空 → 触发恢复（fallback 有数据则补回，防自定义模块再次静默丢失）。
       // opts.ignoreCustomModules=true 时跳过——用于 loadState 的 incomplete 判定，避免打扰"无自定义模块"的新用户。
       if (!o.ignoreCustomModules && Array.isArray(settings.customModules) && settings.customModules.length === 0) return true;
+      // v1.1.8 Q1：visionModels 纳入丢失检测——applyLoaded 只在字段缺失时回填默认表，防不住被固化的空数组
+      if (!o.ignoreCustomModules && Array.isArray(settings.visionModels) && settings.visionModels.length === 0) return true;
     }
     // An empty account array is recoverable unless it was produced by the
     // explicit two-step "clear all" action. This protects against a partial
@@ -112,6 +114,10 @@
       // 避免 state.json 被覆盖后用户自定义模块（糖九球等）从主源消失。
       if ((!Array.isArray(ps.customModules) || ps.customModules.length === 0) && Array.isArray(fs.customModules) && fs.customModules.length > 0) {
         merged.settings.customModules = fs.customModules;
+      }
+      // v1.1.8 Q1：visionModels 同策略恢复（自定义视觉模型列表被固化清空时从 fallback 捞回）
+      if ((!Array.isArray(ps.visionModels) || ps.visionModels.length === 0) && Array.isArray(fs.visionModels) && fs.visionModels.length > 0) {
+        merged.settings.visionModels = fs.visionModels;
       }
     }
     // v1.1.6：agentThreads/projects 从 fallback 恢复

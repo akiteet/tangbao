@@ -364,7 +364,7 @@
       grid.innerHTML = filtered.map(a => App.create.agentCard(a)).join('') +
         `<button class="lib-bar lib-bar--add" id="addAgentBtn">
            <span class="lib-bar-icon">＋</span>
-           <span class="lib-bar-main"><span class="lib-bar-name">新建任务智能体</span><span class="lib-bar-desc">自定义任务设定与提示词</span></span>
+           <span class="lib-bar-main"><b class="lib-bar-name">新建任务智能体</b><span class="lib-bar-desc">自定义任务设定与提示词</span></span>
          </button>`;
 
       grid.querySelectorAll('[data-agent]').forEach(card => card.addEventListener('click', () => {
@@ -391,19 +391,23 @@
 
     agentCard(a) {
       const usage = (App.state.settings.agentUsage || {})[a.id] || 0;
-      const modelBadge = a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : '';
-      const reco = (a.recommended && !a.custom) ? `<span class="lib-bar-ops" title="推荐"><span style="color: var(--warning);">★</span></span>` : '';
-      const tags = (a.tags && a.tags.length)
-        ? a.tags.slice(0, 2).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('') : '';
+      const reco = (a.recommended && !a.custom) ? '<span class="tag-chip" title="推荐" style="color: var(--warning); border-color: transparent;">★</span>' : '';
+      const tag = (a.tags && a.tags.length) ? `<span class="tag-chip">${esc(a.tags[0])}</span>` : '';
       const actions = a.custom
         ? `<button data-edit="${a.id}" title="编辑">✎</button>
            <button class="danger" data-del="${a.id}" title="删除">×</button>`
         : `<button data-clone="${a.id}" title="克隆">⧉</button>`;
+      // v1.1.8 Q2：两行自适应卡——行1 图标+名称+徽记；行2 描述/使用次数+常显操作
       return `<div class="lib-bar" data-agent="${a.id}">
-        <span class="lib-bar-icon">${a.icon || '🤖'}</span>
-        <span class="lib-bar-main"><span class="lib-bar-name">${esc(a.name)}</span><span class="lib-bar-desc">${esc(a.desc || '')}${usage ? ` · 用了 ${usage} 次` : ''}</span></span>
-        <span class="lib-bar-meta">${tags}${modelBadge}</span>
-        ${reco}<span class="lib-bar-ops">${actions}</span>
+        <div class="lib-bar-row1">
+          <span class="lib-bar-icon">${a.icon || '🤖'}</span>
+          <span class="lib-bar-main"><b class="lib-bar-name">${esc(a.name)}</b></span>
+          <span class="lib-bar-meta">${reco}${a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : ''}${tag}</span>
+        </div>
+        <div class="lib-bar-row2">
+          <span class="lib-bar-desc">${esc(a.desc || '')}${usage ? ` · 用了 ${usage} 次` : ''}</span>
+          <span class="lib-bar-ops">${actions}</span>
+        </div>
       </div>`;
     },
 
@@ -753,14 +757,20 @@
         const first = steps[0] && steps[0].prompt ? String(steps[0].prompt).slice(0, 40) : '尚未配置步骤';
         return `
         <div class="lib-bar" data-wf="${w.id}">
-          <span class="lib-bar-icon">⚙</span>
-          <span class="lib-bar-main"><span class="lib-bar-name">${esc(w.name)}</span><span class="lib-bar-desc">${esc(first)}</span></span>
-          <span class="lib-bar-meta"><span class="tag-chip">${steps.length} 步</span><button class="mini" data-run="${w.id}" title="运行工作流">▶ 运行</button></span>
-          <span class="lib-bar-ops">
-            <button data-edit="${w.id}" title="编辑">✎</button>
-            <button data-hist="${w.id}" title="历史">≡</button>
-            <button class="danger" data-del="${w.id}" title="删除">×</button>
-          </span>
+          <div class="lib-bar-row1">
+            <span class="lib-bar-icon">⚙</span>
+            <span class="lib-bar-main"><b class="lib-bar-name">${esc(w.name)}</b></span>
+            <span class="lib-bar-meta"><span class="tag-chip">${steps.length} 步</span></span>
+          </div>
+          <div class="lib-bar-row2">
+            <span class="lib-bar-desc">${esc(first)}</span>
+            <button class="mini" data-run="${w.id}" title="运行工作流">▶ 运行</button>
+            <span class="lib-bar-ops">
+              <button data-edit="${w.id}" title="编辑">✎</button>
+              <button data-hist="${w.id}" title="历史">≡</button>
+              <button class="danger" data-del="${w.id}" title="删除">×</button>
+            </span>
+          </div>
         </div>`; }).join('');
       grid.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', () => {
         const w = (App.state.settings.workflows || []).find(x => x.id === b.dataset.run);

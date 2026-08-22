@@ -1140,6 +1140,9 @@
         const ids = Array.from(customBox.querySelectorAll('.mod-row.custom-mod [data-edit]'))
           .map(b => b.dataset.edit);
         const old = App.state.settings.customModules || [];
+        // v1.1.8 Q1：DOM 与 state 失同步时（渲染被跳过/时序错位）ids 可能为空——
+        // 空数组绝不落盘，否则一次拖拽即把 customModules 固化为 []（2026-08-22 事故根因之一）
+        if (!ids.length && old.length) { App.modules.renderNav(); return; }
         App.state.settings.customModules = ids.map(id => old.find(m => m.id === id)).filter(Boolean);
         App.persist(); App.modules.renderNav();
       });
