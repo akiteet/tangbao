@@ -5,6 +5,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -183,7 +184,7 @@ test('failed migration still partitions module records in renderer memory', () =
 });
 
 test('regular Chat UI filters module sessions on every route', () => {
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   const sidebar = ui.slice(ui.indexOf('renderSidebar()'), ui.indexOf('renderTopbarTitle()'));
   assert.match(sidebar, /App\.state\.conversations\.filter\(\(item\) => !moduleConversation\(item\)\)/);
   assert.doesNotMatch(sidebar, /App\.state\.view === 'chat'\s*\?/);
@@ -192,7 +193,7 @@ test('regular Chat UI filters module sessions on every route', () => {
 });
 
 test('Tangguan provider selector supports legacy single-model accounts', () => {
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   assert.match(ui, /function accountModelNames\(account\)/);
   assert.match(ui, /account\.model \? \[account\.model\] : \[\]/);
   assert.match(ui, /modelNames = accountModelNames\(account\)/);
@@ -240,7 +241,7 @@ test('Tangchuang new sessions inherit a live agent configuration without message
 test('module headers use the shared model selector while accounts stay in settings', () => {
   const create = read('src/renderer/views/workflows/create.js');
   const tangguan = read('src/renderer/views/tangguan/tangguan.js');
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   assert.doesNotMatch(create, /moduleProviderMarkup\('create'\)/);
   assert.doesNotMatch(tangguan, /moduleProviderMarkup\('tangguan'\)/);
   assert.match(ui, /function currentModelModule\(\)/);

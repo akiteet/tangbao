@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -21,7 +22,7 @@ test('interactive slow paths expose timing contracts without recording user cont
   const app = read('src/renderer/app.js');
   const chat = read('src/renderer/views/chat/chat.js');
   const tangguan = read('src/renderer/views/tangguan/tangguan.js');
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   assert.match(router, /measure\('moduleSwitchMs'/);
   assert.match(app, /measure\('bootMs'/);
   assert.match(chat, /measure\('inputHandlerMs'/);
@@ -41,7 +42,7 @@ test('chat streaming reuses one text node and caches context-bar work', () => {
 });
 
 test('large local lists have bounded rendering and indexed search', () => {
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   const tangguan = read('src/renderer/views/tangguan/tangguan.js');
   assert.match(ui, /HISTORY_INITIAL_COUNT = 100/);
   assert.match(ui, /data-history-more/);

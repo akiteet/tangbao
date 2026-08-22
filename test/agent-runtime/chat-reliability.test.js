@@ -1,6 +1,7 @@
 'use strict';
 // 聊天修复 E 回归：吞消息（streaming 卡死/切换会话）与账户切换自动回退。
 // chat.js 是 IIFE 绑定 window 的渲染脚本，无法直接 require，故采用源码静态断言（与 skill-runtime.test.js 同风格）。
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -62,7 +63,7 @@ test('所有发送路径都记录流归属并在 finally 按归属渲染', () =>
 });
 
 test('账户下拉 change 立即写回 accountId 并持久化', () => {
-  const src = read('src/renderer/components/ui.js');
+  const src = readComponentsSource();
   assert.ok(src.includes("prov.accountId = apiAccountSel.value || '__default__';"), 'change 立即写回 accountId');
   assert.ok(src.includes('App.persist();'), '写回后持久化');
   assert.ok(src.includes("if (m !== 'default') prov.model = '';"), '保留换账户清模型逻辑');

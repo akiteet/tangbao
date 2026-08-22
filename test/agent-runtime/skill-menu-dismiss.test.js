@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const root = path.resolve(__dirname, '..', '..');
-const ui = fs.readFileSync(path.join(root, 'src/renderer/components/ui.js'), 'utf8');
+const ui = require('./source-helper').readComponentsSource();
 
 test('技能「⋯」菜单挂接一次性外部点击折叠委托', () => {
   assert.match(ui, /_skillMoreBound/);

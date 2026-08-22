@@ -24,7 +24,7 @@ test('v1.1.6（批次 A）：设置面板 data 区有性能诊断出口', () => 
 });
 
 test('v1.1.6（批次 A）：ui.js 绑定 perf 开关/导出/清空，开关状态存 settings + localStorage', () => {
-  const ui = fs.readFileSync(path.join(ROOT, 'src/renderer/components/ui.js'), 'utf8');
+  const ui = require('./source-helper').readComponentsSource();
   assert.match(ui, /perfToggle.*addEventListener\('change'/, '开关 change 绑定');
   assert.match(ui, /App\.perf\.enable\(\)/, '开启调用');
   assert.match(ui, /App\.perf\.disable\(\)/, '关闭调用');

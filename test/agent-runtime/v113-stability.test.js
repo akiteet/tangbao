@@ -36,7 +36,7 @@ test('v1.1.3 state retains project/session metadata while the UI stays on the co
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
   const search = fs.readFileSync(path.join(root, 'src/renderer/components/search.js'), 'utf8');
-  const ui = fs.readFileSync(path.join(root, 'src/renderer/components/ui.js'), 'utf8');
+  const ui = require('./source-helper').readComponentsSource();
   const migrator = fs.readFileSync(path.join(root, 'src/infrastructure/storage/migrator.js'), 'utf8');
   assert.match(state, /pinned: !!t\.pinned/);
   assert.match(state, /archived: !!t\.archived/);

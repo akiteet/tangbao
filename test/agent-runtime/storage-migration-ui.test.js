@@ -10,7 +10,7 @@ const root = path.resolve(__dirname, '../..');
 
 test('storage migration UI has a non-submit button and visible failure handling', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-  const ui = fs.readFileSync(path.join(root, 'src/renderer/components/ui.js'), 'utf8');
+  const ui = require('./source-helper').readComponentsSource();
   const main = readMainSource();
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 

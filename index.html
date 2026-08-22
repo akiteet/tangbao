@@ -728,6 +728,12 @@
   <script src="src/renderer/components/markdown.js"></script>
   <script src="src/renderer/router.js"></script>
   <script src="src/renderer/components/ui.js"></script>
+  <!-- v1.1.8 批次 C：ui.js 拆分模块（Object.assign(window.App.ui, {...})），必须排在 ui.js 之后加载 -->
+  <script src="src/renderer/components/ui-sidebar-topbar.js"></script>
+  <script src="src/renderer/components/ui-command-palette.js"></script>
+  <script src="src/renderer/components/ui-settings-storage.js"></script>
+  <script src="src/renderer/components/ui-skills-panel.js"></script>
+  <script src="src/renderer/components/ui-accounts.js"></script>
   <script src="src/renderer/views/chat/chat.js"></script>
   <script src="src/renderer/views/images/image.js"></script>
   <script src="src/renderer/views/documents/doc.js"></script>

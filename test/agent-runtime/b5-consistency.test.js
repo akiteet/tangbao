@@ -1,4 +1,5 @@
 'use strict';
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const assert = require('node:assert/strict');
@@ -9,7 +10,7 @@ const ROOT = path.join(__dirname, '../..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const mainSrc = readMainSource();
 const storeSrc = read('src/infrastructure/storage/sqlite-store.js');
-const uiSrc = read('src/renderer/components/ui.js');
+const uiSrc = readComponentsSource();
 const agentSrc = readRendererSource();
 const chatSrc = read('src/renderer/views/chat/chat.js');
 

@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { readRuntimeSource, readRendererSource, readMainSource } = require('./source-helper');
 const path = require('node:path');
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
@@ -259,7 +260,7 @@ test('legacy snapshots append Tangguan without changing existing module order', 
 });
 
 test('account mutations persist metadata before touching secrets and restore on either failure', () => {
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   const saveStart = ui.indexOf('async saveAccount()');
   const savePersist = ui.indexOf('const persisted = await persistAndVerify();', saveStart);
   const saveSecret = ui.indexOf("await App.rt.setSecret('acc:' + accId, apiKey)", saveStart);

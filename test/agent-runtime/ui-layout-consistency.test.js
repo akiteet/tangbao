@@ -1,5 +1,6 @@
 'use strict';
 
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -26,7 +27,7 @@ test('设置弹窗底部说明使用独立容器和与主体一致的安全留�
 
 test('账户页关闭设置内容外层滚动并仅保留账户列表内滚动', () => {
   const css = read('styles.css');
-  const ui = read('src/renderer/components/ui.js');
+  const ui = readComponentsSource();
   assert.match(ui, /settingsModal\.dataset\.activePanel = 'api'/);
   assert.match(ui, /\$\('settingsModal'\)\.dataset\.activePanel = target/);
   assert.match(css, /#settingsModal\[data-active-panel="account"\] \.settings-content \{ overflow: hidden; \}/);

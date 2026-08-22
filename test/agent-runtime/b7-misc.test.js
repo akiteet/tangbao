@@ -1,4 +1,5 @@
 'use strict';
+const { readComponentsSource } = require('./source-helper');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -9,7 +10,7 @@ const ROOT = path.join(__dirname, '../..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const agentSrc = readRuntimeSource(ROOT);
 const mainSrc = readMainSource();
-const uiSrc = read('src/renderer/components/ui.js');
+const uiSrc = readComponentsSource();
 const { exportRunJSONL } = require('../../src/core/agent-runtime/run-export');
 const Gate = require('../../src/core/agent-runtime/completion-gate');
 const G = require('../../src/infrastructure/model-gateway/gateway');

@@ -31,6 +31,13 @@ function readMainSource(root) {
   return readDirSource(path.join(base, 'src/main'));
 }
 
+// v1.1.8（批次 C）：ui.js 拆分（ui-accounts/ui-skills-panel/ui-settings-storage 等）——
+// 拼接 src/renderer/components/ 目录下全部 .js，断言源自动覆盖拆分模块。
+function readComponentsSource(root) {
+  const base = root || path.join(__dirname, '../..');
+  return readDirSource(path.join(base, 'src/renderer/components'));
+}
+
 function readDirSource(dir) {
   return fs.readdirSync(dir)
     .filter((name) => name.endsWith('.js'))
@@ -39,4 +46,4 @@ function readDirSource(dir) {
     .join('\n');
 }
 
-module.exports = { readRuntimeSource, readRendererSource, readMainSource };
+module.exports = { readRuntimeSource, readRendererSource, readMainSource, readComponentsSource };
