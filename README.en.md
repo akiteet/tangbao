@@ -38,7 +38,7 @@ Tangbao is a **local-first, privacy-first** all-in-one AI assistant desktop work
 
 ## Installation
 
-- **Install the app**: download `tangbao-1.1.7-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
+- **Install the app**: download `tangbao-1.1.8-setup.exe` from the [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) page and run it.
 - **Run from source**:
 
 ```bash
@@ -50,7 +50,7 @@ npm start          # launches the app (the Tangma local backend starts automatic
 
 > `npm run server` is only for standalone debugging of the Tangma backend; regular use does not need it.
 >
-> **Package**: `npm run dist` → `dist/tangbao-1.1.7-setup.exe`
+> **Package**: `npm run dist` → `dist/tangbao-1.1.8-setup.exe`
 
 ## Configuration
 

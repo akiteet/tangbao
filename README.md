@@ -58,7 +58,7 @@
 
 ## 安装
 
-- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.7-setup.exe`，双击安装即可。
+- **直接安装**：从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.1.8-setup.exe`，双击安装即可。
 - **从源码运行**：
 
 ```bash
@@ -70,7 +70,7 @@ npm start          # 启动应用（糖码本地后端随应用自动启动）
 
 > `npm run server` 仅用于独立调试糖码后端；正常使用不需要单独启动。
 >
-> **打包**：`npm run dist` → `dist/tangbao-1.1.7-setup.exe`
+> **打包**：`npm run dist` → `dist/tangbao-1.1.8-setup.exe`
 
 ## 配置
 
