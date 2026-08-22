@@ -14,7 +14,7 @@ The three largest files were the target of the deferred refactor. The guiding pr
   - `agent-layout.js` (main render/projects/sessions/restoreThread)
   - `agent-status.js` (run pill, status summary, resume)
   - Each file is an independent IIFE that `Object.assign`s methods onto `window.App.agent` and re-declares the shared closure helpers (`$` / `agentBase` / `authHeaders` / `workspaceErrorMessage` / `MAX_THREAD_HISTORY`).
-- **`main.js` 2947 → 2538 lines**: the skills IPC block (v4) moved verbatim into `src/main/main-skills.js`, registered via dependency injection (`registerMainSkills({ safeHandle, app, getStorageService, getMainWindow })`).
+- **`main.js` 2947 → 2538 lines**: the skills IPC block (v4) moved verbatim into `src/main/main-skills.js` as a factory — `createMainSkills(deps)` registers all handlers and returns the helpers the main process needs (`managedSkillRoots`).
 - **Source helper**: `test/agent-runtime/source-helper.js` grew `readRendererSource()` / `readMainSource()` (directory-join, so future splits are covered automatically); 27 test files switched to them.
 - **Engine `handleAgent` kept as-is**: its ~12 nested closures (emit/persist/budget/checkpoint) are tightly coupled; splitting equals a refactor with high risk and low benefit. Noted for a later batch.
 
@@ -40,6 +40,18 @@ Per-entry checkbox toggles whether a worldbook memory participates in retrieval 
 - Agent event persistence failure (`appendAgentEvent`) warns once per run instead of being silently swallowed (streaming still not blocked).
 - `git ls-files` failure in repo-index warns before falling back to directory walking.
 - `modules.js` webview `setSize` was already remediated via explicit width/height + resize dispatch (comment documents it).
+
+## Local search fixes
+
+- Selecting "全部" (all) returned only skill results: the scope sentinel `['__none__']` passed to `searchLocal` was treated as a literal allow-list, excluding every table. Now an empty scope list falls back to the built-in default whitelist.
+- Selecting the "Skill" category bled in all tables; a skill-only query now skips the database search entirely and returns skill rows only.
+- The skill enumeration helper (`managedSkillRoots`) is now exposed via the `createMainSkills` factory return value, fixing a silent failure that emptied skill results.
+
+## LLM connection timeout & retry
+
+- Connect timeout raised from 30 s to 60 s for both provider paths (native adapters and OpenAI-compatible chat).
+- New automatic retry on connection phase only: up to 5 attempts with exponential backoff (1s/2s/4s/8s). Idle-stream timeouts, server errors, and mid-stream interruptions are not retried.
+- Progress is logged to the console (`[LLM] 连接超时，第 N 次…`).
 
 ## Release gates
 
