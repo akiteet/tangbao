@@ -117,6 +117,15 @@ tangbao/
 
 ## Version history
 
+### v1.1.8 (persistence integrity & structure completion)
+
+- **P0 fix: image model partition survives restart**: v1.1.6 regression — the startup normalization whitelist missed the `imageModel` flag and the SQLite mirror had no image columns, so image classifications reverted to the text group and the stripped state was persisted back to disk. Whitelist round-trip restored + schema v17 (`account_models` gains image_model/image_extra) + SQLite read/write paths. Note: flags already stripped before upgrading must be re-marked once in Settings.
+- **Batch F main-process split complete**: four domains extracted — main-storage.js / main-tangguan.js / main-agent-runs.js / main-float.js (factory pattern); main.js 2560 → 1473 lines.
+- **Batch C settings-layer split**: ui.js extracted into five modules (sidebar-topbar / command-palette / settings-storage / skills-panel / accounts), 2857 → 1506 lines; source-helper gains readComponentsSource().
+- **chat.js split deferred after audit**: candidate blocks depend on 3–14 shared closure helpers (including the module-session persistence layer) — duplication outweighs the line-count gain.
+
+See [docs/CHANGELOG-v1.1.8.md](docs/CHANGELOG-v1.1.8.md).
+
 ### v1.1.7 (engineering & experience)
 
 - **Batch E renderer split**: agent.js 3736 → 2075 lines, render methods extracted into 6 modules (run-history/bubbles/approvals/engine-observer/layout/status); main.js skills IPC moved to main-skills.js; 340 source-text assertions covered via directory-joining source-helper.

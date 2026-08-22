@@ -158,6 +158,15 @@ tangbao/
 
 ## 版本历史
 
+### v1.1.8（持久化完整性与结构收尾）
+
+- **P0 修复：生图模型分区跨重启保持**：v1.1.6 回归——启动归一化白名单漏掉 `imageModel` 标记 + SQLite 镜像无图像列，导致生图分类重启后回退文本分组且被固化。本次补齐白名单往返 + Schema v17（account_models 加 image_model/image_extra 列）+ SQLite 读写路径。注意：升级前已被固化的纯标记需在设置里重新标记一次。
+- **批次 F 主进程拆分完成**：main.js 四域拆出——main-storage.js / main-tangguan.js / main-agent-runs.js / main-float.js（工厂模式），main.js 2560 → 1473 行。
+- **批次 C 设置层拆分**：ui.js 拆出侧边栏顶栏/命令面板/数据存储/技能面板/账户管理五个模块，2857 → 1506 行；source-helper 新增 readComponentsSource()。
+- **chat.js 拆分经审计顺延**：候选区块依赖 3–14 个共享闭包辅助（含模块会话持久层），复制收益低风险高。
+
+详细说明见 [docs/CHANGELOG-v1.1.8.md](docs/CHANGELOG-v1.1.8.md)。
+
 ### v1.1.7（工程与体验）
 
 - **批次 E 渲染层拆分**：agent.js 3736 → 2075 行，渲染方法拆为 6 个模块（运行历史/气泡/审批/引擎观测/布局/状态）；main.js 技能 IPC 拆出 main-skills.js；340 条源码断言经 source-helper 目录拼接自动覆盖。
