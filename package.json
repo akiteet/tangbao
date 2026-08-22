@@ -21,8 +21,9 @@
     "check:perf": "node scripts/check-perf.js",
     "check:electron-abi": "electron scripts/check-electron-abi.js",
     "check:sqlite": "node scripts/run-sqlite-tests.js",
-    "check:ui": "electron scripts/ui-smoke-app",
-    "check:release": "node scripts/check-release.js"
+    "check:ui": "node scripts/check-ui-consistency.js && electron scripts/ui-smoke-app",
+    "check:release": "node scripts/check-release.js",
+    "check:ui-consistency": "node scripts/check-ui-consistency.js"
   },
   "build": {
     "appId": "com.tangbao.desktop",
