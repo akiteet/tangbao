@@ -195,8 +195,8 @@ function prepare() {
   stmt.delAcc = db.prepare('DELETE FROM accounts WHERE id=?');
   stmt.delAccModels = db.prepare('DELETE FROM account_models WHERE account_id=?');
   stmt.insAccModel = db.prepare(
-    `INSERT INTO account_models (account_id,name,context_window,max_output,caps,think_type) VALUES (@account_id,@name,@context_window,@max_output,@caps,@think_type)
-     ON CONFLICT(account_id,name) DO UPDATE SET context_window=@context_window, max_output=@max_output, caps=@caps, think_type=@think_type`);
+    `INSERT INTO account_models (account_id,name,context_window,max_output,caps,think_type,image_model,image_extra) VALUES (@account_id,@name,@context_window,@max_output,@caps,@think_type,@image_model,@image_extra)
+     ON CONFLICT(account_id,name) DO UPDATE SET context_window=@context_window, max_output=@max_output, caps=@caps, think_type=@think_type, image_model=@image_model, image_extra=@image_extra`);
 
   stmt.insProv = db.prepare(
     `INSERT INTO providers (module,account_id,api_base,model)
@@ -259,7 +259,7 @@ function prepare() {
   stmt.allKV = db.prepare('SELECT key,value FROM kv_meta');
 
   // ---- M4 读源：readState 用 ----
-  stmt.getAccModels = db.prepare('SELECT name, context_window, max_output, caps, think_type FROM account_models WHERE account_id=? ORDER BY name ASC');
+  stmt.getAccModels = db.prepare('SELECT name, context_window, max_output, caps, think_type, image_model, image_extra FROM account_models WHERE account_id=? ORDER BY name ASC');
   stmt.listImgHist = db.prepare('SELECT * FROM image_history ORDER BY created_at DESC');
   stmt.listImgFiles = db.prepare('SELECT * FROM image_files WHERE history_id=? ORDER BY seq ASC');
   stmt.allImgFiles = db.prepare('SELECT data FROM image_files');
@@ -406,7 +406,18 @@ function setAccountModels(accountId, models) {
       const caps = (typeof m === 'object' && m.caps) ? String(m.caps) : null;
       // 聊天修复 D：thinkType（思考类型）往返
       const tt = (typeof m === 'object' && m.thinkType) ? String(m.thinkType) : null;
-      stmt.insAccModel.run({ account_id: accId, name, context_window: cw || 128000, max_output: mo || 0, caps, think_type: tt });
+      // v1.1.8：图像分区往返——imageModel 标记 + 协议/策略/格式/尺寸打包 JSON
+      const im = (typeof m === 'object' && m.imageModel === true) ? 1 : 0;
+      let extra = null;
+      if (typeof m === 'object') {
+        const e = {};
+        if (m.imageProtocol) e.imageProtocol = m.imageProtocol;
+        if (m.imageSizeStrategy) e.imageSizeStrategy = m.imageSizeStrategy;
+        if (m.imageSizeFormat) e.imageSizeFormat = m.imageSizeFormat;
+        if (Array.isArray(m.imageSizes) && m.imageSizes.length) e.imageSizes = m.imageSizes;
+        extra = Object.keys(e).length ? JSON.stringify(e) : null;
+      }
+      stmt.insAccModel.run({ account_id: accId, name, context_window: cw || 128000, max_output: mo || 0, caps, think_type: tt, image_model: im, image_extra: extra });
     });
   });
   run(accountId, models);

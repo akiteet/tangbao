@@ -30,7 +30,7 @@ function fakeRunTable(initial, threadInitial) {
 test('Schema v15 迁移增加 continuation 谱系与 root scope', () => {
   const fake = fakeRunTable(['id', 'role']);
   MIGRATIONS[14](fake.db);
-  assert.equal(SCHEMA_VERSION, 16);
+  assert.equal(SCHEMA_VERSION, 17);
   assert.equal(fake.columns.has('continued_from_run_id'), true);
   assert.equal(fake.columns.has('root_run_id'), true);
   assert.equal(fake.columns.has('continuation_index'), true);

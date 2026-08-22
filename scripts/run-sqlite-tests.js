@@ -17,6 +17,7 @@ const electronBinary = require('electron'); // 在纯 Node 上下文中解析为
 
 const TESTS = [
   'test/agent-runtime/storage-search-metrics.test.js',
+  'test/agent-runtime/image-partition-persistence.test.js',
 ];
 
 function main() {

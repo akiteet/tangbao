@@ -161,7 +161,7 @@ const TABLES = [
 // ===== Schema 版本化迁移（M6） =====
 // 当前版本 = 16。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
 // 新装库 user_version=0 → 顺序执行 MIGRATIONS[0..] 建全表；未来改结构时追加新迁移并把 SCHEMA_VERSION +1。
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 
 /** 迁移 0（v0→v1）：建全部表。CREATE TABLE IF NOT EXISTS 幂等，可安全作用于已存在的旧库。 */
 function migration_0(db) {
@@ -379,7 +379,7 @@ function migration_11(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_agentruns_parent ON agent_runs(parent_run_id, started_at ASC)');
 }
 
-const MIGRATIONS = [migration_0, migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7, migration_8, migration_9, migration_10, migration_11, migration_12, migration_13, migration_14, migration_15];
+const MIGRATIONS = [migration_0, migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7, migration_8, migration_9, migration_10, migration_11, migration_12, migration_13, migration_14, migration_15, migration_16];
 
 // v10：迁移 12（v12→v13）：Working State 追加 Skill 工具权限归因上下文（激活来源/包哈希/声明工具），供工具约束与恢复使用。
 function migration_12(db) {
@@ -469,6 +469,14 @@ CREATE TABLE IF NOT EXISTS model_call_metrics (
 CREATE INDEX IF NOT EXISTS idx_model_call_metrics_run ON model_call_metrics(run_id, started_at ASC);
 CREATE INDEX IF NOT EXISTS idx_model_call_metrics_scope ON model_call_metrics(scope, started_at DESC);
 `);
+}
+
+// v16：迁移 16（v16→v17）：account_models 加图像分区两列——image_model 标记 + image_extra（协议/策略/格式/尺寸打包 JSON）。
+// 修复 v1.1.6 生图模型分区标记在 SQLite 镜像中整体丢失的问题（v1.1.8）。
+function migration_16(db) {
+  const cols = new Set(db.prepare('PRAGMA table_info(account_models)').all().map((c) => c.name));
+  if (!cols.has('image_model')) db.exec('ALTER TABLE account_models ADD COLUMN image_model INTEGER NOT NULL DEFAULT 0');
+  if (!cols.has('image_extra')) db.exec('ALTER TABLE account_models ADD COLUMN image_extra TEXT');
 }
 
 module.exports = { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS };

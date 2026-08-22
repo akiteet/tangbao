@@ -629,6 +629,7 @@
             timeoutMs: (typeof m.timeoutMs === 'number' && m.timeoutMs > 0) ? m.timeoutMs : undefined,
             budgetMaxSteps: (typeof m.budgetMaxSteps === 'number' && m.budgetMaxSteps > 0) ? m.budgetMaxSteps : undefined,
             budgetMaxCostUsd: (typeof m.budgetMaxCostUsd === 'number' && m.budgetMaxCostUsd >= 0) ? m.budgetMaxCostUsd : undefined,
+            imageModel: m.imageModel === true ? true : undefined,
             imageProtocol: (typeof m.imageProtocol === 'string' && m.imageProtocol) ? m.imageProtocol : undefined,
             imageSizeStrategy: (typeof m.imageSizeStrategy === 'string' && m.imageSizeStrategy) ? m.imageSizeStrategy : undefined,
             imageSizeFormat: (typeof m.imageSizeFormat === 'string' && m.imageSizeFormat) ? m.imageSizeFormat : undefined,

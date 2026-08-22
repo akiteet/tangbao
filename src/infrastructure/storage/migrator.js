@@ -221,6 +221,15 @@ function readState(storage, fileRepo) {
         // 聊天修复 D：maxOutput/thinkType 往返（v1.1.0 加列后回读）
         if (m.max_output) mm.maxOutput = num(m.max_output);
         if (m.think_type) mm.thinkType = m.think_type;
+        // v1.1.8：图像分区往返（image_model 标记 + image_extra JSON，v1.1.6 分区标记不再丢失）
+        if (m.image_model) mm.imageModel = true;
+        const extra = parse(m.image_extra);
+        if (extra && typeof extra === 'object') {
+          if (extra.imageProtocol) mm.imageProtocol = extra.imageProtocol;
+          if (extra.imageSizeStrategy) mm.imageSizeStrategy = extra.imageSizeStrategy;
+          if (extra.imageSizeFormat) mm.imageSizeFormat = extra.imageSizeFormat;
+          if (Array.isArray(extra.imageSizes) && extra.imageSizes.length) mm.imageSizes = extra.imageSizes;
+        }
         return mm;
       }),
     }));

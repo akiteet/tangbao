@@ -23,7 +23,7 @@ test('Schema v14 迁移增加项目根、Run 快照和 ChangeSet rootId', () => 
     },
   };
   MIGRATIONS[13](db);
-  assert.equal(SCHEMA_VERSION, 16);
+  assert.equal(SCHEMA_VERSION, 17);
   assert.equal(columns.projects.has('roots_json'), true);
   assert.equal(columns.projects.has('primary_root_id'), true);
   assert.equal(columns.agent_runs.has('workspace_snapshot_json'), true);
