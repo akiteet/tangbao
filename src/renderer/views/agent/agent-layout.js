@@ -137,7 +137,6 @@
               </div>
               <div class="agent-top-row op">
               <div class="agent-ctx-row">
-                <div class="ctx-bar" id="agentCtxBar"><div class="ctx-bar-fill"></div><span class="ctx-bar-label"></span></div>
                 <button class="btn-ghost mini" id="agentCompactBtn" title="压缩较早上下文（或输入 /compact 定向压缩）">压缩</button>
                 <button class="btn-ghost mini" id="agentClearCtxBtn" title="清空当前线程上下文（重置对话历史与摘要）">清空</button>
                 <button class="btn-ghost mini" id="agentMemoryBtn" title="编辑项目记忆（糖码记忆.md）">项目记忆</button>
@@ -164,7 +163,9 @@
             <div class="agent-status-summary" id="agentStatusSummary" role="status" aria-live="polite" hidden></div>
             <div class="agent-thread" id="agentThread"></div>
             <!-- v1.1.0：模型/思考选择器移到输入框上方靠右（id 不变，逻辑零改动） -->
+            <!-- v1.1.8 N1：上下文用量条从顶栏下沉到本行靠左，与三下拉同排 -->
             <div class="agent-composer-tools">
+              <div class="ctx-bar" id="agentCtxBar"><div class="ctx-bar-fill"></div><span class="ctx-bar-label"></span></div>
               <select class="img-model-pick" id="agentRootScope" title="限制本次任务可以访问的项目文件夹">${rootScopeOptions}</select>
               <select class="img-model-pick" id="agentModel">${modelOpts}</select>
               <select class="img-model-pick" id="agentThink" title="糖码独立思考强度（不影响聊天）">

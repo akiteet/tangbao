@@ -3972,3 +3972,8 @@ button.pill-chip:hover { background: var(--active-bg); border-color: var(--borde
 }
 /* 第一行固定项不缩，宽度不足整组换行 */
 .agent-top-row > .btn-ghost, .agent-top-row > .agent-auto-badge, .agent-top-row > .switch { flex-shrink: 0; }
+
+/* v1.1.8 N：工具行重排——用量条下沉 composer 行靠左，操作按钮行靠右 */
+.agent-ctx-row { justify-content: flex-end; }
+.agent-composer-tools { justify-content: flex-end; }
+.agent-composer-tools .ctx-bar { margin-right: auto; min-width: 140px; max-width: 260px; flex: 0 1 auto; }
