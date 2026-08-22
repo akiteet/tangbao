@@ -1129,7 +1129,6 @@ body.float-mode .main::after {
   background: var(--bg); color: var(--text); font-size: var(--fs-md); outline: none;
 }
 .create-search:focus { border-color: var(--primary); }
-.cat-pills { display: flex; flex-wrap: wrap; gap: 8px; }
 .cat-pill {
   padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius-pill);
   background: var(--panel-bg); color: var(--text-secondary); font-size: var(--fs-base); cursor: pointer;
@@ -1188,11 +1187,6 @@ body.float-mode .main::after {
 .toolbar-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .toolbar-row.between { justify-content: space-between; }
 .module-sub { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
-.create-sort {
-  margin-left: auto; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill);
-  background: var(--panel-bg); color: var(--text); font-size: var(--fs-base); outline: none; cursor: pointer;
-}
-.tag-pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag-pill {
   padding: 5px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill);
   background: var(--panel-bg); color: var(--text-secondary); font-size: var(--fs-sm); cursor: pointer; transition: all var(--dur-hover) var(--ease-smooth);
@@ -1368,7 +1362,6 @@ body.float-mode .main::after {
   background: var(--panel-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
   display: flex; flex-direction: column; gap: 8px; transition: all var(--dur-press) var(--ease-smooth);
 }
-.wf-card:hover { border-color: var(--primary); box-shadow: var(--elevation-2); }
 .wf-name { font-weight: 600; font-size: var(--fs-md); }
 .wf-sub { font-size: var(--fs-sm); color: var(--text-tertiary); }
 .wf-ops { display: flex; gap: 6px; margin-top: auto; }
@@ -3077,42 +3070,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 
 /* 糖创任务会话抽屉复用 Chat Surface，不复制聊天请求和流式渲染。 */
 #createView { position: relative; min-height: 100%; }
-#createView .create-task-mask { position: absolute; z-index: 20; inset: 0; background: var(--mask-bg); }
-#createView .create-task-mask[hidden] { display: none; }
-#createView .create-task-drawer {
-  position: absolute;
-  z-index: 21;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  width: min(520px, calc(100% - 18px));
-  min-width: 0;
-  border-left: 1px solid var(--border);
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  background: var(--panel-bg);
-  box-shadow: var(--elevation-2);
-  overflow: hidden;
-}
-#createView .create-task-drawer[hidden] { display: none; }
-#createView .create-task-top {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-}
-#createView .create-task-top > div { min-width: 0; }
-#createView .create-task-top b { display: block; font-size: var(--fs-lg); }
-#createView .create-task-top small { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: var(--fs-xs); overflow-wrap: anywhere; }
-#createView .create-task-surface { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
-#createView .create-task-surface > .tg-chat-scroll { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
-#createView .create-task-surface .welcome { flex: 1 0 auto; min-height: 260px; padding: 28px 18px 20px; }
-#createView .create-task-surface .messages { flex: 0 0 auto; width: min(900px, 100%); min-width: 0; margin: 0 auto; padding: 22px 24px 18px; }
-#createView .create-task-surface .composer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: 10px 18px; background: color-mix(in srgb, var(--bg) 94%, transparent); }
 #createView .create-task-welcome { width: min(520px, 100%); margin: auto; text-align: center; }
 #createView .create-task-mark { display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 12px; border-radius: var(--radius-lg); background: var(--primary-soft); color: var(--primary); font-size: var(--fs-hero); font-weight: 600; }
 #createView .create-task-welcome h2 { margin: 0; font-size: var(--fs-title); overflow-wrap: anywhere; }
@@ -3130,7 +3087,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   #tangguanView .tg-drawer { width: min(430px, calc(100% - 14px)); }
   #tangguanView .tg-drawer-library-host { left: 0; right: auto; border-right: 1px solid var(--border); border-left: 0; box-shadow: var(--elevation-2); }
   #tangguanView .tg-desktop-only { display: none; }
-  #createView .create-task-drawer { width: min(500px, calc(100% - 10px)); }
 }
 @media (max-width: 620px) {
   #tangguanView .tg-character-header { min-height: 64px; }
@@ -3140,7 +3096,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   #tangguanView .tg-chat-surface .composer { padding: 8px 10px; }
   #tangguanView .tg-header-actions > .btn-ghost:not(.tg-mobile-only) { padding-left: 7px; padding-right: 7px; }
   #tangguanView .tg-drawer { width: calc(100% - 8px); }
-  #createView .create-task-drawer { width: calc(100% - 8px); border-radius: var(--radius-lg) 0 0 var(--radius-lg); }
 }
 
 /* v1.1.5 module chat surfaces: keep Create conversations in Create instead
@@ -3468,8 +3423,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   padding-bottom: 2px;
   scrollbar-width: none;
 }
-#createView .create-catalog .cat-pills::-webkit-scrollbar, /* scrollbar-hide-allowed（功能设计，UI-SYSTEM §7 豁免） */
-#createView .create-catalog .tag-pills::-webkit-scrollbar { display: none; } /* scrollbar-hide-allowed */
 #createView .create-catalog .cat-pill,
 #createView .create-catalog .tag-pill {
   flex: 0 0 auto;
@@ -3977,3 +3930,41 @@ button.pill-chip:hover { background: var(--active-bg); border-color: var(--borde
 .agent-ctx-row { justify-content: flex-end; }
 .agent-composer-tools { justify-content: flex-end; }
 .agent-composer-tools .ctx-bar { margin-right: auto; min-width: 140px; max-width: 260px; flex: 0 1 auto; }
+
+/* ============================================================
+   v1.1.8 P：统一横条卡片体系（糖馆角色/会话、糖创智能体/工作流/会话共用）
+   语言：全宽长条、单行或至多两行、左图标右元信息、hover 显操作
+   ============================================================ */
+.lib-bar {
+  display: flex; align-items: center; gap: var(--sp-2);
+  width: 100%; min-height: 40px; padding: var(--sp-1) var(--sp-2);
+  background: var(--panel-bg); border: 1px solid var(--border); border-radius: var(--radius-md);
+  cursor: pointer; min-width: 0; text-align: left;
+  transition: border-color var(--dur-hover) var(--ease-smooth), background var(--dur-hover) var(--ease-smooth);
+}
+.lib-bar:hover { border-color: var(--border-strong); }
+.lib-bar.active { border-color: var(--primary); }
+.lib-bar-icon {
+  width: 32px; height: 32px; border-radius: var(--radius-sm); flex: 0 0 auto;
+  background: var(--primary-soft); color: var(--primary);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-lg); line-height: 1; overflow: hidden;
+}
+.lib-bar-icon img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.lib-bar-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lib-bar-name { font-size: var(--fs-base); font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-bar-desc { font-size: var(--fs-xs); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-bar-meta { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; max-width: 45%; overflow: hidden; }
+.lib-bar-ops { flex: 0 0 auto; display: flex; gap: 2px; opacity: 0; transition: opacity var(--dur-press) var(--ease-smooth); }
+.lib-bar:hover .lib-bar-ops, .lib-bar:focus-within .lib-bar-ops { opacity: 1; }
+.lib-bar-ops button { border: 0; background: transparent; color: var(--text-tertiary); width: 24px; height: 24px; border-radius: var(--radius-xs); cursor: pointer; font-size: var(--fs-md); line-height: 1; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.lib-bar-ops button:hover { background: var(--hover-bg); color: var(--text); }
+.lib-bar-ops button.danger:hover { background: var(--danger-soft); color: var(--danger); }
+/* 对话记录单行变体：标题 + 右侧元信息，32px 高 */
+.lib-bar--row { min-height: 32px; padding: 2px var(--sp-2); }
+.lib-bar--row .lib-bar-name { font-weight: 500; }
+/* 虚线新建条 */
+.lib-bar--add { border-style: dashed; color: var(--text-tertiary); justify-content: center; }
+.lib-bar--add:hover { color: var(--primary); border-color: var(--primary); }
+/* 列表容器：单列纵排 */
+.lib-bar-list { display: flex; flex-direction: column; gap: var(--sp-1); }

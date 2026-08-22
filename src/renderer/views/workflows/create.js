@@ -362,10 +362,9 @@
         return;
       }
       grid.innerHTML = filtered.map(a => App.create.agentCard(a)).join('') +
-        `<button class="agent-card add-agent" id="addAgentBtn">
-           <span class="agent-icon">➕</span>
-            <span class="agent-name">新建任务智能体</span>
-            <span class="agent-desc">自定义任务设定与提示词</span>
+        `<button class="lib-bar lib-bar--add" id="addAgentBtn">
+           <span class="lib-bar-icon">＋</span>
+           <span class="lib-bar-main"><span class="lib-bar-name">新建任务智能体</span><span class="lib-bar-desc">自定义任务设定与提示词</span></span>
          </button>`;
 
       grid.querySelectorAll('[data-agent]').forEach(card => card.addEventListener('click', () => {
@@ -392,24 +391,19 @@
 
     agentCard(a) {
       const usage = (App.state.settings.agentUsage || {})[a.id] || 0;
-      const modelBadge = a.model ? `<span class="agent-badge">${esc(shortModel(a.model))}</span>` : '';
-      const reco = (a.recommended && !a.custom) ? `<span class="agent-reco" title="推荐">★</span>` : '';
+      const modelBadge = a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : '';
+      const reco = (a.recommended && !a.custom) ? `<span class="lib-bar-ops" title="推荐"><span style="color: var(--warning);">★</span></span>` : '';
       const tags = (a.tags && a.tags.length)
-        ? `<div class="agent-tags">${a.tags.slice(0, 3).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : '';
-      const usageLine = usage ? `<div class="agent-usage">用了 ${usage} 次</div>` : '';
+        ? a.tags.slice(0, 2).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('') : '';
       const actions = a.custom
-        ? `<button class="agent-edit" data-edit="${a.id}" title="编辑">✎</button>
-           <button class="agent-del" data-del="${a.id}" title="删除">×</button>`
-        : `<button class="agent-clone" data-clone="${a.id}" title="克隆">⧉</button>`;
-      return `<div class="agent-card" data-agent="${a.id}">
-        ${reco}
-        <span class="agent-icon">${a.icon || '🤖'}</span>
-        <span class="agent-name">${esc(a.name)}</span>
-        <span class="agent-desc">${esc(a.desc || '')}</span>
-        ${tags}
-        ${modelBadge}
-        ${usageLine}
-        ${actions}
+        ? `<button data-edit="${a.id}" title="编辑">✎</button>
+           <button class="danger" data-del="${a.id}" title="删除">×</button>`
+        : `<button data-clone="${a.id}" title="克隆">⧉</button>`;
+      return `<div class="lib-bar" data-agent="${a.id}">
+        <span class="lib-bar-icon">${a.icon || '🤖'}</span>
+        <span class="lib-bar-main"><span class="lib-bar-name">${esc(a.name)}</span><span class="lib-bar-desc">${esc(a.desc || '')}${usage ? ` · 用了 ${usage} 次` : ''}</span></span>
+        <span class="lib-bar-meta">${tags}${modelBadge}</span>
+        ${reco}<span class="lib-bar-ops">${actions}</span>
       </div>`;
     },
 
@@ -605,7 +599,7 @@
         if (isEdit) {
           const t = App.state.settings.agents.find(x => x.id === App.create.editingId);
           if (t) Object.assign(t, data, {
-            category: (CATEGORIES.some(c => c.key === (t.category || 'custom')) && t.category !== 'all') ? t.category : 'custom',
+            category: (typeof t.category === 'string' && t.category && t.category !== 'all') ? t.category : 'custom', // v1.1.8 P5：原引用未定义的 CATEGORIES（仅存在于主进程）
             custom: true, recommended: false,
           });
         } else {
@@ -754,17 +748,20 @@
         grid.innerHTML = '<div class="create-empty">还没有工作流，点“新建工作流”搭建多步任务吧～</div>';
         return;
       }
-      grid.innerHTML = wfs.map(w => `
-        <div class="wf-card" data-wf="${w.id}">
-          <div class="wf-name">${esc(w.name)}</div>
-          <div class="wf-sub">${(w.steps || []).length} 步</div>
-          <div class="wf-ops">
-            <button class="mini" data-run="${w.id}">运行</button>
-            <button class="mini" data-edit="${w.id}">编辑</button>
-            <button class="mini" data-hist="${w.id}">历史</button>
-            <button class="mini danger" data-del="${w.id}">删除</button>
-          </div>
-        </div>`).join('');
+      grid.innerHTML = wfs.map(w => {
+        const steps = w.steps || [];
+        const first = steps[0] && steps[0].prompt ? String(steps[0].prompt).slice(0, 40) : '尚未配置步骤';
+        return `
+        <div class="lib-bar" data-wf="${w.id}">
+          <span class="lib-bar-icon">⚙</span>
+          <span class="lib-bar-main"><span class="lib-bar-name">${esc(w.name)}</span><span class="lib-bar-desc">${esc(first)}</span></span>
+          <span class="lib-bar-meta"><span class="tag-chip">${steps.length} 步</span><button class="mini" data-run="${w.id}" title="运行工作流">▶ 运行</button></span>
+          <span class="lib-bar-ops">
+            <button data-edit="${w.id}" title="编辑">✎</button>
+            <button data-hist="${w.id}" title="历史">≡</button>
+            <button class="danger" data-del="${w.id}" title="删除">×</button>
+          </span>
+        </div>`; }).join('');
       grid.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', () => {
         const w = (App.state.settings.workflows || []).find(x => x.id === b.dataset.run);
         if (w) App.create.runWorkflow(w);
@@ -1166,7 +1163,7 @@
     if (!add) {
       grid.innerHTML = '';
       add = document.createElement('button');
-      add.className = 'agent-card add-agent';
+      add.className = 'lib-bar lib-bar--add';
       add.id = 'addAgentBtn';
       add.innerHTML = '<span class="agent-icon">+</span><span class="agent-name">\u65b0\u5efa\u4efb\u52a1\u667a\u80fd\u4f53</span><span class="agent-desc">\u81ea\u5b9a\u4e49\u4efb\u52a1\u8bbe\u5b9a\u4e0e\u63d0\u793a\u8bcd</span>';
       add.addEventListener('click', (event) => { event.stopPropagation(); App.create.openAgentForm(); });
