@@ -274,8 +274,8 @@
         if (App.services.shell && App.services.shell.setTitleBarOverlay) {
           const dark = effective === 'dark';
           App.services.shell.setTitleBarOverlay({
-            color: dark ? 'rgba(28,27,24,0.96)' : 'rgba(247,246,242,0.96)',
-            symbolColor: dark ? '#b5b2a8' : '#57554d',
+            color: dark ? 'rgba(23,23,23,0.96)' : 'rgba(250,250,250,0.96)',
+            symbolColor: dark ? '#a3a3a3' : '#525252',
           });
         }
       } catch (_) {}

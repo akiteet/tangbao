@@ -685,7 +685,11 @@
       const options = App.image.sizeOptionsForProvider(activeProvider);
       const selected = App.image.normalizeSizeForProvider(App.image.sel.size, activeProvider);
       App.image.sel.size = selected.value;
-      row.innerHTML = options.map((item) => `<button type="button" class="chip" data-group="size" data-val="${item.value}"><span class="size-ico ${item.ratio}"></span>${item.label}</button>`).join('');
+      row.innerHTML = options.map((item) => {
+        const [w, h] = String(item.value).split('x').map((n) => parseFloat(n) || 1);
+        const k = 22 / Math.max(w, h); // v1.1.8 F5：示意框按真实比例绘制（最长边 22px），不再用写死形状
+        return `<button type="button" class="chip" data-group="size" data-val="${item.value}"><span class="size-ico" style="width:${Math.max(8, Math.round(w * k))}px;height:${Math.max(8, Math.round(h * k))}px"></span>${item.label}</button>`;
+      }).join('');
       App.image.syncChips();
     },
 

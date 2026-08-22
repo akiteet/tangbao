@@ -66,7 +66,7 @@ test('左侧模块区小于聊天历史区且聊天历史卡片更紧凑', () =>
   const css = read('styles.css');
   assert.match(css, /\.main-nav \{[^}]*max-height: 34vh[^}]*flex: 0 1 auto/s);
   assert.match(css, /\.history \{[^}]*flex: 1 1 0[^}]*min-height: 0/s);
-  assert.match(css, /\.sidebar \.history-item \{[^}]*min-height: 30px[^}]*padding: 4px 9px/s);
+  assert.match(css, /\.sidebar \.history-item \{[^}]*min-height: 36px[^}]*padding: 6px 10px/s); // v1.1.8 F6 左栏字号行高放大
 });
 
 test('图片历史样式限定在 image-shell，不再覆盖左侧聊天历史卡片', () => {

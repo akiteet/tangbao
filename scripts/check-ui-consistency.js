@@ -59,6 +59,18 @@ function main() {
     failures.push(`全局滚动条规格行数异常（${globalScrollbarLines}，应为 4-5）——可能被改动`);
   }
 
+  // 7. 括号平衡 + 暗色块存在性（三轮教训：:root 提前闭合会让整个 dark 变量块被解析器静默丢弃）
+  {
+    let depth = 0;
+    const src = lines.join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const ch of src) {
+      if (ch === '{') depth++;
+      if (ch === '}') depth--;
+    }
+    if (depth !== 0) failures.push(`CSS 括号不平衡（深度 ${depth}）——规则可能被解析器整块丢弃`);
+    if (!/\[data-theme="dark"\]\s*\{[^}]*--bg:/s.test(src)) failures.push('暗色主题变量块缺失或损坏');
+  }
+
   // WARN 基线：非令牌圆角字面值行数（border-radius: <n>px 且不含 var(--radius）
   const radiusDebt = lines.filter((l) => /border-radius\s*:\s*\d/.test(l) && !/var\(--radius/.test(l)).length;
   if (radiusDebt > 0) warns.push(`非令牌 border-radius 字面值行数：${radiusDebt}（目标随模块迁移归零）`);
@@ -69,7 +81,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  console.log(JSON.stringify({ ok: true, rules: ['no-backdrop-filter', 'no-dead-tokens', 'no-dead-keyframes', 'single-scrollbar-spec', 'font-scale-only', 'no-pill-buttons'], warnBaselines: warns }, null, 2));
+  console.log(JSON.stringify({ ok: true, rules: ['no-backdrop-filter', 'no-dead-tokens', 'no-dead-keyframes', 'single-scrollbar-spec', 'font-scale-only', 'no-pill-buttons','css-brace-balance','dark-block-present'], warnBaselines: warns }, null, 2));
 }
 
 if (require.main === module) main();

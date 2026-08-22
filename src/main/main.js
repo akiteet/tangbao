@@ -591,11 +591,13 @@ function createWindow() {
     backgroundColor: '#eef2fb',
     icon: path.join(__dirname, '..', '..', 'assets', 'app-icon.ico'),
     // 去掉原生标题栏的“框”感：隐藏标题栏，仅保留系统的最小/最大/关闭按钮（叠加在右上角）
+    // v1.1.8：height 与 .topbar(54px) 对齐——此前 36px 导致窗口按钮比顶栏矮一截；
+    // 初始色为中性亮色板，运行时由渲染层 applyAppearance 随主题/强调色更新
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: 'rgba(244,247,251,0.92)',
-      symbolColor: '#5b6472',
-      height: 36,
+      color: 'rgba(250,250,250,0.96)',
+      symbolColor: '#525252',
+      height: 54,
     },
     webPreferences: {
       contextIsolation: true,
