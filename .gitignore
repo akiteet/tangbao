@@ -36,3 +36,4 @@ styles.css.pre-*.bak
 
 # agent 拆分前备份（不入库）
 *.pre-split.bak
+dist-release/
