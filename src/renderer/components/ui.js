@@ -3,6 +3,16 @@
   window.App = window.App || {};
 
   const $ = (id) => document.getElementById(id);
+
+  // "#rgb"/"#rrggbb" → "r,g,b" 三通道串（供 --primary-rgb 等令牌）；非法输入返回空串走 CSS 默认
+  function hexToRgbTriplet(hex) {
+    const h = String(hex || '').replace('#', '').trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(h) && !/^[0-9a-fA-F]{3}$/.test(h)) return '';
+    const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+    const n = parseInt(full, 16);
+    return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255);
+  }
+
   let editingModuleId = null; // 自定义模块编辑器状态：null=新增，有值=编辑该 id
   const HISTORY_INITIAL_COUNT = 100;
   const HISTORY_PAGE_SIZE = 100;
@@ -233,10 +243,15 @@
         root.style.setProperty('--primary', ap.accent);
         root.style.setProperty('--primary-hover', App.ui.shade(ap.accent, -0.12));
         root.style.setProperty('--primary-soft', App.ui.soft(ap.accent));
+        // v1.1.8 修复：同步 RGB 通道——否则 14 处 focus 环/glow 的 rgba(var(--primary-rgb),…) 在自定义强调色下仍显示默认蓝
+        root.style.setProperty('--primary-rgb', hexToRgbTriplet(ap.accent));
+        root.style.setProperty('--primary-hover-rgb', hexToRgbTriplet(App.ui.shade(ap.accent, -0.12)));
       } else {
         root.style.setProperty('--primary', '');
         root.style.setProperty('--primary-hover', '');
         root.style.setProperty('--primary-soft', '');
+        root.style.setProperty('--primary-rgb', '');
+        root.style.setProperty('--primary-hover-rgb', '');
       }
       if (ap.radius) {
         const r = parseInt(ap.radius, 10);
@@ -254,13 +269,13 @@
         root.style.setProperty('--radius-lg', '');
         root.style.setProperty('--radius-pill', '');
       }
-      // 同步系统标题栏叠加层颜色（隐藏标题栏时，右上角最小/最大/关闭按钮的底色）
+      // 同步系统标题栏叠加层颜色（隐藏标题栏时，右上角最小/最大/关闭按钮的底色）——随主题暖色板
       try {
         if (App.services.shell && App.services.shell.setTitleBarOverlay) {
           const dark = effective === 'dark';
           App.services.shell.setTitleBarOverlay({
-            color: dark ? 'rgba(20,22,28,0.92)' : 'rgba(244,247,251,0.92)',
-            symbolColor: dark ? '#e6e8ee' : '#5b6472',
+            color: dark ? 'rgba(28,27,24,0.96)' : 'rgba(247,246,242,0.96)',
+            symbolColor: dark ? '#b5b2a8' : '#57554d',
           });
         }
       } catch (_) {}
