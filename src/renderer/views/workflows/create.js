@@ -397,16 +397,16 @@
         ? `<button data-edit="${a.id}" title="编辑">✎</button>
            <button class="danger" data-del="${a.id}" title="删除">×</button>`
         : `<button data-clone="${a.id}" title="克隆">⧉</button>`;
-      // v1.1.8 Q2：两行自适应卡——行1 图标+名称+徽记；行2 描述/使用次数+常显操作
+      // v1.1.8 R3（用户规格）：行1 = 图标+名称+操作；行2 = 描述/次数+徽记
       return `<div class="lib-bar" data-agent="${a.id}">
         <div class="lib-bar-row1">
           <span class="lib-bar-icon">${a.icon || '🤖'}</span>
-          <span class="lib-bar-main"><b class="lib-bar-name">${esc(a.name)}</b></span>
-          <span class="lib-bar-meta">${reco}${a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : ''}${tag}</span>
+          <b class="lib-bar-name">${esc(a.name)}</b>
+          <span class="lib-bar-ops">${actions}</span>
         </div>
         <div class="lib-bar-row2">
           <span class="lib-bar-desc">${esc(a.desc || '')}${usage ? ` · 用了 ${usage} 次` : ''}</span>
-          <span class="lib-bar-ops">${actions}</span>
+          <span class="lib-bar-meta">${reco}${a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : ''}${tag}</span>
         </div>
       </div>`;
     },
@@ -759,18 +759,15 @@
         <div class="lib-bar" data-wf="${w.id}">
           <div class="lib-bar-row1">
             <span class="lib-bar-icon">⚙</span>
-            <span class="lib-bar-main"><b class="lib-bar-name">${esc(w.name)}</b></span>
-            <span class="lib-bar-meta"><span class="tag-chip">${steps.length} 步</span></span>
-          </div>
-          <div class="lib-bar-row2">
-            <span class="lib-bar-desc">${esc(first)}</span>
-            <button class="mini" data-run="${w.id}" title="运行工作流">▶ 运行</button>
+            <b class="lib-bar-name">${esc(w.name)}</b>
             <span class="lib-bar-ops">
+              <button data-run="${w.id}" title="运行工作流">▶</button>
               <button data-edit="${w.id}" title="编辑">✎</button>
               <button data-hist="${w.id}" title="历史">≡</button>
               <button class="danger" data-del="${w.id}" title="删除">×</button>
             </span>
           </div>
+          <div class="lib-bar-row2"><span class="lib-bar-desc">${esc(first)}</span><span class="tag-chip">${steps.length} 步</span></div>
         </div>`; }).join('');
       grid.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', () => {
         const w = (App.state.settings.workflows || []).find(x => x.id === b.dataset.run);

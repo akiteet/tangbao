@@ -292,6 +292,30 @@ function acceptStateRevision(payload, explicitRevision) {
       }
     } catch (_) {}
   }
+  // v1.1.8 R1：糖码项目/线程守卫——三种危险签名拒绝落盘（防 state.js:789 "默认项目"迁移路径固化真项目）：
+  // a) 会话>0 且 incoming.agentThreads 为空而磁盘非空；b) 会话>0 且 incoming.projects 为空而磁盘非空；
+  // c) 会话>0 且 incoming 仅含单个新建"默认项目"（加载旧快照触发的迁移签名）而磁盘已有不同 id 的项目
+  if (Array.isArray(incoming.conversations) && incoming.conversations.length > 0) {
+    try {
+      const current = readActiveStateObject();
+      if (current) {
+        const curThreads = Array.isArray(current.agentThreads) ? current.agentThreads : [];
+        const curProjects = Array.isArray(current.projects) ? current.projects : [];
+        const inThreads = incoming.agentThreads;
+        if (Array.isArray(inThreads) && inThreads.length === 0 && curThreads.length > 0) {
+          return { ok: false, code: 'threads_loss_guard', reason: 'threads_loss_guard', error: '拒绝用空 agentThreads 覆盖已有糖码会话' };
+        }
+        const inProjects = incoming.projects;
+        if (Array.isArray(inProjects) && inProjects.length === 0 && curProjects.length > 0) {
+          return { ok: false, code: 'projects_loss_guard', reason: 'projects_loss_guard', error: '拒绝用空 projects 覆盖已有糖码项目' };
+        }
+        if (Array.isArray(inProjects) && inProjects.length === 1 && inProjects[0] && inProjects[0].name === '默认项目'
+          && curProjects.length > 0 && !curProjects.some(p => p.id === inProjects[0].id)) {
+          return { ok: false, code: 'default_project_overwrite_guard', reason: 'default_project_overwrite_guard', error: '拒绝用迁移生成的默认项目覆盖已有项目' };
+        }
+      }
+    } catch (_) {}
+  }
   const revision = extractStateRevision(payload, explicitRevision);
   if (revision > 0 && latestStateRevision > 0 && revision < latestStateRevision) {
     return { ok: false, skipped: true, reason: 'stale_state_revision', revision, latestRevision: latestStateRevision };

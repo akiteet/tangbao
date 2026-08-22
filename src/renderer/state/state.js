@@ -788,12 +788,17 @@
       : [];
     if (!projects.length) {
       // 迁移：用旧 agentCwd 创建默认项目，approveTools 留空保持原行为
-      projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
-        auto: false, approveTools: [], cmdWhitelist: [], planMode: false, permissionMode: 'default', permissionRules: [], pinned: false, tags: [], healthStatus: 'unknown', healthCheckedAt: 0, healthRoots: [], createdAt: Date.now(), lastUsedAt: Date.now() }];
+      // v1.1.8 R1 防误触：线程里已引用其它 projectId 时说明项目数据只是快照残缺，
+      // 不做迁移覆盖（保持空列表 + 线程原引用，交给 loadState 的恢复链路从 fallback 捞回真项目）
+      const threadsReferenceProjects = threads.some((t) => t && t.projectId);
+      if (!threadsReferenceProjects) {
+        projects = [{ id: App.uid(), name: '默认项目', cwd: (typeof ps.agentCwd === 'string' ? ps.agentCwd : ''), workspaceId: '',
+          auto: false, approveTools: [], cmdWhitelist: [], planMode: false, permissionMode: 'default', permissionRules: [], pinned: false, tags: [], healthStatus: 'unknown', healthCheckedAt: 0, healthRoots: [], createdAt: Date.now(), lastUsedAt: Date.now() }];
+      }
     }
-    const firstPid = projects[0].id;
-    // 把无 projectId 的线程归到首个项目
-    for (const t of threads) { if (!t.projectId) t.projectId = firstPid; }
+    const firstPid = (projects[0] && projects[0].id) || '';
+    // 把无 projectId 的线程归到首个项目（仅当确有项目可归）
+    if (firstPid) { for (const t of threads) { if (!t.projectId) t.projectId = firstPid; } }
     ns.projects = projects;
     ns.activeProjectId = (parsed.activeProjectId && projects.some(p => p.id === parsed.activeProjectId))
       ? parsed.activeProjectId : firstPid;
