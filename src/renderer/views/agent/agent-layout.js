@@ -126,11 +126,10 @@
                   <button class="btn-ghost mini" id="agentProjectSettings">⚙ 设置</button>
                 </div>
               </div>
-              <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
-                <button class="btn-ghost" id="agentTest">测试连接</button>
-                <!-- v1.1.0（Fix）：按上次已知连接状态初始化，不再硬编码「未连接」误报 -->
-                <span class="agent-status ${App.agent._backendOk ? 'on' : 'off'}" id="agentStatus">${App.agent._backendOk ? '已连接' : '未连接'}</span>
-              </div>
+              <button class="btn-ghost agent-test-btn" id="agentTest" title="点击重新测量与糖码后端的连接">
+                <!-- v1.1.8 I2：连接状态并入按钮本体——不再按钮/药丸各占一行 -->
+                连接：<span class="agent-status ${App.agent._backendOk ? 'on' : 'off'}" id="agentStatus">${App.agent._backendOk ? '已连接' : '未连接'}</span>
+              </button>
               <span class="agent-auto-badge ${proj.auto ? 'on' : 'off'}" id="agentAutoBadge">${autoLabel}</span>
               <!-- v1.1.0：Plan 模式一行化（badge 并入 switch） -->
               <label class="switch plan-switch"><input type="checkbox" id="agentPlanToggle" ${proj.planMode ? 'checked' : ''} />
