@@ -2244,7 +2244,8 @@ th { background: var(--hover-bg); font-weight: 600; }
   .agent-layout.agent-layout-compact > .agent-tabs-row {
     position: absolute; top: 8px; left: 0; z-index: 30; margin-top: 0;
   }
-  .agent-layout.agent-layout-compact > .agent-expand-tab { margin-top: 0; margin-left: -14px; } /* K1 compact 同步贴边 */
+  .agent-layout.agent-layout-compact > .agent-expand-tab { margin-top: 0; margin-left: -14px; }
+  .agent-layout.agent-layout-compact > .agent-tabs-row { margin-left: -14px; }
 }
 
 /* 书签 tab：竖排文字（从左往右），宽度=栏宽度，像书签露出的标签 */
@@ -2253,7 +2254,6 @@ th { background: var(--hover-bg); font-weight: 600; }
   writing-mode: vertical-lr; text-orientation: mixed;
   padding: 16px 0; font-size: var(--fs-sm); font-weight: 600; letter-spacing: 2px;
   color: var(--text-tertiary); border: 1px solid var(--border);
-  margin-left: -14px;
   background: var(--panel-bg); border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center; user-select: none;
   transition: all var(--dur-press) var(--ease-smooth); min-height: 60px;
@@ -2263,9 +2263,12 @@ th { background: var(--hover-bg); font-weight: 600; }
 /* v1.1.0：两栏都折叠时——竖排文字书签样式（与单折叠一致），两个上下竖着排列 */
 .agent-tabs-row { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; margin-top: 12px; }
 .agent-tabs-row .agent-expand-tab { margin-top: 0; width: 36px; flex: 0 0 auto; height: auto; min-height: 60px; }
-.agent-expand-tab.sess-tab { margin-left: 8px; } /* v1.1.8 L2：与项目栏右边线保持间距 */
-.agent-tabs-row .agent-expand-tab.sess-tab { margin-left: 0; }
 .agent-expand-tab span { display: block; }
+/* v1.1.8 M1：书签四态统一——按 DOM 位置定义，不再类名补丁 */
+.agent-layout > .agent-expand-tab { margin-left: -14px; }        /* 单独项目书签：贴左边 2px */
+.agent-layout > .agent-expand-tab.sess-tab { margin-left: -10px; } /* 单独会话书签：抵消 gap，距项目栏边线 2px */
+.agent-tabs-row { margin-left: -14px; }                           /* 双折叠整排贴边 */
+.agent-tabs-row .agent-expand-tab { margin-left: 0; }             /* 行内严格对齐 */
 
 
 
@@ -3958,3 +3961,14 @@ button.pill-chip:hover { background: var(--active-bg); border-color: var(--borde
 @media (max-width: 900px) {
   .agent-top-divider { display: none; }
 }
+
+/* v1.1.8 M2：工具行分组与对齐 */
+.agent-ctx-tools { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; flex: 0 0 auto; }
+.agent-ctx-row .ctx-bar { flex: 1 1 120px; min-width: 0; }
+.agent-ctx-row .btn-ghost.mini { flex: 0 0 auto; }
+/* 宽屏隐藏 cwd 字段 label（路径信息由输入框内容承载），字段单行高后第一行严格居中 */
+@media (min-width: 641px) {
+  .agent-top .agent-field.grow > label { display: none; }
+}
+/* 第一行固定项不缩，宽度不足整组换行 */
+.agent-top-row > .btn-ghost, .agent-top-row > .agent-auto-badge, .agent-top-row > .switch { flex-shrink: 0; }

@@ -141,12 +141,15 @@
                 <button class="btn-ghost mini" id="agentCompactBtn" title="压缩较早上下文（或输入 /compact 定向压缩）">压缩</button>
                 <button class="btn-ghost mini" id="agentClearCtxBtn" title="清空当前线程上下文（重置对话历史与摘要）">清空</button>
                 <button class="btn-ghost mini" id="agentMemoryBtn" title="编辑项目记忆（糖码记忆.md）">项目记忆</button>
-                <span class="agent-top-divider" aria-hidden="true"></span>
-                <button class="btn-ghost mini" id="agentHistoryBtn" title="查看本会话运行历史（计划 / TODO / 工具调用 / 测试结果）">历史</button>
-                <button class="btn-ghost mini" id="agentEvalBtn" title="在独立 fixture 中运行安全评测，不接触当前项目">安全评测</button>
-                <button class="btn-ghost mini agent-engine-launcher" id="agentEngineBtn" type="button" aria-haspopup="dialog" aria-controls="agentEngineMask" title="打开运行观测">
-                  运行观测 <span class="agent-engine-launcher-state" id="agentEngineLauncherState">待运行</span>
-                </button>
+                <!-- v1.1.8 M2：观测类工具包成不可拆分组，换行时整组移动、永不单个落单 -->
+                <span class="agent-ctx-tools">
+                  <span class="agent-top-divider" aria-hidden="true"></span>
+                  <button class="btn-ghost mini" id="agentHistoryBtn" title="查看本会话运行历史（计划 / TODO / 工具调用 / 测试结果）">历史</button>
+                  <button class="btn-ghost mini" id="agentEvalBtn" title="在独立 fixture 中运行安全评测，不接触当前项目">安全评测</button>
+                  <button class="btn-ghost mini agent-engine-launcher" id="agentEngineBtn" type="button" aria-haspopup="dialog" aria-controls="agentEngineMask" title="打开运行观测">
+                    运行观测 <span class="agent-engine-launcher-state" id="agentEngineLauncherState">待运行</span>
+                  </button>
+                </span>
               </div>
               </div>
             </div>
