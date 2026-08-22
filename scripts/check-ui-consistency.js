@@ -23,6 +23,7 @@ function main() {
   const lines = src.split('\n');
   const failures = [];
   const warns = [];
+  let globalScrollbarLines = 0;
 
   lines.forEach((line, i) => {
     const no = i + 1;
@@ -38,7 +39,25 @@ function main() {
     if (/@keyframes\s+(shine|jello-press|glow-breathe)\b/.test(line)) {
       failures.push(`L${no} 已删除装饰 keyframes 复活：${line.trim().slice(0, 100)}`);
     }
+    // 4. 滚动条：只允许全局块（行首直接以 ::-webkit-scrollbar 开头的规则行）
+    if (/scrollbar-hide-allowed/.test(line)) { /* 豁免：功能性隐藏滚动条 */ }
+    else if (/::-webkit-scrollbar/.test(line)) {
+      if (/^\s*::-webkit-scrollbar/.test(line)) globalScrollbarLines++;
+      else failures.push(`L${no} 滚动条局部覆写（滚动条只有全局一套规格）：${line.trim().slice(0, 100)}`);
+    }
+    // 5. 字号阶梯：禁止 px 直值
+    if (/font-size\s*:\s*\d+(\.\d+)?px/i.test(line)) {
+      failures.push(`L${no} font-size px 字面值（必须走 --fs-* 阶梯）：${line.trim().slice(0, 100)}`);
+    }
+    // 6. 胶囊圆角不得用于按钮类选择器（仅状态点/计数徽章可用 pill）
+    if (/border-radius\s*:\s*var\(--radius-pill\)/.test(line) && /(^|\s|,)(\.btn|button)[^a-z-]/i.test(line.replace(/\{.*/, ''))) {
+      failures.push(`L${no} 按钮使用胶囊圆角（操作按钮一律常规圆角）：${line.trim().slice(0, 100)}`);
+    }
   });
+
+  if (globalScrollbarLines !== 4 && globalScrollbarLines !== 5) {
+    failures.push(`全局滚动条规格行数异常（${globalScrollbarLines}，应为 4-5）——可能被改动`);
+  }
 
   // WARN 基线：非令牌圆角字面值行数（border-radius: <n>px 且不含 var(--radius）
   const radiusDebt = lines.filter((l) => /border-radius\s*:\s*\d/.test(l) && !/var\(--radius/.test(l)).length;
@@ -50,7 +69,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  console.log(JSON.stringify({ ok: true, rules: ['no-backdrop-filter', 'no-dead-tokens', 'no-dead-keyframes'], warnBaselines: warns }, null, 2));
+  console.log(JSON.stringify({ ok: true, rules: ['no-backdrop-filter', 'no-dead-tokens', 'no-dead-keyframes', 'single-scrollbar-spec', 'font-scale-only', 'no-pill-buttons'], warnBaselines: warns }, null, 2));
 }
 
 if (require.main === module) main();

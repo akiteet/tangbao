@@ -55,11 +55,10 @@ test('糖读文件区约显示2.5张卡片并独立滚动，大纲获得更多�
   assert.match(css, /\.doc-sidebar \.doc-list \{[^}]*max-height:\s*var\(--doc-files-peek-height\)[^}]*overflow-y:\s*auto[^}]*scrollbar-gutter:\s*stable/s);
   assert.match(css, /\.doc-sec-outline \{[^}]*flex:\s*1 1 58%[^}]*min-height:\s*220px/s);
   assert.match(css, /\.doc-outline \{[^}]*height:\s*0[^}]*overflow-y:\s*scroll[^}]*scrollbar-gutter:\s*stable both-edges/s);
-  assert.match(css, /\.doc-outline \{[^}]*scrollbar-width:\s*auto[^}]*scrollbar-color:/s);
-  assert.match(css, /\.doc-outline::\-webkit-scrollbar \{ width:\s*10px; \}/);
-  assert.match(css, /\.doc-outline::\-webkit-scrollbar-track/);
-  assert.match(css, /\.doc-outline::\-webkit-scrollbar-thumb/);
-  assert.match(css, /\.doc-preview, \.doc-messages, \.doc-list, \.doc-outline/);
+  // v1.1.8 N2：滚动条全局唯一规格——大纲的"可见滚动条"由全局 thin + border-strong thumb 契约保证
+  assert.match(css, /\* \{ scrollbar-width: thin; scrollbar-color: var\(--border-strong\) transparent; \}/);
+  assert.match(css, /::-webkit-scrollbar \{ width: 8px; height: 8px; \}/);
+  assert.match(css, /::-webkit-scrollbar-thumb \{[\s\S]*?background: var\(--border-strong\)/);
   assert.match(css, /@media \(max-height:\s*700px\)[\s\S]*\.doc-sec-outline \{ min-height:\s*150px/);
 });
 
