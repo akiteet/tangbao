@@ -272,6 +272,16 @@
                 <p class="hint">选择“默认账户”将跟随全局默认账户；选择具体账户则为该模块单独指定。</p>
               </div>
               <div class="set-card">
+                <div class="set-card-title">视觉模型</div>
+                <div class="field"><span class="field-label">支持图片输入的模型名</span>
+                  <div class="chip-input" id="visionChips">
+                    <div class="chip-list" id="visionChipList"></div>
+                    <input type="text" id="visionInput" placeholder="输入模型名，回车添加" autocomplete="off" />
+                  </div>
+                </div>
+                <p class="hint">模型名支持<strong>部分匹配</strong>。例如输入 <code>gpt-5</code> 会同时匹配 <code>gpt-5.5</code>、<code>gpt-5-turbo</code> 等。聊天仅对匹配的模型显示图片输入按钮。</p>
+              </div>
+              <div class="set-card">
                 <div class="set-card-title">联网搜索（可选）</div>
                 <div class="field"><span class="field-label">联网搜索 API Key（可选）</span>
                   <div class="key-field-row">
@@ -283,16 +293,6 @@
                   </div>
                 </div>
                 <p class="hint"><strong>用途</strong>：填入搜索服务 API Key（如 Tavily）后，糖包聊天和糖码的联网搜索将走付费 API，结果更稳定、更高质量。<br><strong>留空</strong>：使用内置免费搜索（优先 Bing，回落 DuckDuckGo），但受反爬/地区影响可能不稳定。</p>
-              </div>
-              <div class="set-card">
-                <div class="set-card-title">视觉模型</div>
-                <div class="field"><span class="field-label">支持图片输入的模型名</span>
-                  <div class="chip-input" id="visionChips">
-                    <div class="chip-list" id="visionChipList"></div>
-                    <input type="text" id="visionInput" placeholder="输入模型名，回车添加" autocomplete="off" />
-                  </div>
-                </div>
-                <p class="hint">模型名支持<strong>部分匹配</strong>。例如输入 <code>gpt-5</code> 会同时匹配 <code>gpt-5.5</code>、<code>gpt-5-turbo</code> 等。聊天仅对匹配的模型显示图片输入按钮。</p>
               </div>
             </div>
             <div class="settings-panel" data-panel="account">
@@ -569,7 +569,7 @@
               <div class="help-section-title">关于糖包</div>
               <div class="set-card about-card">
                 <div class="about-logo">糖</div>
-                <div class="about-name">糖包 <span class="about-ver">v1.1.6</span></div>
+                <div class="about-name">糖包 <span class="about-ver">v1.1.8</span></div>
                 <div class="about-meta">创作者：<b>世界上最帅的人</b></div>
                 <div class="about-slogan">糖包 · 把想要的 AI，装进你自己的桌面</div>
                 <div class="about-meta" style="margin-top:6px;font-size:11.5px;color:var(--text-tertiary)">Local-first AI workstation · 密钥不出本机</div>
@@ -600,7 +600,7 @@
                     <div class="help-module-desc">糖码技能安装与调用指南（/skills、/skill、/ 菜单）。</div>
                   </div>
                 </a>
-                <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/CHANGELOG-v1.1.6.md" target="_blank" rel="noopener">
+                <a class="help-module" href="https://github.com/akiteet/tangbao/blob/master/docs/CHANGELOG-v1.1.8.md" target="_blank" rel="noopener">
                   <div class="help-module-icon help-module-icon--agent">📜</div>
                   <div class="help-module-body">
                     <div class="help-module-name">更新日志 · CHANGELOG</div>

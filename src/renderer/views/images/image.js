@@ -84,6 +84,13 @@
         ratioValue: ratio,
       });
     });
+    // v1.1.8 G2：统一排序——主键 |宽高比-1| 升序（方形优先，向宽/高两翼成对展开），二级面积降序
+    out.sort((a, b) => {
+      const da = Math.abs(a.width / a.height - 1);
+      const db = Math.abs(b.width / b.height - 1);
+      if (da !== db) return da - db;
+      return (b.width * b.height) - (a.width * a.height);
+    });
     return out;
   }
 
@@ -316,8 +323,15 @@
 
       // 图像模型选择器：读当前图像账户模型列表
       const imgProv = App.getProvider('image');
-      const imgModels = (imgProv.models && imgProv.models.length) ? imgProv.models : (imgProv.model ? [imgProv.model] : []);
-      const imgSel = imgProv.model || imgModels[0] || '';
+      const allImgModels = (imgProv.models && imgProv.models.length) ? imgProv.models : (imgProv.model ? [imgProv.model] : []);
+      // v1.1.8 G5：只列账户里已标记为生图的模型；一个都没有时回退全量（老用户不被清空）
+      const accId = imgProv.accountId || (String(imgProv.ref || '').startsWith('acc:') ? String(imgProv.ref).slice(4) : '');
+      const imgAccount = (App.state.settings.accounts || []).find((a) => a.id === accId);
+      const imageNames = new Set(((imgAccount && Array.isArray(imgAccount.models)) ? imgAccount.models : [])
+        .filter((m) => m && typeof m === 'object' && m.imageModel === true)
+        .map((m) => m.name));
+      const imgModels = imageNames.size ? allImgModels.filter((n) => imageNames.has(n)) : allImgModels;
+      const imgSel = (!imageNames.size || imageNames.has(imgProv.model)) ? (imgProv.model || imgModels[0] || '') : (imgModels[0] || '');
       const modelOpts = imgModels.length
         ? imgModels.map(m => `<option value="${App.escapeHtml(m)}"${m === imgSel ? ' selected' : ''}>${App.escapeHtml(m)}</option>`).join('')
         : '<option value="" disabled selected>未配置图像模型，请到设置填写</option>';
