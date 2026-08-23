@@ -1,8 +1,12 @@
 node_modules/
 dist/
 dist-v107/
+dist-rel-*/
 *.exe
 .blockmap
+*.blockmap
+latest.yml
+builder-debug.yml
 .DS_Store
 Thumbs.db
 *.log
