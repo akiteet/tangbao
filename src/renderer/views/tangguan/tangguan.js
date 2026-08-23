@@ -390,7 +390,7 @@
     }
     const greeting = selected.greeting || selected.firstMessage || '你好，今天想从哪里开始？';
     const starters = Array.isArray(selected.starters) ? selected.starters.slice(0, 4) : [];
-    welcome.innerHTML = `<div class="tg-welcome-card">${avatar(selected, 'tg-welcome-avatar')}<h2>${esc(selected.name)}</h2><p class="tg-welcome-tagline">${esc(selected.tagline || selected.description || '')}</p><div class="tg-welcome-greeting">${esc(greeting)}</div>${starters.length ? `<div class="tg-starters">${starters.map((item) => `<button type="button" class="btn-ghost" data-tg-starter="${esc(item)}">${esc(item)}</button>`).join('')}</div>` : ''}<small>这是该角色的独立会话；联网、附件和工具已关闭。</small></div>`;
+    welcome.innerHTML = `<div class="tg-welcome-card">${avatar(selected, 'tg-welcome-avatar')}<h2>${esc(selected.name)}</h2><div class="tg-welcome-greeting">${esc(greeting)}</div>${starters.length ? `<div class="tg-starters">${starters.map((item) => `<button type="button" class="btn-ghost" data-tg-starter="${esc(item)}">${esc(item)}</button>`).join('')}</div>` : ''}</div>`;
   }
 
   function switchDrawer(kind) {

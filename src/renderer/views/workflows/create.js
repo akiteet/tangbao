@@ -243,8 +243,7 @@
       wrap.innerHTML = `
         <div class="create-shell">
           <div class="create-tabs" id="createTabs">
-            <button class="create-tab${App.create.tab === 'agents' ? ' active' : ''}" data-tab="agents">任务智能体</button>
-            <button class="create-tab${App.create.tab === 'workflows' ? ' active' : ''}" data-tab="workflows">工作流</button>
+            <button class="create-tab active" data-tab="agents">任务智能体</button> <!-- v1.1.8 T3：工作流 tab 隐藏（数据与渲染函数保留） -->
           </div>
           <div class="create-workspace">
             <section class="create-catalog" id="createContent"></section>
@@ -263,8 +262,8 @@
         App.create.tab = b.dataset.tab;
         App.create.render();
       });
-      if (App.create.tab === 'workflows') App.create.renderWorkflows();
-      else App.create.renderLibrary();
+      App.create.tab = 'agents'; /* T3：工作流入口已隐藏，tab 恒为 agents */
+      App.create.renderLibrary();
       const newSession = wrap.querySelector('[data-create-new-session]');
       // Legacy close hook name retained for module extensions: data-create-task-close.
       if (newSession) newSession.addEventListener('click', () => App.create.newSession());

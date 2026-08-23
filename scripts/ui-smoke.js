@@ -575,12 +575,9 @@ async function inspectCreateTaskSurface(win, testCase) {
       if (!createModelButton || createModelButton.hidden) failures.push('Tangchuang common model selector is missing');
       if (createModelButton && !createModelButton.textContent.includes('smoke-model-1')) failures.push('Tangchuang module default model is not shown in the common selector');
       if (createHost && createHost.querySelector('[data-tab="templates"], #tplGrid, [data-tpl], #tplModalMask')) failures.push('Tangchuang still exposes the retired template library');
+      // v1.1.8 T3：工作流 tab 已隐藏移除——断言入口不存在，且 agent 库正常渲染
       const workflowTab = createHost && createHost.querySelector('[data-tab="workflows"]');
-      if (workflowTab) workflowTab.click();
-      await new Promise((resolve) => setTimeout(resolve, 35));
-      const workflowCatalog = document.querySelector('#createView .create-catalog');
-      if (!workflowCatalog || !workflowCatalog.querySelector('.create-library-head, [data-create-library-toggle]')) failures.push('Tangchuang workflow library head contract is missing');
-      if (workflowCatalog && workflowCatalog.querySelector('.create-library-tabs, [data-create-library-tab]')) failures.push('Tangchuang workflow library renders unrelated preset/session tabs');
+      if (workflowTab) failures.push('Tangchuang workflow tab should be hidden (v1.1.8 T3)');
       const agentTab = createHost && createHost.querySelector('[data-tab="agents"]');
       if (agentTab) agentTab.click();
       await new Promise((resolve) => setTimeout(resolve, 35));

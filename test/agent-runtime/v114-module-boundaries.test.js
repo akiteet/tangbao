@@ -83,8 +83,10 @@ test('Tangchuang catalog modes keep the shared library head after removing templ
   assert.match(create, /tabs: false/);
   assert.match(create, /wrapCreateGenericLibrary\(c, \{ title: '\\u5de5\\u4f5c\\u6d41'/);
   assert.match(create, /data-create-library-expand/);
-  assert.match(create, /data-tab=\"workflows\"/);
-  assert.doesNotMatch(create, /data-tab=\"templates\"|renderTemplates|useTemplate|openTemplateForm|tplGrid|tplModalMask/);
+  // v1.1.8 T3：工作流 tab 已隐藏移除（入口不渲染，renderWorkflows 函数与 settings.workflows 数据保留）
+  assert.doesNotMatch(create, /data-tab=\\"workflows\\"/);
+  assert.match(create, /renderWorkflows\(/);
+  assert.doesNotMatch(create, /data-tab=\\"templates\\"|renderTemplates|useTemplate|openTemplateForm|tplGrid|tplModalMask/);
 });
 
 test('Module session actions delete instead of toggling legacy archived state', () => {

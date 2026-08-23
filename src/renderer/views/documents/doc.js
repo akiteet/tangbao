@@ -39,6 +39,7 @@
     docs() { return App.state.settings.docs || (App.state.settings.docs = []); },
     activeDoc() {
       const list = App.doc.docs();
+      if (!App.doc.activeId && App.state.settings.docActiveId) App.doc.activeId = App.state.settings.docActiveId; /* T6：重启回到上次文档 */
       if (App.doc.activeId) {
         const d = list.find(x => x.id === App.doc.activeId);
         if (d) return d;
@@ -60,6 +61,8 @@
     render() {
       const wrap = document.getElementById('docView');
       if (!wrap) return;
+      const prevInput = document.getElementById('docInput'); /* v1.1.8 T6：切模块/重渲染前保草稿 */
+      if (prevInput && prevInput.value) App.doc._draft = prevInput.value;
       const docProv = App.getProvider('doc');
       const docModels = (docProv.models && docProv.models.length) ? docProv.models : (docProv.model ? [docProv.model] : []);
       const docSel = docProv.model || docModels[0] || '';
@@ -147,6 +150,7 @@
             </div>
           </div>
         </div>
+        <div class="doc-drawer-mask" id="docDrawerMask" hidden></div>
         <div class="doc-drawer" id="docDrawer">
           <div class="doc-drawer-head">
             <span class="doc-drawer-title" id="docDrawerTitle">文档预览</span>
@@ -219,6 +223,7 @@
 
       const docInput = document.getElementById('docInput');
       const docSend = document.getElementById('docSendBtn');
+      if (docInput && App.doc._draft) { docInput.value = App.doc._draft; App.doc._draft = ''; } /* T6：草稿回填 */
       if (docInput && docSend) {
         docInput.addEventListener('input', () => { docSend.disabled = App.doc.streaming || !docInput.value.trim(); });
         docInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); App.doc.send(); } });
@@ -235,6 +240,11 @@
       });
       const drawerClose = document.getElementById('docDrawerClose');
       if (drawerClose) drawerClose.addEventListener('click', () => App.doc.closeDrawer());
+      const drawerMask = document.getElementById('docDrawerMask');
+      if (drawerMask) drawerMask.addEventListener('click', () => App.doc.closeDrawer()); /* T4：点遮罩关闭 */
+      document.addEventListener('keydown', (e) => { /* T4：ESC 关闭（仅糖读视图） */
+        if (e.key === 'Escape' && App.state.view === 'doc') App.doc.closeDrawer();
+      });
     },
 
     // M10：预览抽屉开合
@@ -247,11 +257,15 @@
         title.textContent = name || (d && d.name) || '文档预览';
       }
       drawer.classList.add('open');
+      const mask = document.getElementById('docDrawerMask');
+      if (mask) mask.hidden = false;
     },
 
     closeDrawer() {
       const drawer = document.getElementById('docDrawer');
       if (drawer) drawer.classList.remove('open');
+      const mask = document.getElementById('docDrawerMask');
+      if (mask) mask.hidden = true;
     },
 
     // M10：边栏折叠（状态持久化）
@@ -419,6 +433,7 @@
         App.ui.toast('文档已达上限 ' + MAX_DOCS + ' 篇，最旧的「' + (evicted && evicted.name) + '」已移除');
       }
       App.doc.activeId = doc.id;
+      App.state.settings.docActiveId = doc.id; /* T6 */
       App.persist();
       App.ui.toast('已添加：' + name);
       App.doc.render();
@@ -470,10 +485,12 @@
     },
 
     switchDoc(id) {
+      const same = App.doc.activeId === id; /* T4：同文档点击不重开抽屉 */
       App.doc.activeId = id;
+      App.state.settings.docActiveId = id; /* T6 */
       App.persist();
       App.doc.render();
-      App.doc.openDrawer();
+      if (!same) App.doc.openDrawer();
     },
 
     showDoc(d) {
@@ -504,7 +521,8 @@
         if (m.role === 'user') {
           const node = document.createElement('div');
           node.className = 'doc-msg msg user';
-          node.innerHTML = '<div class="msg-body"><div class="bubble user-bubble"></div></div>';
+          const refCard = (m.docRefs && m.docRefs.length) ? '<div class="attach-cards">' + m.docRefs.map((r) => '<div class="attach-card"><span class="attach-ico">📄</span><span class="attach-name">' + App.escapeHtml(r.docName || '') + '</span></div>').join('') + '</div>' : '';
+          node.innerHTML = '<div class="msg-body">' + refCard + '<div class="bubble user-bubble"></div></div>';
           node.querySelector('.bubble').textContent = m.text;
           area.appendChild(node);
         } else {
@@ -739,7 +757,7 @@
         const segText = segments[i];
         const note = `（长文档分段处理：第 ${i + 1}/${segments.length} 段）`;
         const text = prompt + '\n\n资料（' + note + '）：\n' + segText;
-        const result = await App.doc.send(text, { segment: true, note });
+        const result = await App.doc.send(text, { segment: true, note, docRef: { docId: d.id, docName: d.name }, payload: text });
         if (result == null) break; // 发送失败或停止
         if (result.trim()) parts.push(result.trim());
       }
@@ -762,7 +780,9 @@
       // M10：复用聊天模块视觉（.msg.user 反向布局 + user-bubble）
       const userNode = document.createElement('div');
       userNode.className = 'doc-msg msg user';
-      userNode.innerHTML = '<div class="msg-body"><div class="bubble user-bubble"></div></div>';
+      // v1.1.8 T5：显示层 = 文件卡片 + 指令（全文只进请求载荷）
+      const refCard = o.docRef ? '<div class="attach-cards"><div class="attach-card"><span class="attach-ico">📄</span><span class="attach-name">' + App.escapeHtml(o.docRef.docName || '') + '</span></div></div>' : '';
+      userNode.innerHTML = '<div class="msg-body">' + refCard + '<div class="bubble user-bubble"></div></div>';
       userNode.querySelector('.bubble').textContent = text;
       area.appendChild(userNode);
       if (input) { input.value = ''; const sendBtn = document.getElementById('docSendBtn'); if (sendBtn) sendBtn.disabled = true; }
@@ -770,7 +790,7 @@
 
       // v1.1.6：分段/合并请求是内部消息，不写入 Q&A 历史
       if (!o.segment && !o.merge) {
-        App.doc.chatOf(d.id).push({ id: App.uid(), role: 'user', text, createdAt: Date.now() });
+        App.doc.chatOf(d.id).push({ id: App.uid(), role: 'user', text, docRefs: o.docRef ? [o.docRef] : undefined, createdAt: Date.now() });
       }
 
       const p = App.getProvider('doc');
@@ -796,7 +816,7 @@
 
       const payload = {
         model: p.model, stream: true,
-        messages: [{ role: 'system', content: sysExtra }, { role: 'user', content: text }],
+        messages: [{ role: 'system', content: sysExtra }, { role: 'user', content: o.payload || text }],
       };
       App.doc.streaming = true;
       // v1.1.6：流式可中断（停止生成）
@@ -884,6 +904,7 @@
             createdAt: Date.now(),
           });
           App.persist();
+          if (area && !area.isConnected) App.doc.renderChat(); /* T6：模块切换后流式完成，重绘使回答可见 */
         }
         // 完成：显示复制/导出，隐藏停止
         if (stopBtn) stopBtn.style.display = 'none';
@@ -911,7 +932,7 @@
         App.doc.analyzeSegments(act, prompt, d);
         return;
       }
-      App.doc.send(prompt + '\n\n资料：\n' + d.text);
+      App.doc.send(prompt, { docRef: { docId: d.id, docName: d.name }, payload: prompt + '\n\n资料：\n' + d.text });
     },
 
     renderCites(aiNode, answer, refs) {

@@ -644,7 +644,7 @@ body.float-mode .main::after {
   transition: all var(--dur-press) var(--ease-smooth);
 }
 .input-wrap:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(var(--primary-rgb), .18); }
-#input {
+#input { box-shadow: none; /* T7 内层输入：焦点环交给外层 wrap */
   width: 100%; border: none; background: transparent; color: var(--text);
   font-size: var(--fs-lg); line-height: 1.6; resize: none; outline: none;
   padding: 6px 10px; max-height: 200px; font-family: inherit;
@@ -745,7 +745,7 @@ body.float-mode .main::after {
 .chip-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px 3px 10px; background: var(--primary-soft); color: var(--primary); border-radius: var(--radius); font-size: var(--fs-base); }
 .chip-tag-x { border: none; background: transparent; color: inherit; font-size: var(--fs-lg); line-height: 1; cursor: pointer; padding: 0 2px; opacity: .65; }
 .chip-tag-x:hover { opacity: 1; }
-#visionInput { border: none; background: transparent; color: var(--text); font-size: var(--fs-base); padding: 4px 0; outline: none; width: 100%; }
+#visionInput { box-shadow: none; /* T7 */ border: none; background: transparent; color: var(--text); font-size: var(--fs-base); padding: 4px 0; outline: none; width: 100%; }
 
 /* 用户消息气泡上方的附件卡片 */
 .attach-cards { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; justify-content: flex-end; }
@@ -1086,7 +1086,7 @@ body.float-mode .main::after {
   padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--panel-bg);
 }
-.doc-composer textarea {
+.doc-composer textarea { box-shadow: none; /* T7 */
   flex: 1; border: none; background: transparent; color: var(--text);
   font-size: var(--fs-md); resize: none; outline: none; min-height: 24px; max-height: 140px;
   padding: 6px 4px; font-family: inherit; line-height: 1.5;
@@ -1393,7 +1393,7 @@ body.float-mode .main::after {
   border: var(--glow-border); border-radius: var(--radius-lg);
   box-shadow: var(--elevation-3), var(--inner-highlight); overflow: hidden;
 }
-#commandPaletteInput {
+#commandPaletteInput { box-shadow: none; /* T7 */
   width: 100%; padding: 14px 16px; border: none; border-bottom: 1px solid var(--border);
   background: transparent; color: var(--text); font-size: var(--fs-lg); outline: none;
 }
@@ -1799,7 +1799,7 @@ th { background: var(--hover-bg); font-weight: 600; }
 .agent-composer { display: flex; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); align-items: flex-end; }
 .agent-composer-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-bg); }
 .agent-composer-input-wrap:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(var(--primary-rgb), .18); }
-.agent-composer textarea { flex: 1 1 220px; min-width: 120px; resize: none; padding: 3px 2px; border: none; border-radius: 0; background: transparent; color: var(--text); font-size: var(--fs-md); max-height: 160px; overflow-y: auto; overflow-x: hidden; line-height: 1.5; outline: none; }
+.agent-composer textarea { box-shadow: none; /* T7 */ flex: 1 1 220px; min-width: 120px; resize: none; padding: 3px 2px; border: none; border-radius: 0; background: transparent; color: var(--text); font-size: var(--fs-md); max-height: 160px; overflow-y: auto; overflow-x: hidden; line-height: 1.5; outline: none; }
 .agent-skill-chips { display: contents; }
 .agent-skill-chips[hidden] { display: none; }
 .agent-skill-chip { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 190px; height: 27px; padding: 0 5px 0 8px; border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--border)); border-radius: var(--radius-pill); background: var(--primary-soft); color: var(--primary); font-size: var(--fs-xs); }
@@ -2941,10 +2941,10 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tangguanView .tg-library-filters button.active { background: var(--panel-bg); color: var(--text); box-shadow: none; }
 #tangguanView .tg-library-tabs button.active, #tangguanView .tg-library-filters button.active { box-shadow: var(--elevation-1); } /* v1.1.8 J3-d */
 #tangguanView .tg-library-search { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-tertiary); }
-#tangguanView .tg-library-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: var(--fs-sm); }
+#tangguanView .tg-library-search input { width: 100%; min-width: 0; border: 0; outline: 0; box-shadow: none; background: transparent; /* T7 */ color: var(--text); font-size: var(--fs-sm); }
 #tangguanView .tg-library-filters { display: flex; gap: 3px; margin: 8px 0; }
 #tangguanView .tg-character-list { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px 0 0; overflow-y: auto; }
-#tangguanView .tg-character-card { align-items: center; gap: 8px; padding: 9px 7px; transition: background var(--dur-hover) var(--ease-smooth); border-radius: var(--radius-sm); }
+#tangguanView .tg-character-card { align-items: stretch; gap: 8px; padding: 9px 7px; transition: background var(--dur-hover) var(--ease-smooth); border-radius: var(--radius-sm); }
 #tangguanView .tg-character-card:hover { background: var(--hover-bg); } /* v1.1.8 J3-b */
 #tangguanView .tg-card-main small {
   display: block;
@@ -3944,8 +3944,8 @@ button.pill-chip:hover { background: var(--active-bg); border-color: var(--borde
 }
 .lib-bar:hover { border-color: var(--border-strong); }
 .lib-bar.active { border-color: var(--primary); }
-.lib-bar-row1 { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
-.lib-bar-row2 { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.lib-bar-row1 { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; width: 100%; }
+.lib-bar-row2 { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; width: 100%; }
 .lib-bar-icon {
   width: 32px; height: 32px; border-radius: var(--radius-sm); flex: 0 0 auto;
   background: var(--primary-soft); color: var(--primary);
@@ -3978,3 +3978,7 @@ button.pill-chip:hover { background: var(--active-bg); border-color: var(--borde
 #tangguanView .tg-character-card { padding: var(--sp-1) var(--sp-2); min-height: 0; }
 #createView .create-session-row-actions { width: 100%; max-width: none; justify-content: flex-start; }
 #createSessionPane .create-session-list { gap: var(--sp-1); }
+
+/* v1.1.8 T4：糖读预览抽屉遮罩（复用糖馆模式） */
+.doc-drawer-mask { position: fixed; inset: 0; z-index: 190; background: var(--mask-bg); }
+.doc-drawer-mask[hidden] { display: none; }

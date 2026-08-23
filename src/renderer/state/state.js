@@ -119,6 +119,10 @@
       if ((!Array.isArray(ps.visionModels) || ps.visionModels.length === 0) && Array.isArray(fs.visionModels) && fs.visionModels.length > 0) {
         merged.settings.visionModels = fs.visionModels;
       }
+      // v1.1.8 T6：docChat（糖读问答历史）同策略恢复
+      if (ps.docChat && typeof ps.docChat === 'object' && !Object.keys(ps.docChat).length && fs.docChat && typeof fs.docChat === 'object' && Object.keys(fs.docChat).length) {
+        merged.settings.docChat = fs.docChat;
+      }
     }
     // v1.1.6：agentThreads/projects 从 fallback 恢复
     if (Array.isArray(p.agentThreads) && p.agentThreads.length === 0 && Array.isArray(f.agentThreads) && f.agentThreads.length > 0) {
