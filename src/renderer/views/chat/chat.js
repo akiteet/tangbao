@@ -446,6 +446,17 @@
 
     surface() { return surfaceState; },
 
+    // v1.1.8 U2：当前活动滚动容器——按视图归一（一键回到底部按钮/流式跟随共用）
+    activeScrollContainer() {
+      const s = surfaceState && surfaceState.scroll;
+      if (s) return s;                       // tangguan / create 挂载的内层滚动容器
+      const v = App.state && App.state.view;
+      if (v === 'agent') return $('agentThread');
+      if (v === 'doc') return $('docMessages');
+      if (v === 'image') return $('imageView');
+      return $('chatScroll');
+    },
+
     // Flush the current input before a route/session change. This is
     // intentionally synchronous and local-only so navigation never waits on
     // the model or the SQLite writer.
@@ -1114,12 +1125,12 @@
     },
 
     isNearBottom() {
-      const c = chatScrollNode();
+      const c = App.chat.activeScrollContainer();
       if (!c) return true;
       return c.scrollHeight - c.scrollTop - c.clientHeight < 60;
     },
     scrollBottom(force) {
-      const c = chatScrollNode();
+      const c = App.chat.activeScrollContainer();
       if (!c) return;
       // 仅在强制或用户已贴近底部时跟随，避免打断向上翻看
       if (force || App.chat.isNearBottom()) c.scrollTop = c.scrollHeight;
@@ -1965,13 +1976,26 @@
       const editCancel = $('editCancel');
       if (editCancel) editCancel.addEventListener('click', () => App.chat.cancelEdit());
       // 回到底部按钮：滚动偏离底部时显示，点击平滑回到底部
-      const sbBtn = $('scrollBottomBtn'); const csEl = $('chatScroll');
-      if (sbBtn && csEl) {
-        const syncSb = () => { sbBtn.hidden = App.chat.isNearBottom(); };
-        csEl.addEventListener('scroll', syncSb, { passive: true });
+      // v1.1.8 U2：绑定目标从写死 #chatScroll 泛化为"当前活动滚动容器"，覆盖 agent/doc/image/tangguan/create
+      const sbBtn = $('scrollBottomBtn');
+      if (sbBtn) {
+        const syncSb = () => { const c = App.chat.activeScrollContainer(); sbBtn.hidden = !c || App.chat.isNearBottom(); };
+        const bindSb = (target) => {
+          if (!target || target.__sbBound) return;
+          target.__sbBound = true;
+          target.addEventListener('scroll', syncSb, { passive: true });
+        };
+        bindSb(App.chat.activeScrollContainer());
         sbBtn.addEventListener('click', () => {
-          csEl.scrollTo({ top: csEl.scrollHeight, behavior: 'smooth' });
+          const c = App.chat.activeScrollContainer();
+          if (!c) return;
+          c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
           sbBtn.hidden = true;
+        });
+        // 视图切换时重新绑定并同步（各模块 mount/render 后触发）
+        document.addEventListener('view:changed', () => {
+          bindSb(App.chat.activeScrollContainer());
+          syncSb();
         });
         syncSb();
       }

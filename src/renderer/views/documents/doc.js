@@ -747,7 +747,7 @@
     async analyzeSegments(act, prompt, d) {
       const segments = App.doc.segmentsOf(d);
       if (segments.length <= 1) {
-        App.doc.send(prompt + '\n\n资料：\n' + d.text.slice(0, FULLTEXT_THRESHOLD));
+        App.doc.send(prompt, { docRef: { docId: d.id, docName: d.name }, payload: prompt + '\n\n资料：\n' + d.text.slice(0, FULLTEXT_THRESHOLD) });
         return;
       }
       const parts = [];
@@ -757,7 +757,7 @@
         const segText = segments[i];
         const note = `（长文档分段处理：第 ${i + 1}/${segments.length} 段）`;
         const text = prompt + '\n\n资料（' + note + '）：\n' + segText;
-        const result = await App.doc.send(text, { segment: true, note, docRef: { docId: d.id, docName: d.name }, payload: text });
+        const result = await App.doc.send(text, { segment: true, note, display: prompt, docRef: { docId: d.id, docName: d.name }, payload: text });
         if (result == null) break; // 发送失败或停止
         if (result.trim()) parts.push(result.trim());
       }
@@ -783,14 +783,15 @@
       // v1.1.8 T5：显示层 = 文件卡片 + 指令（全文只进请求载荷）
       const refCard = o.docRef ? '<div class="attach-cards"><div class="attach-card"><span class="attach-ico">📄</span><span class="attach-name">' + App.escapeHtml(o.docRef.docName || '') + '</span></div></div>' : '';
       userNode.innerHTML = '<div class="msg-body">' + refCard + '<div class="bubble user-bubble"></div></div>';
-      userNode.querySelector('.bubble').textContent = text;
+      userNode.querySelector('.bubble').textContent = o.display || text;
       area.appendChild(userNode);
       if (input) { input.value = ''; const sendBtn = document.getElementById('docSendBtn'); if (sendBtn) sendBtn.disabled = true; }
       area.scrollTop = area.scrollHeight;
 
       // v1.1.6：分段/合并请求是内部消息，不写入 Q&A 历史
       if (!o.segment && !o.merge) {
-        App.doc.chatOf(d.id).push({ id: App.uid(), role: 'user', text, docRefs: o.docRef ? [o.docRef] : undefined, createdAt: Date.now() });
+        // v1.1.8 U1：历史只存纯指令（docRefs 已存引用），载荷全文不落历史
+        App.doc.chatOf(d.id).push({ id: App.uid(), role: 'user', text: o.display || text, docRefs: o.docRef ? [o.docRef] : undefined, createdAt: Date.now() });
       }
 
       const p = App.getProvider('doc');

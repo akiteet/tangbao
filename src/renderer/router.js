@@ -138,6 +138,8 @@
         const chatScroll = document.getElementById('chatScroll');
         if (chatScroll) chatScroll.scrollTop = 0;
         hasRenderedRoute = true;
+        // v1.1.8 U2：通知全局（一键回到底部按钮等）重新同步当前滚动容器
+        document.dispatchEvent(new CustomEvent('view:changed', { detail: { module } }));
         if (App.perf) App.perf.measure('moduleSwitchMs', switchStarted, { module: String(module || '') });
       };
 
