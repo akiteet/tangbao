@@ -1100,7 +1100,7 @@ body.float-mode .main::after {
 .doc-composer button:disabled { opacity: .5; cursor: default; }
 
 /* 创作中心 */
-.agent-grid { display: flex; flex-direction: column; gap: var(--sp-1); }
+.agent-grid { display: flex; flex-direction: column; gap: var(--sp-3); }
 .agent-icon { font-size: var(--fs-display); }
 .agent-name { font-weight: 600; font-size: var(--fs-md); }
 .agent-desc { font-size: var(--fs-sm); color: var(--text-tertiary); }
@@ -1889,7 +1889,7 @@ th { background: var(--hover-bg); font-weight: 600; }
 .tg-library { padding: var(--sp-3); min-height: 260px; }
 .tg-library-head { justify-content: space-between; gap: var(--sp-2); padding: 2px 2px var(--sp-2); color: var(--text-secondary); }
 .tg-library-head b { font-size: var(--fs-base); }
-.tg-character-list { display: flex; flex-direction: column; gap: 7px; max-height: calc(100vh - 220px); overflow-y: auto; padding-right: 2px; }
+.tg-character-list { display: flex; flex-direction: column; gap: var(--sp-3); max-height: calc(100vh - 220px); overflow-y: auto; padding-right: 2px; }
 .tg-character-card {
   width: 100%; min-width: 0; display: flex; align-items: flex-start; gap: 9px;
   padding: 10px; border: 1px solid transparent; border-radius: var(--radius-sm);
@@ -1956,24 +1956,24 @@ th { background: var(--hover-bg); font-weight: 600; }
 }
 .tg-session-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
 .tg-session-row {
-  display: flex; align-items: flex-start; gap: 8px; min-width: 0;
-  padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: var(--sp-2); min-width: 0;
+  padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--panel-bg);
   transition: border-color var(--dur-hover) var(--ease-smooth);
 }
 .tg-session-row:hover { border-color: var(--border-strong); }
 .tg-session-row.archived { opacity: .72; }
 .tg-session-open {
-  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px;
   padding: 2px 0; border: 0; background: transparent; color: var(--text);
   text-align: left; cursor: pointer;
 }
-.tg-session-open b, .tg-session-open small { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.tg-session-open b, .tg-session-open small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tg-session-open b { font-size: var(--fs-sm); line-height: 1.35; }
 .tg-session-open small { color: var(--text-tertiary); font-size: var(--fs-xs); }
 .tg-session-actions {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end;
-  gap: 5px; flex-wrap: wrap; max-width: 48%;
+  gap: var(--sp-1); flex-wrap: nowrap;
 }
 .tg-session-actions button { white-space: nowrap; }
 .tg-session-more { display: block; margin: 10px auto 0; }
@@ -1997,8 +1997,6 @@ th { background: var(--hover-bg); font-weight: 600; }
   .tg-form-grid { grid-template-columns: 1fr; }
   .tg-field:nth-child(n + 3) { grid-column: auto; }
   .tg-ai-row { align-items: stretch; flex-direction: column; }
-  .tg-session-row { flex-direction: column; }
-  .tg-session-actions { width: 100%; max-width: none; justify-content: flex-start; }
 }
 .agent-meta { align-items: center; gap: 8px; margin: 10px 0 0; padding: 6px 12px; font-size: var(--fs-sm); color: var(--text-secondary); background: var(--hover-bg); border-radius: var(--radius-sm); }
 /* ===== v1.1.0：糖码任务运行状态药丸（顶栏，跨模块常驻） ===== */
@@ -2043,7 +2041,8 @@ th { background: var(--hover-bg); font-weight: 600; }
 [data-theme="dark"] .agent-auto-badge.on { background: rgba(var(--success-rgb), .18); }
 
 /* 糖码：Plan 模式徽章与顶栏开关 */
-.plan-badge.on { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.plan-badge.on, .plan-badge.off { font-weight: 600; }
+.plan-badge.on { background: var(--primary-soft); color: var(--primary); }
 .plan-badge.off { background: var(--hover-bg); color: var(--text-tertiary); }
 [data-theme="dark"] .plan-badge.on { background: rgba(var(--primary-rgb), .20); color: var(--primary); }
 .plan-switch { flex: 0 0 auto; white-space: nowrap; }
@@ -2843,7 +2842,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tangguanView .tg-library-search { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-tertiary); }
 #tangguanView .tg-library-search input { width: 100%; min-width: 0; border: 0; outline: 0; box-shadow: none; background: transparent; /* T7 */ color: var(--text); font-size: var(--fs-sm); }
 #tangguanView .tg-library-filters { display: flex; gap: 3px; margin: 8px 0; }
-#tangguanView .tg-character-list { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px 0 0; overflow-y: auto; }
+#tangguanView .tg-character-list { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px 0 0; overflow-y: auto; gap: var(--sp-3); }
 #tangguanView .tg-character-card { align-items: stretch; gap: 8px; padding: 9px 7px; transition: background var(--dur-hover) var(--ease-smooth); border-radius: var(--radius-sm); }
 #tangguanView .tg-character-card:hover { background: var(--hover-bg); } /* v1.1.8 J3-b */
 #tangguanView .tg-card-main small {
@@ -2875,8 +2874,12 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tangguanView .tg-library-scroll { min-height: 0; overflow-y: auto; }
 #tangguanView .tg-sessions { padding: 12px 0 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 #tangguanView .tg-session-list { margin-top: 8px; }
-#tangguanView .tg-session-row, #createView .create-session-row.tg-session-row { flex-direction: column; gap: 5px; padding: 8px; } /* v1.1.8 Q2：糖创会话对齐糖馆标杆 */
-#tangguanView .tg-session-actions { width: 100%; max-width: none; justify-content: flex-start; }
+#tangguanView .tg-session-row, #createView .create-session-row.tg-session-row {
+  flex-direction: row; align-items: center; gap: var(--sp-2); padding: var(--sp-2);
+}
+#tangguanView .tg-session-actions, #createView .create-session-row-actions {
+  width: auto; max-width: none; justify-content: flex-end; flex-wrap: nowrap; flex-shrink: 0;
+}
 #tangguanView .tg-empty-state,
 #tangguanView .tg-welcome-card { width: min(620px, 100%); margin: auto; text-align: center; }
 #tangguanView .tg-empty-mark { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 14px; border-radius: var(--radius-lg); background: var(--primary-soft); color: var(--primary); font-size: var(--fs-hero); font-weight: 600; }
@@ -3170,7 +3173,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #createView .create-catalog .create-toolbar { gap: var(--sp-2); }
 #createView .create-catalog .agent-grid {
   grid-template-columns: 1fr; /* v1.1.8 Q2：双列残留清除，两行卡单列 */
-  gap: var(--sp-1);
+  gap: var(--sp-3);
   min-height: 0;
   overflow-y: auto;
   padding: 2px;
@@ -3352,8 +3355,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   transition: all var(--dur-press) var(--ease-smooth);
 }
 #createView .create-catalog .create-session-row:hover {
-  border-color: var(--primary);
-  box-shadow: var(--elevation-2);
+  border-color: var(--border-strong);
 }
 #createView .create-catalog .create-session-row.active {
   border-color: var(--primary);
@@ -3851,14 +3853,14 @@ button.chip:hover, button.pill-chip:hover { background: var(--active-bg); border
 .lib-bar--add { border-style: dashed; color: var(--text-tertiary); align-items: center; justify-content: center; flex-direction: row; }
 .lib-bar--add:hover { color: var(--primary); border-color: var(--primary); }
 /* 列表容器：单列纵排 + 显式禁横向滚动 */
-.lib-bar-list { display: flex; flex-direction: column; gap: var(--sp-1); }
+.lib-bar-list { display: flex; flex-direction: column; gap: var(--sp-3); }
 #tangguanView .tg-character-list { overflow-x: hidden; }
 #createView .create-catalog { overflow-x: hidden; }
 
 /* v1.1.8 R：卡片规格收尾 */
 #tangguanView .tg-character-card { padding: var(--sp-1) var(--sp-2); min-height: 0; }
-#createView .create-session-row-actions { width: 100%; max-width: none; justify-content: flex-start; }
-#createSessionPane .create-session-list { gap: var(--sp-1); }
+#createView .create-session-row-actions { width: auto; max-width: none; justify-content: flex-end; flex-wrap: nowrap; flex-shrink: 0; }
+#createSessionPane .create-session-list { gap: var(--sp-2); }
 
 /* v1.1.8 T4：糖读预览抽屉遮罩（复用糖馆模式） */
 .doc-drawer-mask { position: fixed; inset: 0; z-index: 190; background: var(--mask-bg); }

@@ -193,14 +193,14 @@
     },
     setPlanBadge(text) {
       const badge = document.getElementById('agentPlanBadge');
-      if (badge) { badge.textContent = 'Plan ' + (text || '可执行'); badge.className = 'agent-status plan-badge on'; }
+      if (badge) { badge.textContent = 'Plan ' + (text || '执行'); badge.className = 'agent-status plan-badge on'; }
     },
     resetPlanBadge() {
       App.agent._planApproved = false;
       const proj = App.agent.activeProject();
       const badge = document.getElementById('agentPlanBadge');
       if (badge && proj) {
-        badge.textContent = 'Plan ' + (proj.planMode ? '只读探索' : '可执行');
+        badge.textContent = 'Plan ' + (proj.planMode ? '只读' : '执行');
         badge.className = 'agent-status plan-badge ' + (proj.planMode ? 'on' : 'off');
       }
     },

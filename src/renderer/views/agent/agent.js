@@ -675,7 +675,7 @@
         proj.planMode = !!planToggle.checked;
         App.persist();
         const badge = document.getElementById('agentPlanBadge');
-        if (badge) { badge.textContent = 'Plan ' + (proj.planMode ? '只读探索' : '可执行'); badge.className = 'agent-status plan-badge ' + (proj.planMode ? 'on' : 'off'); }
+        if (badge) { badge.textContent = 'Plan ' + (proj.planMode ? '只读' : '执行'); badge.className = 'agent-status plan-badge ' + (proj.planMode ? 'on' : 'off'); }
       });
       // 宽窗持久化两栏折叠；窄窗只更新临时浮层状态。
       const cp = document.getElementById('agentCollapseProjects');

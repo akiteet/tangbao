@@ -133,7 +133,7 @@
               <span class="agent-auto-badge ${proj.auto ? 'on' : 'off'}" id="agentAutoBadge">${autoLabel}</span>
               <!-- v1.1.0：Plan 模式一行化（badge 并入 switch） -->
               <label class="switch plan-switch"><input type="checkbox" id="agentPlanToggle" ${proj.planMode ? 'checked' : ''} />
-                <span class="agent-status plan-badge ${proj.planMode ? 'on' : 'off'}" id="agentPlanBadge">Plan ${proj.planMode ? '只读探索' : '可执行'}</span></label>
+                <span class="agent-status plan-badge ${proj.planMode ? 'on' : 'off'}" id="agentPlanBadge">Plan ${proj.planMode ? '只读' : '执行'}</span></label>
               </div>
               <div class="agent-top-row op">
               <div class="agent-ctx-row">
