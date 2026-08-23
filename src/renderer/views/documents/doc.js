@@ -11,6 +11,10 @@
   const FULLTEXT_THRESHOLD = 9000;
   const SEGMENT_TARGET = 8000;    // v1.1.6：长文档分段分析的单段目标长度（≤ FULLTEXT_THRESHOLD 避免二次截断）
   const LOW_SCORE_THRESHOLD = 0.05; // BM25 top1 得分低于此值 → 低相关提示
+  const TASK_TTL = 60000;         // v1.1.8：工作记录失败后 60 秒自动消失（对齐糖绘 TERMINAL_TTL）
+  const TASK_DONE_TTL = 10000;    // v1.1.8：完成/停止记录 10 秒自动消失——占位克制，不长期挤压下方大纲
+  const TASK_CAP = 6;             // v1.1.8：工作记录终态条数上限，超出淘汰最旧
+  const ANALYSIS_LABELS = { summary: '摘要', points: '要点', translate: '翻译', outline: '拆解' };
 
   // M7：文档分块缓存（外部 Map，避免 _chunks 字段污染 doc 对象被 persist 序列化）
   const chunkCache = new Map(); // docId -> { key: text, chunks: [...] }
@@ -33,6 +37,8 @@
     streaming: false,
     previewText: '',
     __abort: null,     // v1.1.6：当前流式请求的 AbortController（停止生成用）
+    tasks: {},         // v1.1.8：工作记录（内存态，与糖绘 tasks 同模式，不持久化）
+    _lastSendError: '', // v1.1.8：最近一次 send 失败原因（分段分析记录失败详情用）
 
     onShow() { App.doc.render(); },
 
@@ -56,6 +62,124 @@
     clearChat(docId) {
       const all = App.state.settings.docChat;
       if (all && all[docId]) delete all[docId];
+    },
+
+    // v1.1.8：工作记录条——解析/分析任务生命周期（复用糖绘 queue-card 紧凑横条模式）
+    // 占位克制：完成/停止 10 秒自动消失、列表最多露出两行，仅失败留痕 60 秒，避免长期挤压下方大纲
+    _taskSeq: 0,
+    taskStart(kind, payload) {
+      const id = App.uid();
+      App.doc.tasks[id] = Object.assign({
+        id, kind, label: '', name: '',
+        status: 'running', detail: '', retryable: false,
+        docId: null, act: null, _file: null,
+        startedAt: Date.now(), endedAt: 0,
+        _seq: ++App.doc._taskSeq, /* 同毫秒创建时保持"最新在上"的确定性排序 */
+      }, payload || {});
+      App.doc.renderTasks();
+      return id;
+    },
+    taskUpdate(id, patch) {
+      const t = App.doc.tasks[id];
+      if (!t) return;
+      Object.assign(t, patch || {});
+      App.doc.renderTasks();
+    },
+    // 终态收敛：running → done / error / canceled（重复终态调用忽略）
+    _taskEnd(id, status, detail) {
+      const t = App.doc.tasks[id];
+      if (!t || t.status !== 'running') return false;
+      t.status = status;
+      if (status !== 'error') t._file = null; /* 失败记录保留文件引用供重试 */
+      if (detail != null && detail !== '') t.detail = String(detail);
+      t.endedAt = Date.now();
+      App.doc.pruneTasks();
+      App.doc.renderTasks();
+      return true;
+    },
+    taskDone(id, detail) { return App.doc._taskEnd(id, 'done', detail); },
+    taskError(id, detail) { return App.doc._taskEnd(id, 'error', detail); },
+    taskCancel(id, detail) { return App.doc._taskEnd(id, 'canceled', detail); },
+    dismissTask(id) {
+      delete App.doc.tasks[id];
+      App.doc.renderTasks();
+    },
+    pruneTasks() {
+      const terminal = Object.values(App.doc.tasks)
+        .filter((t) => t && t.status !== 'running')
+        .sort((a, b) => (a.endedAt || 0) - (b.endedAt || 0));
+      while (terminal.length > TASK_CAP) {
+        const oldest = terminal.shift();
+        if (oldest) delete App.doc.tasks[oldest.id];
+      }
+    },
+    retryTask(id) {
+      const t = App.doc.tasks[id];
+      if (!t) return;
+      delete App.doc.tasks[id]; /* 重试后清除原失败记录（糖绘同款语义） */
+      App.doc.renderTasks();
+      if (t.kind === 'parse') {
+        if (t._file) App.doc.readFile(t._file);
+        else App.ui.toast('原始文件已不在，请重新上传');
+        return;
+      }
+      const d = App.doc.docs().find((x) => x && x.id === t.docId);
+      if (!d) { App.ui.toast('原文档已删除，无法重试'); return; }
+      App.doc.activeId = d.id;
+      App.state.settings.docActiveId = d.id;
+      App.doc.render();
+      App.doc.runAnalysis(d, t.act);
+    },
+    renderTasks() {
+      const box = document.getElementById('docTaskList');
+      if (!box) return;
+      const now = Date.now();
+      Object.keys(App.doc.tasks).forEach((id) => {
+        const t = App.doc.tasks[id];
+        if (!t || t.status === 'running' || !t.endedAt) return;
+        const ttl = (t.status === 'error') ? TASK_TTL : TASK_DONE_TTL;
+        if ((now - t.endedAt) > ttl) delete App.doc.tasks[id];
+      });
+      const list = Object.values(App.doc.tasks).filter(Boolean)
+        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0) || (b._seq || 0) - (a._seq || 0));
+      const sec = document.getElementById('docTaskSec');
+      if (sec) sec.style.display = list.length ? '' : 'none';
+      if (!list.length) { box.innerHTML = ''; return; }
+      const esc = App.escapeHtml;
+      box.innerHTML = list.map((t) => {
+        const title = esc((t.label || (t.kind === 'parse' ? '解析' : '分析')) + ' · ' + (t.name || ''));
+        let dotCls = 'qc-wait';
+        let state = '';
+        if (t.status === 'running') {
+          dotCls = 'qc-run';
+          state = '<span class="qc-meta">' + esc(t.detail || '进行中…') + '</span>';
+        } else if (t.status === 'done') {
+          state = '<span class="qc-meta">' + esc(t.detail || '完成') + '</span>';
+        } else if (t.status === 'canceled') {
+          state = '<span class="qc-meta">已停止</span>';
+        }
+        const err = (t.status === 'error' && t.detail)
+          ? '<div class="qc-error" title="' + esc(t.detail) + '">' + esc(t.detail.slice(0, 60)) + '</div>'
+          : '';
+        let act = '';
+        if (t.status === 'error' && t.retryable) act += '<button class="mini" data-task-retry="' + t.id + '">重试</button>';
+        if (t.status !== 'running') act += '<button class="mini" data-task-x="' + t.id + '" title="消除此记录">✕</button>';
+        return `<div class="queue-card st-${t.status}" data-task="${t.id}">
+          <div class="qc-main"><span class="qc-dot ${dotCls}"></span><span class="qc-prompt">${title}</span>${state}${err}</div>
+          ${act}
+        </div>`;
+      }).join('');
+      // 兜底定时器：无人操作时终态记录也按各自 TTL 自动消失
+      const expiries = Object.values(App.doc.tasks)
+        .filter((t) => t && t.status !== 'running' && t.endedAt)
+        .map((t) => ((t.status === 'error') ? TASK_TTL : TASK_DONE_TTL) - (now - t.endedAt))
+        .filter((ms) => ms > 0);
+      if (expiries.length && !App.doc._taskTimer) {
+        App.doc._taskTimer = setTimeout(() => {
+          App.doc._taskTimer = null;
+          App.doc.renderTasks();
+        }, Math.min.apply(null, expiries) + 200);
+      }
     },
 
     render() {
@@ -129,6 +253,9 @@
                   <button data-act="outline">拆解</button>
                 </div>
               </div>
+              <div class="doc-sec doc-sec-tasks" id="docTaskSec" style="display:none">
+                <div class="doc-task-list" id="docTaskList"></div>
+              </div>
               <div class="doc-sec doc-sec-outline">
                 <div class="doc-outline" id="docOutline"></div>
               </div>
@@ -161,6 +288,7 @@
           <div class="doc-preview" id="docPreview"></div>
         </div>`;
       App.doc.bind();
+      App.doc.renderTasks();
       App.doc.renderOutline();
       const d = App.doc.activeDoc();
       if (d) App.doc.showDoc(d); else App.doc.renderEmpty();
@@ -219,6 +347,15 @@
       if (bar) bar.addEventListener('click', (e) => {
         const b = e.target.closest('button[data-act]');
         if (b) App.doc.analyze(b.dataset.act);
+      });
+
+      // v1.1.8：工作记录条操作（重试 / 消除）
+      const taskList = document.getElementById('docTaskList');
+      if (taskList) taskList.addEventListener('click', (e) => {
+        const retry = e.target.closest('[data-task-retry]');
+        if (retry) { e.stopPropagation(); App.doc.retryTask(retry.dataset.taskRetry); return; }
+        const x = e.target.closest('[data-task-x]');
+        if (x) { e.stopPropagation(); App.doc.dismissTask(x.dataset.taskX); }
       });
 
       const docInput = document.getElementById('docInput');
@@ -291,12 +428,14 @@
     },
 
     // v1.1.6（糖读增强）：上传分流——PDF / Word(.docx) / PPT(.pptx) / 文本
+    // v1.1.8：解析过程进工作记录条，失败留痕可重试（不再只靠 toast）
     async readFile(file) {
       if (!file) return;
       let text = '';
       const name = file.name || '';
       const ext = (name.split('.').pop() || '').toLowerCase();
       const isPdf = file.type === 'application/pdf' || ext === 'pdf';
+      const tid = App.doc.taskStart('parse', { label: '解析', name, retryable: true, _file: file });
       try {
         if (isPdf) {
           text = await App.doc.extractPdf(file);
@@ -305,7 +444,8 @@
         } else if (ext === 'pptx') {
           text = await App.doc.extractPptx(file);
         } else if (ext === 'doc' || ext === 'ppt' || ext === 'xls' || ext === 'xlsx') {
-          App.ui.toast('旧版 ' + ext.toUpperCase() + ' 格式暂不支持，请另存为 .docx / .pptx 或纯文本后导入');
+          App.doc.taskUpdate(tid, { retryable: false });
+          App.doc.taskError(tid, '旧版 ' + ext.toUpperCase() + ' 格式暂不支持，请另存为 .docx / .pptx 或纯文本后导入');
           return;
         } else {
           text = await new Promise((resolve, reject) => {
@@ -316,13 +456,15 @@
           });
         }
       } catch (e) {
-        App.ui.toast('读取失败：' + (e.message || e) + (ext === 'pdf' ? '（PDF 解析失败，可尝试粘贴文本）' : ''));
+        App.doc.taskError(tid, '读取失败：' + (e.message || e) + (ext === 'pdf' ? '（PDF 解析失败，可尝试粘贴文本）' : ''));
         return;
       }
       if (file.size > MAX_DOC_CHARS) App.ui.toast('文档较大，已截断处理');
       text = text.slice(0, MAX_DOC_CHARS);
-      if (!text.trim()) { App.ui.toast('未能从文件中提取到文本内容'); return; }
+      if (!text.trim()) { App.doc.taskError(tid, '未能从文件中提取到文本内容'); return; }
       App.doc.addDoc({ name, text, size: file.size });
+      const chars = text.length;
+      App.doc.taskDone(tid, '已添加 · ' + (chars >= 10000 ? (chars / 10000).toFixed(1) + ' 万字' : chars + ' 字'));
     },
 
     async extractPdf(file) {
@@ -744,37 +886,56 @@
     },
 
     // v1.1.6（糖读增强）：分段分析——逐段串行请求，翻译类直接拼接，其余最后合并
-    async analyzeSegments(act, prompt, d) {
+    // v1.1.8：进度写入工作记录条（不再逐段 toast），失败/停止留痕可重试
+    async analyzeSegments(act, prompt, d, tid) {
       const segments = App.doc.segmentsOf(d);
       if (segments.length <= 1) {
-        App.doc.send(prompt, { docRef: { docId: d.id, docName: d.name }, payload: prompt + '\n\n资料：\n' + d.text.slice(0, FULLTEXT_THRESHOLD) });
+        await App.doc.send(prompt, { taskId: tid, docRef: { docId: d.id, docName: d.name }, payload: prompt + '\n\n资料：\n' + d.text.slice(0, FULLTEXT_THRESHOLD) });
         return;
       }
+      const total = segments.length;
       const parts = [];
-      for (let i = 0; i < segments.length; i++) {
+      for (let i = 0; i < total; i++) {
         if (App.doc.__abort) break; // 已被用户停止
-        App.ui.toast(`文档较长，正在分析第 ${i + 1}/${segments.length} 段…`);
+        App.doc.taskUpdate(tid, { detail: `第 ${i + 1}/${total} 段…` });
         const segText = segments[i];
-        const note = `（长文档分段处理：第 ${i + 1}/${segments.length} 段）`;
+        const note = `（长文档分段处理：第 ${i + 1}/${total} 段）`;
         const text = prompt + '\n\n资料（' + note + '）：\n' + segText;
-        const result = await App.doc.send(text, { segment: true, note, display: prompt, docRef: { docId: d.id, docName: d.name }, payload: text });
-        if (result == null) break; // 发送失败或停止
-        if (result.trim()) parts.push(result.trim());
+        const oSeg = { segment: true, note, display: prompt, docRef: { docId: d.id, docName: d.name }, payload: text };
+        const result = await App.doc.send(text, oSeg);
+        if (oSeg._stopped) { App.doc.taskCancel(tid); return; } // 用户主动停止
+        if (result == null || !String(result).trim()) {
+          App.doc.taskError(tid, `第 ${i + 1}/${total} 段失败：` + (App.doc._lastSendError || '未返回结果'));
+          return;
+        }
+        parts.push(String(result).trim());
       }
       if (parts.length > 1 && act !== 'translate') {
-        App.ui.toast('正在综合各段结果…');
+        App.doc.taskUpdate(tid, { detail: '正在综合各段结果…' });
         const merged = parts.map((t, i) => `【第 ${i + 1} 段结果】\n${t}`).join('\n\n---\n\n');
-        await App.doc.send(`以下是同一文档分 ${parts.length} 段分析后的各段结果。请综合各段、去重合并、连贯呈现，输出一份完整的最终结果。\n\n各段结果：\n` + merged, { merge: true });
+        // 合并请求持有 taskId：由 send 内部按成功/失败/停止收敛记录状态
+        await App.doc.send(`以下是同一文档分 ${parts.length} 段分析后的各段结果。请综合各段、去重合并、连贯呈现，输出一份完整的最终结果。\n\n各段结果：\n` + merged, { taskId: tid, merge: true });
+        return;
       }
+      if (parts.length) App.doc.taskDone(tid);
+      else App.doc.taskCancel(tid);
     },
 
     async send(custom, opts) {
       const input = document.getElementById('docInput');
       const text = (custom != null) ? custom : (input ? input.value.trim() : '');
       const o = opts && typeof opts === 'object' ? opts : {};
-      if (!text || App.doc.streaming) return null;
+      App.doc._lastSendError = '';
+      if (!text || App.doc.streaming) {
+        if (o.taskId) { App.doc.taskError(o.taskId, '请等当前回答完成再操作'); }
+        return null;
+      }
       const d = App.doc.activeDoc();
-      if (!d) { App.ui.toast('请先上传或粘贴文档'); return null; }
+      if (!d) {
+        App.ui.toast('请先上传或粘贴文档');
+        if (o.taskId) App.doc.taskError(o.taskId, '文档不存在');
+        return null;
+      }
 
       const area = document.getElementById('docMessages');
       // M10：复用聊天模块视觉（.msg.user 反向布局 + user-bubble）
@@ -796,6 +957,8 @@
 
       const p = App.getProvider('doc');
       if (!p.ref || !p.hasKey || !p.model) {
+        App.doc._lastSendError = '尚未配置文档 API';
+        if (o.taskId) App.doc.taskError(o.taskId, App.doc._lastSendError);
         App.doc.appendError('尚未配置文档 API。请先在设置里填写“文档”或“默认”的 API 信息。');
         return null;
       }
@@ -852,7 +1015,9 @@
         const res = await App.rt.gatewayFetch({ ref: p.ref, kind: 'chat', telemetry: { scope: 'documents', callType: 'document_qa' }, payload, signal: controller.signal });
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
+          App.doc._lastSendError = `请求失败（${res.status}）：${String(txt).slice(0, 120)}`;
           aiBubble.innerHTML = `<span class="error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 200))}</span>`;
+          if (o.taskId) App.doc.taskError(o.taskId, App.doc._lastSendError);
           App.doc.streaming = false; App.doc.__abort = null;
           return null;
         }
@@ -884,13 +1049,17 @@
         if (err && err.name === 'AbortError') {
           // 用户主动停止：保留已累积内容
         } else {
+          App.doc._lastSendError = '网络或 CORS 错误：' + String(err.message || err);
           aiBubble.innerHTML = `<span class="error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</span>`;
         }
       }
+      if (stopped && o) o._stopped = true; /* 供分段分析调用方识别用户主动停止 */
       App.doc.streaming = false;
       App.doc.__abort = null;
       if (!started && !acc && !stopped) {
         // 空响应（可能 [DONE] 立即到达或请求异常无内容）
+        App.doc._lastSendError = '模型未返回内容';
+        if (o.taskId) App.doc.taskError(o.taskId, App.doc._lastSendError);
         if (stopBtn) stopBtn.style.display = 'none';
         return null;
       }
@@ -913,27 +1082,39 @@
           navigator.clipboard.writeText(acc || '').then(() => App.ui.toast('已复制')).catch(() => App.ui.toast('复制失败'));
         }); }
         if (exportBtn) { exportBtn.style.display = ''; exportBtn.addEventListener('click', () => App.doc.exportAnswerMd(acc, d.name)); }
+        // v1.1.8：工作记录收敛（停止但已有部分内容 → 记为已停止）
+        if (o.taskId) {
+          if (stopped) App.doc.taskCancel(o.taskId);
+          else App.doc.taskDone(o.taskId, '完成');
+        }
         return acc;
       }
       if (stopBtn) stopBtn.style.display = 'none';
+      if (o.taskId && stopped) App.doc.taskCancel(o.taskId);
       return null;
     },
 
     analyze(act) {
+      const d = App.doc.activeDoc();
+      if (!d) { App.ui.toast('请先上传或粘贴文档'); return; }
+      App.doc.runAnalysis(d, act);
+    },
+
+    // v1.1.8：对指定文档执行一次分析并写入工作记录（分析栏入口与记录条重试共用）
+    runAnalysis(d, act) {
       const pr = App.state.settings.prompts;
       const custom = pr && pr.doc && pr.doc[act];
       let prompt = (custom && String(custom).trim()) ? String(custom).trim() : AnalysisPrompts[act];
-      const d = App.doc.activeDoc();
-      if (!d) { App.ui.toast('请先上传或粘贴文档'); return; }
       if (act === 'translate') {
         prompt = App.doc.translatePrompt(prompt, !!(custom && String(custom).trim()));
       }
+      const tid = App.doc.taskStart('analysis', { label: ANALYSIS_LABELS[act] || '分析', name: d.name, docId: d.id, act });
       // v1.1.6：长文档不再静默截断——分段分析
       if (d.text.length > FULLTEXT_THRESHOLD) {
-        App.doc.analyzeSegments(act, prompt, d);
+        App.doc.analyzeSegments(act, prompt, d, tid);
         return;
       }
-      App.doc.send(prompt, { docRef: { docId: d.id, docName: d.name }, payload: prompt + '\n\n资料：\n' + d.text });
+      App.doc.send(prompt, { taskId: tid, docRef: { docId: d.id, docName: d.name }, payload: prompt + '\n\n资料：\n' + d.text });
     },
 
     renderCites(aiNode, answer, refs) {
