@@ -405,7 +405,7 @@
         </div>
         <div class="lib-bar-row2">
           <span class="lib-bar-desc">${esc(a.desc || '')}${usage ? ` · 用了 ${usage} 次` : ''}</span>
-          <span class="lib-bar-meta">${reco}${a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : ''}${tag}</span>
+          <span class="lib-bar-meta">${reco}${tag}${a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : ''}</span>
         </div>
       </div>`;
     },
