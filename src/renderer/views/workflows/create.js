@@ -396,7 +396,7 @@
         ? `<button data-edit="${a.id}" title="编辑">✎</button>
            <button class="danger" data-del="${a.id}" title="删除">×</button>`
         : `<button data-clone="${a.id}" title="克隆">⧉</button>`;
-      // v1.1.8 R3（用户规格）：行1 = 图标+名称+操作；行2 = 描述/次数+徽记
+      // 行1 图标+名称+操作；行2 描述；标签单独一行，避免和描述抢宽被挤出卡片
       return `<div class="lib-bar" data-agent="${a.id}">
         <div class="lib-bar-row1">
           <span class="lib-bar-icon">${a.icon || '🤖'}</span>
@@ -405,8 +405,8 @@
         </div>
         <div class="lib-bar-row2">
           <span class="lib-bar-desc">${esc(a.desc || '')}${usage ? ` · 用了 ${usage} 次` : ''}</span>
-          <span class="lib-bar-meta">${reco}${tag}${a.model ? `<span class="tag-chip">${esc(shortModel(a.model))}</span>` : ''}</span>
         </div>
+        <div class="lib-bar-tags">${reco}${tag}</div>
       </div>`;
     },
 

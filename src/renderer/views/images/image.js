@@ -1009,8 +1009,8 @@
         else if (t.status === 'canceled') { state = '<span class="qc-dot qc-cancel"></span>已取消'; act = '<button class="mini qc-act" data-qact="dismiss" data-qid="' + t.id + '" title="消除此记录">✕</button>'; }
         const err = t.status === 'error' && t.error ? '<div class="qc-error" title="' + esc(String(t.error)) + '">' + esc(String(t.error).slice(0, 60)) + '</div>' : '';
         return `<div class="queue-card st-${t.status}" data-qid="${t.id}">
-          <div class="qc-main"><span class="qc-prompt">${brief}</span><span class="qc-meta">${meta}</span>${state}</div>
-          ${err}${act}
+          <div class="qc-main"><span class="qc-prompt">${brief}</span><span class="qc-meta">${meta}</span>${state}${err}</div>
+          ${act}
         </div>`;
       }).join('');
       box.querySelectorAll('.qc-act').forEach((b) => b.addEventListener('click', (e) => {
