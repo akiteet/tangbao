@@ -25,9 +25,9 @@ test('糖码运行历史弹窗使用单一可见滚动容器', () => {
   assert.doesNotMatch(css, /\.agent-modal \.wf-run\s*\{[^}]*max-height:\s*62vh/);
 });
 
-test('设置弹窗加宽到 1000px，技能详情弹窗适度加宽到 860px', () => {
+test('设置弹窗宽度走 --modal-w-lg，技能详情弹窗适度加宽到 860px', () => {
   const css = read('styles.css');
-  assert.match(css, /#settingsModal \.modal\s*\{[^}]*width:\s*1000px/, '设置弹窗宽度应为 1000px');
+  assert.match(css, /#settingsModal \.modal\s*\{[^}]*width:\s*var\(--modal-w-lg\)/, '设置弹窗宽度应走 --modal-w-lg');
   assert.match(css, /#settingsModal \.modal\s*\{[^}]*max-width:\s*95vw/, '设置弹窗保留 max-width:95vw 自适应');
   // 详情弹窗带 modal skill-detail-modal 两个 class，必须用 .modal.skill-detail-modal 提高特异性压过 .modal 的 480px
   assert.match(css, /\.modal\.skill-detail-modal\s*\{[^}]*width:\s*min\(860px, calc\(100vw - 32px\)\)/, '技能详情弹窗宽度应为 min(860px, calc(100vw - 32px)) 且选择器含 .modal 前缀');

@@ -10,8 +10,8 @@
 3. **大留白**：内容区呼吸感优先于信息密度；间距一律走阶梯令牌。
 4. **中性灰阶**：界面骨架只用真 neutral 灰（不偏暖不偏冷）；彩色只出现在强调色与语义状态上。
 5. **小圆角**：外层 10px、内层 6-8px；胶囊只用于状态点与计数徽章，操作按钮不用。
-4. **动效服务功能**：150–250ms 平滑过渡反馈交互；动画只用于进度指示与入场，不做装饰性弹跳/辉光。
-5. **双主题平等**：亮色为暖米白基调，暗色为深暖灰基调；任何颜色不得脱离令牌硬编码。
+6. **动效服务功能**：150–250ms 平滑过渡反馈交互；动画只用于进度指示与入场，不做装饰性弹跳/辉光。
+7. **双主题平等**：亮色为中性近白，暗色为中性深灰；任何颜色不得脱离令牌硬编码。
 
 ## 2. 色板令牌
 
@@ -19,9 +19,9 @@
 |---|---|---|---|
 | `--bg` | `#FAFAFA` 中性近白 | `#171717` | 应用底色 |
 | `--sidebar-bg` | `#F4F4F4` | `#1F1F1F` | 侧栏/次级表面 |
-| `--panel-bg` | `#FFFFFF` | `#282620` | 卡片/面板 |
-| `--hover-bg` | `rgba(31,30,26,.05)` | `rgba(236,234,228,.06)` | 行/项悬停 |
-| `--active-bg` | `rgba(31,30,26,.08)` | `rgba(236,234,228,.10)` | 行/项选中 |
+| `--panel-bg` | `#FFFFFF` | `#262626` | 卡片/面板 |
+| `--hover-bg` | `rgba(0,0,0,.04)` | `rgba(255,255,255,.05)` | 行/项悬停 |
+| `--active-bg` | `rgba(0,0,0,.07)` | `rgba(255,255,255,.08)` | 行/项选中 |
 | `--border` | `#E4E4E4` 发丝 | `#2E2E2E` | 全部边框 |
 | `--border-strong` | `#D4D4D4` | `#404040` | 强调分隔/滚动条 thumb |
 | `--text` | `#1A1A1A` | `#FAFAFA` | 主文字 |
@@ -38,7 +38,7 @@
   sm=工具条/紧凑区，md=表单默认，lg=主操作/移动触达。
 - **卡片内距** 两档：16（默认卡）、24（大卡/弹窗体）。
 - **弹窗宽度** 三档：480（确认/小表单）、720（标准设置面板）、960（宽工作台）。
-- **字号**：沿用 `--fs-xs..--fs-hero` 九档；正文 `--fs-base`，辅助 `--fs-sm`，区块标题 `--fs-lg`。
+- **字号**：`--fs-xs` … `--fs-hero` 九档，另加 `--fs-display`（30px）给欢迎标题/空态图标；正文 `--fs-base`，辅助 `--fs-sm`，区块标题 `--fs-lg`。
 - **圆角**：全部走 `--radius-*` 令牌（外观滑杆联动），禁止字面值。
 - **列表行**：统一高 = `--ctl-h-md` + 上下各 `--sp-2` 内距；hover 用 `--hover-bg`，选中用 `--active-bg` + 左侧 2px 强调条或加粗文字，不引入第三种选中语言。
 
@@ -46,11 +46,11 @@
 
 | 类 | 说明 |
 |---|---|
-| `.btn .btn-primary/.btn-ghost/.btn-danger` × `.btn-sm/.btn-md/.btn-lg` | 唯一按钮语言；primary 实底强调色，ghost 透明+发丝边框，danger 语义红 |
+| `.btn` × `.btn-primary/.btn-ghost/.btn-danger` × `.btn-sm/.btn-md/.btn-lg` | 唯一按钮语言；primary 实底强调色，ghost 透明+发丝边框，danger 语义红。历史 markup 即使只写 `.btn-primary` 也走同一套规格。 |
 | `.field input/.field select/.field textarea` | 统一高度、内距、focus 态（强调色细环）；错误态 `.field-error` |
 | `.card` | 白面板 + 发丝边框 + `--card-pad`（16/24 两档修饰符 `.card-lg`） |
 | `.row-item` | 列表行统一语言（高度/hover/选中） |
-| `.chip` | 标签/快捷胶囊（sm 高 28） |
+| `.chip`（`.pill-chip` 为同规格别名） | 标签/快捷胶囊（sm 高 28）；不是操作按钮 |
 | `.mask` | 弹窗遮罩：纯色半透明（无模糊） |
 | `.modal` 系列 | 头/体/脚三段式；宽度走三档令牌 |
 
@@ -60,7 +60,7 @@
 
 - 时长/缓动：只用 `var(--dur-press .15s / --dur-hover .2s / --dur-enter .25s)` + `--ease-smooth`；开关类控件可用 `--ease-spring` 轻弹簧。
 - 反馈形式：背景色微变、边框加深、位移 ≤2px、按压 scale(.98)。
-- 功能性动画：`shine` 仅用于长任务"处理中"光带；`glow-breathe` 仅用于运行中状态点；入场统一 fade+4px rise。
+- 功能性动画：图像加载用 `imgShimmer`；运行中状态点用 `agentRunPulse` / `agentPulse`；入场统一 fade+4px rise。装饰性 `shine` / `jello-press` / `glow-breathe` 已删除，禁止复活。
 - 全部 animation 必须被 `prefers-reduced-motion: reduce` 关停。
 
 ## 6. 可达性
@@ -71,6 +71,15 @@
 
 ## 7. 执法
 
-`scripts/check-ui-consistency.js`（接入 `check:ui`）扫描 styles.css：
-阶梯外 font-size/padding/margin/gap 字面值、非令牌 border-radius、任何 `backdrop-filter`、
-`--glass*` 残留引用、色板白名单外 hex —— 违例即失败。改样式必须过此门。
+`scripts/check-ui-consistency.js`（接入 `check:ui`）扫描 styles.css，违例即失败：
+
+1. `backdrop-filter` 实际使用（`none`/`unset` 中和除外）
+2. 引用已删除令牌 `--sheen` / `--shadow`
+3. 已删除装饰 keyframes（`shine` / `jello-press` / `glow-breathe`）
+4. 滚动条局部覆写（全局唯一规格；`scrollbar-hide-allowed` 豁免除外）
+5. `font-size` px 字面值（必须走 `--fs-*` 阶梯）
+6. 按钮类选择器使用胶囊圆角（pill 仅限状态点/徽章/标签芯片）
+7. CSS 括号不平衡
+8. 暗色主题变量块缺失
+
+WARN（暂不失败）：非令牌 `border-radius` 字面值行数。间距字面值、`--glass*` 别名、色板外 hex 尚未纳入 FAIL，按模块迁移逐步清零，不要一次全文件替换。

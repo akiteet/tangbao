@@ -81,7 +81,7 @@ test('输入区去掉外层玻璃底条但保留输入卡片', () => {
   assert.ok(!composer.includes('backdrop-filter'), '玻璃模糊已移除');
   assert.ok(!composer.includes('var(--glass)'), '玻璃背景已移除');
   assert.ok(!composer.includes('border-top'), '顶部细线已移除');
-  assert.ok(composer.includes('padding: 12px 24px 12px'), '底部固定 12px 间距');
+  assert.ok(composer.includes('padding: var(--sp-3) var(--sp-5) var(--sp-3)'), '底部固定间距走 --sp-3/--sp-5');
   assert.ok(css.includes('.input-wrap {'), '输入卡片仍保留');
   assert.ok(/\.input-wrap \{[\s\S]{0,200}border: 1px solid var\(--border\)/.test(css), '卡片边框保留');
   assert.ok(!css.includes('.composer.centered'), 'centered 欢迎页样式已删除');

@@ -21,7 +21,7 @@ test('设置弹窗底部说明使用独立容器和与主体一致的安全留�
   const html = read('index.html');
   const css = read('styles.css');
   assert.match(html, /<div class="settings-footer-notes">[\s\S]*密钥保存在本机系统安全存储中[\s\S]*不会上传到任何其他地方/);
-  assert.match(css, /\.settings-footer-notes \{[^}]*padding: 10px 20px 12px[^}]*border-top:/s);
+  assert.match(css, /\.settings-footer-notes \{[^}]*padding: var\(--sp-2\) var\(--sp-5\) var\(--sp-3\)[^}]*border-top:/s);
   assert.match(css, /\.settings-footer-notes \.hint \{[^}]*margin: 0/s);
 });
 
@@ -50,7 +50,7 @@ test('糖读文件区约显示2.5张卡片并独立滚动，大纲获得更多�
   assert.match(doc, /doc-sec doc-sec-files/);
   assert.match(doc, /doc-sec doc-sec-analysis/);
   assert.match(doc, /doc-sec doc-sec-outline/);
-  assert.match(css, /--doc-chip-row-height:\s*34px/);
+  assert.match(css, /\.doc-chip \{[^}]*min-height: var\(--ctl-h-md\)/s);
   assert.match(css, /--doc-files-peek-height:\s*95px/);
   assert.match(css, /\.doc-sidebar \.doc-list \{[^}]*max-height:\s*var\(--doc-files-peek-height\)[^}]*overflow-y:\s*auto[^}]*scrollbar-gutter:\s*stable/s);
   assert.match(css, /\.doc-sec-outline \{[^}]*flex:\s*1 1 58%[^}]*min-height:\s*220px/s);
@@ -66,7 +66,7 @@ test('左侧模块区小于聊天历史区且聊天历史卡片更紧凑', () =>
   const css = read('styles.css');
   assert.match(css, /\.main-nav \{[^}]*max-height: 34vh[^}]*flex: 0 1 auto/s);
   assert.match(css, /\.history \{[^}]*flex: 1 1 0[^}]*min-height: 0/s);
-  assert.match(css, /\.sidebar \.history-item \{[^}]*min-height: 36px[^}]*padding: 6px 10px/s); // v1.1.8 F6 左栏字号行高放大
+  assert.match(css, /\.sidebar \.history-item \{[^}]*min-height: var\(--ctl-h-md\)[^}]*padding: var\(--sp-2\) var\(--sp-2\)/s);
 });
 
 test('图片历史样式限定在 image-shell，不再覆盖左侧聊天历史卡片', () => {
