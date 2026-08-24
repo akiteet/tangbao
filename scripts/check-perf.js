@@ -34,7 +34,7 @@ function main() {
   assert(app.includes("measure('bootMs'"), 'boot timing is missing');
   assert(chat.includes("measure('inputHandlerMs'"), 'input timing is missing');
   assert(chat.includes("measure('streamRenderMs'"), 'stream timing is missing');
-  assert(tavern.includes("measure('tavernRenderMs'"), 'Tangguan render timing is missing');
+  assert(tavern.includes("measure('tavernRenderMs'"), 'Tavern render timing is missing');
   assert(ui.includes('scheduleSidebarRender()'), 'sidebar search scheduling is missing');
   console.log(JSON.stringify({ ok: true, metrics: names, persistence: 'memory-only', defaultEnabled: false }, null, 2));
 }

@@ -1,6 +1,6 @@
 'use strict';
 
-/* Isolated conversation storage for Tangguan and Create. */
+/* Isolated conversation storage for Tavern and Create. */
 (function () {
   App.services = App.services || {};
   const MODULES = new Set(['tavern', 'create']);

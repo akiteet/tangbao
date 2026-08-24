@@ -66,25 +66,25 @@
       if (surface && surface.owner !== module && App.chat && typeof App.chat.unmountSurface === 'function') {
         App.chat.unmountSurface();
       }
-      // A persisted activeId may point to a Tangguan-only conversation after
+      // A persisted activeId may point to a Tavern-only conversation after
       // restart. Regular Chat must start with the last valid regular session,
       // or an empty state, rather than rendering a role conversation outside
-      // Tangguan.
+      // Tavern.
       if (module === 'chat' && App.chat && App.chat.activeConv) {
         const active = App.chat.activeConv();
         if (active && isModuleConversation(active)) {
-          const preferred = App.chat._preSurfaceActiveId || App.chat._preTangguanActiveId || App.chat._preCreateActiveId;
+          const preferred = App.chat._preSurfaceActiveId || App.chat._preTavernActiveId || App.chat._preCreateActiveId;
           const fallback = App.state.conversations.find((item) => item && !isModuleConversation(item));
           const preferredConv = preferred && App.state.conversations.find((item) => item && item.id === preferred && !isModuleConversation(item));
           App.state.activeId = (preferredConv || fallback || null)?.id || null;
         }
-        App.chat._preTangguanActiveId = null;
+        App.chat._preTavernActiveId = null;
         App.chat._preCreateActiveId = null;
         App.chat._preSurfaceActiveId = null;
       }
       if (module === 'tavern' && App.chat) {
         const active = App.chat.activeConv && App.chat.activeConv();
-        if (active && !isModuleConversation(active)) App.chat._preTangguanActiveId = active.id;
+        if (active && !isModuleConversation(active)) App.chat._preTavernActiveId = active.id;
       }
       if (module === 'create' && App.chat) {
         const active = App.chat.activeConv && App.chat.activeConv();
@@ -128,7 +128,7 @@
         } else if (App[module] && typeof App[module].onShow === 'function') {
           App[module].onShow();
         } else if (module === 'chat' && App.chat && typeof App.chat.onShow === 'function') {
-          // Shared Chat nodes may have just returned from Tangguan/Create.
+          // Shared Chat nodes may have just returned from Tavern/Create.
           // Rebuild the regular view so module-specific welcome markup cannot remain.
           App.chat.onShow();
         }

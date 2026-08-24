@@ -2713,7 +2713,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cache-probe-sample small { flex: 1 1 100%; color: var(--warning, var(--warning-strong)); overflow-wrap: anywhere; }
 .cache-probe-summary b { color: var(--text); }
 
-/* Tangguan optional semantic retrieval and AI draft review. */
+/* Tavern optional semantic retrieval and AI draft review. */
 .tg-check-field { grid-column: 1 / -1; }
 .tg-check-field > span:last-child { display: inline-flex; align-items: center; gap: 7px; font-weight: 400; }
 .tg-check-field input { width: auto; }

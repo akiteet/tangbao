@@ -174,7 +174,7 @@
       } catch (_) {}
       // Older snapshots may have a module provider entry but no normalized
       // account/model list yet. Use the resolved provider as a display-only
-      // fallback so Tangguan can still select the model immediately after boot.
+      // fallback so Tavern can still select the model immediately after boot.
       if (!modelNames.length && effectiveModels.length) modelNames = effectiveModels;
       const activeModel = selected.model && modelNames.includes(selected.model)
         ? selected.model

@@ -209,7 +209,7 @@
       const o = opts || {};
       return {
         ref: o.ref,
-        // Tangguan/Create are module owners, not provider protocols. The
+        // Tavern/Create are module owners, not provider protocols. The
         // request body must always use the canonical chat gateway kind.
         kind: rt.normalizeGatewayKind(o.kind || o.type || o.requestType),
         payload: rt.sanitizeGatewayPayload(o.payload),

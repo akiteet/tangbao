@@ -4,7 +4,7 @@
 // src/infrastructure/tavern/tavern-store.js 是同名持久化实现（infrastructure 层）。
 // 同名是有意的分层设计，不是重复代码。
 //
-// Tangguan's data contract is deliberately independent from the app state.
+// Tavern's data contract is deliberately independent from the app state.
 // This keeps character cards/worldbooks recoverable without making account or
 // chat snapshots responsible for their lifecycle.
 const FORMAT = 'tangbao-character';
@@ -305,10 +305,10 @@ function retrieveMemories(memories, query, options) {
 function formatContext(result) {
   const items = result && Array.isArray(result.items) ? result.items : [];
   if (!items.length) return '';
-  return ['[Tangguan worldbook reference]', ...items.map((entry, index) => {
+  return ['[Tavern worldbook reference]', ...items.map((entry, index) => {
     const item = entry.memory || entry;
     return `${index + 1}. ${item.title ? item.title + ': ' : ''}${item.content}`;
-  }), '[End Tangguan worldbook reference]'].join('\n');
+  }), '[End Tavern worldbook reference]'].join('\n');
 }
 
 function exportBundle(character, memories) {

@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const ROOT = path.join(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
-test('v1.1.4 Tangguan library collapse is runtime-only and uses the 900px desktop boundary', () => {
+test('v1.1.4 Tavern library collapse is runtime-only and uses the 900px desktop boundary', () => {
   const view = read('src/renderer/views/tavern/tavern.js');
   const css = read('styles.css');
   assert.match(view, /let libraryCollapsed = false;/);
@@ -29,7 +29,7 @@ test('v1.1.4 Tangguan library collapse is runtime-only and uses the 900px deskto
   assert.match(css, /\.tg-library-collapsed-tab \{[\s\S]*writing-mode: vertical-rl[\s\S]*text-orientation: upright/);
 });
 
-test('Tangguan every legacy session entry stays in Tangguan and mounts an owned Chat Surface', () => {
+test('Tavern every legacy session entry stays in Tavern and mounts an owned Chat Surface', () => {
   const view = read('src/renderer/views/tavern/tavern.js');
   assert.doesNotMatch(view, /App\.chat\.activate\(conv\.id\);/);
   assert.match(view, /App\.chat\.activate\(conv\.id, \{ stay: 'tavern', persist: false, render: false \}\)/);
@@ -48,7 +48,7 @@ test('Chat navigation flushes drafts and keeps module conversations on their own
   assert.match(chat, /flushDraft\(\{ conversationId: App\.state && App\.state\.activeId \}\)/);
 });
 
-test('Tangguan character cards and Chat history use bounded local rendering windows', () => {
+test('Tavern character cards and Chat history use bounded local rendering windows', () => {
   const tavern = read('src/renderer/views/tavern/tavern.js');
   const chat = read('src/renderer/views/chat/chat.js');
   assert.match(tavern, /let characterVisibleCount = 50;/);
@@ -113,7 +113,7 @@ test('普通 UI uses the unified font token while code remains monospace', () =>
   assert.match(modules, /font-family:-apple-system,BlinkMacSystemFont/);
 });
 
-test('Tangguan empty state keeps only character actions and no module introduction block', () => {
+test('Tavern empty state keeps only character actions and no module introduction block', () => {
   const view = read('src/renderer/views/tavern/tavern.js');
   const start = view.indexOf('function renderWelcome(');
   const end = view.indexOf('function switchDrawer(', start);

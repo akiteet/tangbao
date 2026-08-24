@@ -28,7 +28,7 @@ const dataLocation = require('../infrastructure/storage/data-location');
 const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
 const { userSkillsDirsList, createMainSkills } = require('./main-skills'); // v1.1.7 批次 E：技能目录辅助 + 技能 IPC 工厂
 const { createMainStorage } = require('./main-storage'); // v1.1.8 批次 F：存储域工厂
-const { createMainTangguan } = require('./main-tavern'); // v1.1.8 批次 F：糖馆域工厂
+const { createMainTavern } = require('./main-tavern'); // v1.1.8 批次 F：糖馆域工厂
 const { createMainAgentRuns } = require('./main-agent-runs'); // v1.1.8 批次 F：糖码 Run 域工厂
 const { createMainFloat } = require('./main-float'); // v1.1.8 批次 F：浮窗域工厂
 let createRunStoreProxy; // 由底部 createMainAgentRuns 初始化后赋值，whenReady 构造 runStore 用
@@ -814,7 +814,7 @@ function resolveWorkspace(id) {
   return { workspaceId: id, name: pub.name, cwd: pub.cwd, primaryRootId: pub.primaryRootId, roots: pub.roots.map(({ rootId, name, path: rootPath }) => ({ rootId, name, path: rootPath })), fingerprint: WorkspaceRoots.fingerprint(workspace) };
 }
 
-// Tangguan and Create conversations live in module sidecars. They never enter
+// Tavern and Create conversations live in module sidecars. They never enter
 // the ordinary renderer state or the shared Chat history table.
 safeHandle('module-sessions:load', (_e, module) => getModuleSessionStore().read(module));
 safeHandle('module-sessions:list', (_e, module) => {
@@ -1462,7 +1462,7 @@ readActiveStateObject = _mainStorageInit.readActiveStateObject;
 getStorageFileRepo = _mainStorageInit.getStorageFileRepo;
 
 // v1.1.8（批次 F）：糖馆域拆分模块（角色卡/世界书/记忆检索/索引/草稿 IPC）
-createMainTangguan({
+createMainTavern({
   safeHandle,
   app,
   dialog,

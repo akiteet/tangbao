@@ -233,7 +233,7 @@ test('a fresh empty account state is not reported as an incomplete recovery', as
   assert.equal(context.App.__stateRecovery, null);
 });
 
-test('legacy snapshots append Tangguan without changing existing module order', () => {
+test('legacy snapshots append Tavern without changing existing module order', () => {
   const state = read('src/renderer/state/state.js');
   const context = {
     console,

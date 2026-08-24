@@ -57,7 +57,7 @@ test('character cards expose shortcut fields, presets, and safe local avatars', 
   assert.equal(presetIds.includes('game-character'), false);
 });
 
-test('Tangguan keeps stream output across surface changes and hides web indicators', () => {
+test('Tavern keeps stream output across surface changes and hides web indicators', () => {
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.doesNotMatch(chat, /renderMessages\(\) \{\s*if \(streaming\) \{/);
@@ -65,9 +65,9 @@ test('Tangguan keeps stream output across surface changes and hides web indicato
   assert.match(chat, /bindStreamUi\(ui, node\)/);
   assert.match(chat, /streamUi\.messageId = liveMessage\.id/);
   assert.match(chat, /if \(m\.id\) wrap\.dataset\.messageId = m\.id/);
-  assert.match(chat, /const tavern = isTangguanConv\(App\.chat\.activeConv\(\)\) \|\| isTangguanConversation\(App\.state\.activeId\)/);
+  assert.match(chat, /const tavern = isTavernConv\(App\.chat\.activeConv\(\)\) \|\| isTavernConversation\(App\.state\.activeId\)/);
   assert.match(chat, /const webHtml = !tavern &&/);
-  assert.match(chat, /if \(isTangguanConv\(conv\) && webIndicator\) webIndicator\.remove\(\)/);
+  assert.match(chat, /if \(isTavernConv\(conv\) && webIndicator\) webIndicator\.remove\(\)/);
   assert.match(view, /function switchDrawer\(kind\)/);
   assert.match(view, /restoreEditorBase\(\)/);
   assert.match(view, /保存并切换/);
@@ -323,20 +323,20 @@ test('embedding calls record request identity and an explicit non-cacheable metr
   }
 });
 
-test('Tangguan chat source keeps attachments and provider tools disabled', () => {
+test('Tavern chat source keeps attachments and provider tools disabled', () => {
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
-  assert.match(chat, /if \(isTangguanConv\(conv\)\) \{\s*payload\.tools = \[\];/);
+  assert.match(chat, /if \(isTavernConv\(conv\)\) \{\s*payload\.tools = \[\];/);
   assert.doesNotMatch(chat, /payload\.web\s*=/);
   assert.match(chat, /const conv = App\.chat\.activeConv\(\);[\s\S]{0,240}糖馆独立会话不支持图片或文件附件/);
 });
 
-test('Tangguan transport uses chat kind while retaining module telemetry', () => {
+test('Tavern transport uses chat kind while retaining module telemetry', () => {
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
   assert.match(chat, /const transportKind = 'chat';/);
   assert.match(chat, /gatewayFetch\([\s\S]{0,240}kind: 'chat'[\s\S]{0,180}scope: providerModule/);
 });
 
-test('Tangguan new sessions start empty and auto-title from the first user turn', () => {
+test('Tavern new sessions start empty and auto-title from the first user turn', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
   assert.match(view, /conv\.title = '新会话';/);
@@ -346,7 +346,7 @@ test('Tangguan new sessions start empty and auto-title from the first user turn'
   assert.doesNotMatch(chat, /conv\.title === '新会话' \|\| conv\.tavernCharacterId/);
 });
 
-test('Tangguan editor keeps a single worldbook heading and exposes standalone import', () => {
+test('Tavern editor keeps a single worldbook heading and exposes standalone import', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const memory = view.slice(view.indexOf('function memoryHtml()'), view.indexOf('function sessionHtml()'));
   assert.doesNotMatch(memory, /tg-section-title.*世界书/);
@@ -354,7 +354,7 @@ test('Tangguan editor keeps a single worldbook heading and exposes standalone im
   assert.match(view, /previewWorldbookImport/);
 });
 
-test('Tangguan worldbook mutations invalidate detail cache before rerender', () => {
+test('Tavern worldbook mutations invalidate detail cache before rerender', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const deleteStart = view.indexOf('const memoryDelete = target.closest');
   const importStart = view.indexOf('const worldbookImport = target.closest');
@@ -364,14 +364,14 @@ test('Tangguan worldbook mutations invalidate detail cache before rerender', () 
   assert.match(view.slice(importStart, importStart + 2600), /invalidateCharacterDetail\(selected\.id\);[\s\S]*loadCharacters\(selected\.id, \{ refreshList: true \}\)/);
 });
 
-test('Tangguan character replacement is guarded while the editor is dirty', () => {
+test('Tavern character replacement is guarded while the editor is dirty', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /function runWithEditorGuard\(action\)/);
   assert.match(view, /runWithEditorGuard\(async \(\) => \{[\s\S]{0,180}loadCharacters\(select\.dataset\.tgSelect\)/);
   assert.match(view, /runWithEditorGuard\(\(\) => \{[\s\S]{0,180}activeDrawer = 'editor'/);
 });
 
-test('Tangguan local interactions coalesce search and editor dirty work', () => {
+test('Tavern local interactions coalesce search and editor dirty work', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /let characterSearchTimer = null;/);
   assert.match(view, /setTimeout\(\(\) => \{[\s\S]{0,260}renderCharacterList\(query, list\)/);
@@ -382,7 +382,7 @@ test('Tangguan local interactions coalesce search and editor dirty work', () => 
   assert.doesNotMatch(view, /if \(event\.target\.closest\('\.tg-editor-form'\)\) editorDirty = editorSignature\(\) !== editorSnapshot;/);
 });
 
-test('Tangguan editor exposes immersive draft fields without legacy duplicate controls', () => {
+test('Tavern editor exposes immersive draft fields without legacy duplicate controls', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.doesNotMatch(view, /tgSystemPrompt|bindLegacy|legacyParseDraft/);
   assert.match(view, /tgFirstMessage/);
@@ -393,25 +393,25 @@ test('Tangguan editor exposes immersive draft fields without legacy duplicate co
   assert.match(view, /editorDirty = true;/);
 });
 
-test('Tangguan keeps the default Chat prompt and isolates global user memory', () => {
+test('Tavern keeps the default Chat prompt and isolates global user memory', () => {
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
-  assert.match(chat, /const baseSys = isTangguanConv\(conv\)/);
-  assert.match(chat, /const userMemory = isTangguanConv\(conv\) \? ''/);
-  assert.match(chat, /const userMemTok = App\.context\.estimateTokens\(isTangguanConv\(conv\) \? ''/);
+  assert.match(chat, /const baseSys = isTavernConv\(conv\)/);
+  assert.match(chat, /const userMemory = isTavernConv\(conv\) \? ''/);
+  assert.match(chat, /const userMemTok = App\.context\.estimateTokens\(isTavernConv\(conv\) \? ''/);
   assert.match(chat, /const cmSys = App\.context\.estimateTokens\(systemContent\)/);
   assert.match(view, /let worldbookExpanded = false;/);
   assert.match(view, /worldbookExpanded = !!\(body && !body\.hidden\)/);
 });
 
-test('Tangguan invalid character pointers fall back to a valid recent card', () => {
+test('Tavern invalid character pointers fall back to a valid recent card', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /const explicit = hasCharacter\(preferredId\) \? String\(preferredId\) : ''/);
   assert.match(view, /const persisted = hasCharacter\(ui\.lastCharacterId\) \? String\(ui\.lastCharacterId\) : ''/);
   assert.match(view, /selectedId = explicit \|\| persisted \|\| \(fallback && fallback\.id\) \|\| currentId \|\|/);
 });
 
-test('Tangguan library cards stay compact and ignore malformed sessions', () => {
+test('Tavern library cards stay compact and ignore malformed sessions', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const cardSource = view.slice(view.indexOf('function card(item)'), view.indexOf('function renderCharacterList'));
   assert.doesNotMatch(cardSource, /item\.description/);

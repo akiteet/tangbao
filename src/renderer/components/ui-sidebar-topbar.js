@@ -71,7 +71,7 @@
       // M7：全文搜索——q 非空时匹配标题 + 消息内容（含深度思考文本），命中对话显示命中条数徽标
       // Module sessions live in their own sidecars. The global Chat history is
       // deliberately a regular-chat-only view, regardless of the current
-      // route, so a legacy snapshot can never leak Tangguan/Create records
+      // route, so a legacy snapshot can never leak Tavern/Create records
       // back into the normal sidebar.
       const moduleConversation = (item) => !!(item && (
         item.tavernCharacterId

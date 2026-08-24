@@ -159,7 +159,7 @@ test('legacy module conversations stay out of regular state after sidecar migrat
   }
 });
 
-test('Tangguan origin marker is migrated into the isolated sidecar', () => {
+test('Tavern origin marker is migrated into the isolated sidecar', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-marker-'));
   try {
     const store = ModuleSessions.createStore({ rootDir: dir });
@@ -192,7 +192,7 @@ test('regular Chat UI filters module sessions on every route', () => {
   assert.match(palette, /regularConversations/);
 });
 
-test('Tangguan provider selector supports legacy single-model accounts', () => {
+test('Tavern provider selector supports legacy single-model accounts', () => {
   const ui = readComponentsSource();
   assert.match(ui, /function accountModelNames\(account\)/);
   assert.match(ui, /account\.model \? \[account\.model\] : \[\]/);
