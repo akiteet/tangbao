@@ -110,19 +110,23 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (487 cases; 482 pass, 5 skipped — 4 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
+- **Tests**: `npm test` (498 cases; 492 pass, 6 skipped — 5 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
 - **Release gates**: `npm run check:version`, `npm run check:storage`, `npm run check:perf`, `npm run check:electron-abi`, `npm run check:sqlite`, `npm run check:ui`, `npm run check:release`, and `npm run bench:offline`
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
 
 ## Version history
 
-### v1.1.8 (persistence integrity & structure completion)
+### v1.1.8 (persistence integrity, engineering completion & UI system redesign)
 
 - **P0 fix: image model partition survives restart**: v1.1.6 regression — the startup normalization whitelist missed the `imageModel` flag and the SQLite mirror had no image columns, so image classifications reverted to the text group and the stripped state was persisted back to disk. Whitelist round-trip restored + schema v17 (`account_models` gains image_model/image_extra) + SQLite read/write paths. Note: flags already stripped before upgrading must be re-marked once in Settings.
-- **Batch F main-process split complete**: four domains extracted — main-storage.js / main-tangguan.js / main-agent-runs.js / main-float.js (factory pattern); main.js 2560 → 1473 lines.
+- **UI system redesign (neutral professional)**: `docs/UI-SYSTEM.md` committed as the single-source spec; dual-theme neutral-gray tokens with spacing / control-height / card-padding / modal-width ladders and a base component layer; one global spec for scrollbars, font sizes (`--fs-*` ladder) and radii; glass tokens retired into flat equivalents; accent-color RGB linkage fixed; dark-mode P0 fix (brace-balance gating for `:root`). A unified horizontal `.lib-bar` card across modules, unified collapse controls, a per-module scroll-to-bottom button, and 糖读 work-record bars. `scripts/check-ui-consistency.js` enforces 8 FAIL rules via `check:ui`.
+- **糖馆 renamed to `tavern` (with data migration)**: module id, `App.tavern`, `#tavernView`, `tavern:*` IPC channels and conversation fields all renamed; load-side auto-migration of `providers.tangguan → tavern`, `tangguanUi` and `tavernCharacterId`; the legacy module-sessions bucket is adopted automatically on first read (old file kept for rollback); persistence identifiers such as the character-library KV key are intentionally kept to protect data.
+- **Default prompt upgrades**: chat gains a structured spec (Markdown discipline / length adaptation / honesty first); 糖馆 gets a neutral roleplay base — the character card is upgraded to "identity & behavior definition" and the base prompt no longer introduces itself as the assistant; AI character drafts use a structured Chinese quality spec; the four 糖读 analysis prompts gained concrete quality requirements. Empty `settings.prompts` fall back to these built-ins — no migration needed.
+- **Batch F main-process split complete**: four domains extracted — main-storage.js / main-tavern.js / main-agent-runs.js / main-float.js (factory pattern); main.js 2560 → 1473 lines.
 - **Batch C settings-layer split**: ui.js extracted into five modules (sidebar-topbar / command-palette / settings-storage / skills-panel / accounts), 2857 → 1506 lines; source-helper gains readComponentsSource().
 - **chat.js split deferred after audit**: candidate blocks depend on 3–14 shared closure helpers (including the module-session persistence layer) — duplication outweighs the line-count gain.
+- **Data & streaming fixes**: entering an old conversation reliably lands at the true bottom; stream-watchdog timeouts now abort the gateway→upstream request instead of leaving zombie connections that exhaust provider concurrency under rate limiting (previously surfaced as repeated "30s idle timeout" errors in 糖馆); five `acceptStateRevision` guards (accounts / customModules / visionModels / agentThreads / projects) plus no persistence of empty drag-reordered lists.
 
 See [docs/CHANGELOG-v1.1.8.md](docs/CHANGELOG-v1.1.8.md).
 

@@ -9,10 +9,10 @@
   <sub><a href="README.en.md">English</a></sub>
 </p>
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.6-1a5cff" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.1.8-1a5cff" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License" />
   <img src="https://img.shields.io/badge/Electron-31-47848f" alt="Electron" />
-  <img src="https://img.shields.io/badge/tests-487%20passing-2ea44f" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-492%20passing-2ea44f" alt="Tests" />
   <img src="https://img.shields.io/badge/SQLite-3-green" alt="SQLite" />
 </p>
 
@@ -150,7 +150,7 @@ tangbao/
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **测试**：`npm test`（当前 487 个用例，482 个通过、5 个跳过——4 个 SQLite ABI 用例由 `npm run check:sqlite` 在 Electron 运行时真实执行、1 个评测存档用例需设 `TANGBAO_EVAL_ARCHIVE_DIR`——0 个失败）
+- **测试**：`npm test`（当前 498 个用例，492 个通过、6 个跳过——5 个 SQLite ABI 用例由 `npm run check:sqlite` 在 Electron 运行时真实执行、1 个评测存档用例需设 `TANGBAO_EVAL_ARCHIVE_DIR`——0 个失败）
 - **评测存档**：`eval-task-contracts` 里的 med-007 历史产物用例需设置 `TANGBAO_EVAL_ARCHIVE_DIR` 指向本机 `eval-runs-archive-*` 目录后才会真实执行，未设置时优雅跳过
 - **闭环门禁**：`npm run check:version`、`npm run check:storage`、`npm run check:perf`、`npm run check:electron-abi`、`npm run check:sqlite`（Electron 运行时跑 SQLite 用例，补纯 Node 的 ABI 跳过）、`npm run check:ui`、`npm run check:release`、`npm run bench:offline`
 - **打包**：`npm run dist`（Electron 31 + electron-builder，产物在 `dist/`）
@@ -158,12 +158,16 @@ tangbao/
 
 ## 版本历史
 
-### v1.1.8（持久化完整性与结构收尾）
+### v1.1.8（持久化完整性、工程收尾与 UI 系统重构）
 
 - **P0 修复：生图模型分区跨重启保持**：v1.1.6 回归——启动归一化白名单漏掉 `imageModel` 标记 + SQLite 镜像无图像列，导致生图分类重启后回退文本分组且被固化。本次补齐白名单往返 + Schema v17（account_models 加 image_model/image_extra 列）+ SQLite 读写路径。注意：升级前已被固化的纯标记需在设置里重新标记一次。
-- **批次 F 主进程拆分完成**：main.js 四域拆出——main-storage.js / main-tangguan.js / main-agent-runs.js / main-float.js（工厂模式），main.js 2560 → 1473 行。
+- **UI 系统性重构（中性专业风）**：`docs/UI-SYSTEM.md` 入库作为唯一基准；双主题中性灰阶令牌 + 间距/控件高度/卡片内距/弹窗宽度阶梯 + 基础组件层；滚动条、字号（`--fs-*` 阶梯）、圆角全局一套规格；玻璃系令牌退役为扁平等价物；强调色 RGB 联动修复；暗色模式 P0 修复（`:root` 括号平衡守门）。全模块横条卡 `.lib-bar` 统一、糖读/糖馆/糖创折叠控件统一、滚动回底按钮全模块生效、糖读工作记录条。`scripts/check-ui-consistency.js` 八条 FAIL 规则接入 `check:ui` 防回潮。
+- **糖馆更名 tavern（含数据迁移）**：模块 id、`App.tavern`、`#tavernView`、`tavern:*` IPC、会话字段全部更名；加载侧自动迁移 `providers.tangguan → tavern`、`tangguanUi`、`tavernCharacterId`，module-sessions 旧桶读取时自动搬迁（旧文件留档可回滚）；角色库 KV 键与存储文件名等持久化标识刻意保留，防止数据丢失。
+- **默认提示词全面升级**：聊天结构化规范（Markdown 纪律 / 详略适配 / 诚实优先）；糖馆新增中性角色扮演 base——角色卡升格为「身份与行为准则」，基础提示不再自称糖包助手；AI 角色草稿改中文质量规范（描述字数下限 / 性格特质 / 开场白 / 示例对话格式）；糖读摘要/要点/翻译/拆解四条分析提示词加质量要求。`settings.prompts` 留空即用内置，无需迁移。
+- **批次 F 主进程拆分完成**：main.js 四域拆出——main-storage.js / main-tavern.js / main-agent-runs.js / main-float.js（工厂模式），main.js 2560 → 1473 行。
 - **批次 C 设置层拆分**：ui.js 拆出侧边栏顶栏/命令面板/数据存储/技能面板/账户管理五个模块，2857 → 1506 行；source-helper 新增 readComponentsSource()。
 - **chat.js 拆分经审计顺延**：候选区块依赖 3–14 个共享闭包辅助（含模块会话持久层），复制收益低风险高。
+- **数据与流式修复**：进入旧会话稳定落底（异步高度增长兜底）；流式看门狗超时真正掐断网关→上游请求，消除限流场景下僵尸调用占满供应商并发额度的恶性循环（此前表现为糖馆反复报「30s 空闲超时」）；`acceptStateRevision` 五类守卫（账户/自定义模块/视觉模型/智能体会话/项目）+ 拖拽空列表不落盘。
 
 详细说明见 [docs/CHANGELOG-v1.1.8.md](docs/CHANGELOG-v1.1.8.md)。
 
