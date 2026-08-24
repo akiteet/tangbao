@@ -23,8 +23,17 @@ test('gatewayFetch 与 reader.read 均接入看门狗', () => {
   const src = read('src/renderer/views/chat/chat.js');
   assert.ok(src.includes('const res = await raceTimeout(App.rt.gatewayFetch('), 'fetch 阶段接首字节超时');
   assert.ok(src.includes('chunk = await raceTimeout(reader.read(), STREAM_IDLE_MS);'), 'reader 循环接空闲超时');
-  assert.ok(src.includes("if (e && e.code === 'STREAM_IDLE_TIMEOUT') throw e;"), '超时抛给外层兜底');
+  assert.ok(src.includes("if (e && e.code === 'STREAM_IDLE_TIMEOUT') { streamAbort.abort(); throw e; }"), '超时抛给外层兜底');
   assert.ok(src.includes('// 聊天修复 E：流数据空闲看门狗'), '看门狗注释存在');
+});
+
+test('看门狗超时会同步中止网关请求（不留僵尸上游调用）', () => {
+  const src = read('src/renderer/views/chat/chat.js');
+  assert.ok(src.includes('const streamAbort = new AbortController();'), '流级 AbortController 存在');
+  assert.ok(src.includes('signal: streamAbort.signal,'), 'gatewayFetch 使用流级信号');
+  assert.ok(src.includes("if (e && e.code === 'STREAM_IDLE_TIMEOUT') streamAbort.abort();"), '首字节超时即中止上游');
+  const abortCount = (src.match(/streamAbort\.abort\(\)/g) || []).length;
+  assert.ok(abortCount >= 4, '外部信号桥接 + 首字节/空闲两处看门狗均接中止，实际 ' + abortCount + ' 处');
 });
 
 test('流式期间发送不再静默丢弃（明确提示并保留输入）', () => {

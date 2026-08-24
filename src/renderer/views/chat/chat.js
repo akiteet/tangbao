@@ -37,7 +37,7 @@
     let timer = null;
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        const e = new Error('流式响应空闲超时（' + Math.round(ms / 1000) + 's 无数据），已断开连接');
+        const e = new Error('流式响应空闲超时（' + Math.round(ms / 1000) + 's 无数据），已断开连接；上游长时间未返回（可能限流或拥堵），可稍后重试或更换模型');
         e.code = 'STREAM_IDLE_TIMEOUT';
         reject(e);
       }, ms);
@@ -1554,8 +1554,16 @@
           }
         }
       };
+      // 看门狗触发后必须真正掐断请求：此前只放弃等待、不取消连接，僵尸上游调用会继续
+      // 占住供应商并发额度（限流场景下越积越多，表现为「总是空闲超时」）。
+      // options.signal（外部中止）桥接到同一控制器，保证任一入口都能整链路取消。
+      const streamAbort = new AbortController();
+      if (options && options.signal) {
+        if (options.signal.aborted) streamAbort.abort();
+        else options.signal.addEventListener('abort', () => streamAbort.abort(), { once: true });
+      }
       try {
-        // 聊天修复 E：首字节看门狗——fetch 阶段挂起（网络半开）30s 后终止，走外层兜底保存。
+        // 聊天修复 E：首字节看门狗——fetch 阶段挂起（网络半开）30s 后终止并掐断上游，走外层兜底保存。
         // The renderer sends one canonical gateway request. `gatewayFetch` is
         // the only boundary that strips renderer-only policy fields and adds
         // the local auth token; rebuilding the request here used to reintroduce
@@ -1565,8 +1573,11 @@
           kind: 'chat',
           telemetry: { scope: providerModule, callType: 'chat' },
           payload,
-          signal: options && options.signal,
-        }), STREAM_FIRST_BYTE_MS);
+          signal: streamAbort.signal,
+        }), STREAM_FIRST_BYTE_MS).catch((e) => {
+          if (e && e.code === 'STREAM_IDLE_TIMEOUT') streamAbort.abort(); // 同步掐断网关→上游连接
+          throw e;
+        });
         if (!res.ok) {
           const txt = await App.rt.gatewayError(res);
           ui.bubble.innerHTML = `<div class="msg-error">请求失败（${res.status}）：${App.escapeHtml(String(txt).slice(0, 240))}</div>`;
@@ -1583,7 +1594,7 @@
           try {
             chunk = await raceTimeout(reader.read(), STREAM_IDLE_MS);
           } catch (e) {
-            if (e && e.code === 'STREAM_IDLE_TIMEOUT') throw e; // 外层 catch 走 saveAnswer 兜底
+            if (e && e.code === 'STREAM_IDLE_TIMEOUT') { streamAbort.abort(); throw e; } // 外层 catch 走 saveAnswer 兜底
             throw e;
           }
           const { done, value } = chunk;
