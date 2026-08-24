@@ -84,7 +84,7 @@
 
   function createTabbedLibraryMarkup(content) {
     const presetActive = libraryTab === 'presets';
-    return `<div class="create-library-head"><div><b>糖创</b><small>任务型智能体与工作流</small></div><button type="button" class="icon-btn create-library-collapse-btn" data-create-library-toggle aria-label="收起糖创库" title="收起糖创库">‹</button></div>
+    return `<div class="create-library-head"><div><b>糖创</b><small>任务型智能体与工作流</small></div><button type="button" class="icon-btn create-library-collapse-btn" data-create-library-toggle aria-label="收起糖创库" title="收起糖创库"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
       <div class="create-library-tabs">
         <button type="button" class="${presetActive ? 'active' : ''}" data-create-library-tab="presets">预设</button>
         <button type="button" class="${!presetActive ? 'active' : ''}" data-create-library-tab="sessions">会话</button>
@@ -100,7 +100,7 @@
     const title = opts.title || '糖创';
     const subtitle = opts.subtitle || '任务型智能体与工作流';
     const expandLabel = opts.expandLabel || title;
-    return `<div class="create-library-head"><div><b>${esc(title)}</b><small>${esc(subtitle)}</small></div><button type="button" class="icon-btn create-library-collapse-btn" data-create-library-toggle aria-label="收起${esc(title)}" title="收起${esc(title)}">‹</button><button type="button" class="create-library-collapsed-tab" data-create-library-expand aria-label="展开${esc(title)}">${esc(expandLabel)}</button></div>
+    return `<div class="create-library-head"><div><b>${esc(title)}</b><small>${esc(subtitle)}</small></div><button type="button" class="icon-btn create-library-collapse-btn" data-create-library-toggle aria-label="收起${esc(title)}" title="收起${esc(title)}"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button type="button" class="create-library-collapsed-tab" data-create-library-expand aria-label="展开${esc(title)}">${esc(expandLabel)}</button></div>
       <div class="create-library-content">${content}</div>`;
   }
 

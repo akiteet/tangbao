@@ -336,7 +336,7 @@
     const compact = arguments[0] && arguments[0].compact === true;
     if (!compact && libraryCollapsed && window.innerWidth > 900) {
       return `<div class="tg-library-collapsed" aria-label="角色库已收起">
-        <button type="button" class="tg-library-collapse-btn" data-tg-library-toggle aria-label="展开角色库" title="展开角色库">☰</button>
+        <button type="button" class="tg-library-collapse-btn" data-tg-library-toggle aria-label="展开角色库" title="展开角色库"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button type="button" class="tg-library-collapsed-tab" data-tg-library-expand aria-label="展开角色库" title="角色库">角色</button>
         <button type="button" class="tg-library-collapsed-tab" data-tg-library-expand aria-label="展开会话栏" title="会话">会话</button>
       </div>`;
@@ -344,7 +344,7 @@
     const search = $('tgDrawerLibrarySearch') || $('tgLibrarySearch');
     const query = String((search && search.value) || '').trim().toLowerCase();
     if (activeLibraryTab === 'sessions') {
-      return `<div class="tg-library-head"><div><b>会话</b><small>${esc(selected ? selected.name : '未选择角色')}</small></div><span class="tg-library-head-actions"><button type="button" class="icon-btn tg-desktop-only" data-tg-library-toggle aria-label="收起角色库" title="收起角色库">‹</button><button type="button" class="icon-btn tg-mobile-only" data-tg-library-close aria-label="关闭">×</button></span></div>
+      return `<div class="tg-library-head"><div><b>会话</b><small>${esc(selected ? selected.name : '未选择角色')}</small></div><span class="tg-library-head-actions"><button type="button" class="icon-btn tg-desktop-only" data-tg-library-toggle aria-label="收起角色库" title="收起角色库"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button type="button" class="icon-btn tg-mobile-only" data-tg-library-close aria-label="关闭">×</button></span></div>
         <div class="tg-library-tabs"><button type="button" data-tg-library-tab="characters">角色</button><button type="button" class="active" data-tg-library-tab="sessions">会话</button></div>
         <div class="tg-library-scroll">${sessionHtml() || '<div class="tg-empty">选择角色后查看会话。</div>'}</div>`;
     }
@@ -356,7 +356,7 @@
       const visibleCharacters = filtered.slice(0, characterVisibleCount);
       const moreCharacters = filtered.length > visibleCharacters.length
         ? '<button type="button" class="btn-ghost mini tg-character-more" data-tg-character-more>加载更多角色</button>' : '';
-      return `<div class="tg-library-head"><div><b>角色库</b><small>角色卡与沉浸式会话</small></div><span class="tg-library-head-actions"><button type="button" class="icon-btn tg-desktop-only" data-tg-library-toggle aria-label="收起角色库" title="收起角色库">‹</button><button type="button" class="icon-btn tg-mobile-only" data-tg-library-close aria-label="关闭">×</button></span></div>
+      return `<div class="tg-library-head"><div><b>角色库</b><small>角色卡与沉浸式会话</small></div><span class="tg-library-head-actions"><button type="button" class="icon-btn tg-desktop-only" data-tg-library-toggle aria-label="收起角色库" title="收起角色库"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button type="button" class="icon-btn tg-mobile-only" data-tg-library-close aria-label="关闭">×</button></span></div>
       <div class="tg-library-tabs"><button type="button" class="active" data-tg-library-tab="characters">角色</button><button type="button" data-tg-library-tab="sessions">会话</button></div>
       <label class="tg-library-search"><span>⌕</span><input id="${compact ? 'tgDrawerLibrarySearch' : 'tgLibrarySearch'}" data-tg-library-search type="search" placeholder="搜索角色" value="${esc(query)}" autocomplete="off" /></label>
       <div class="tg-library-filters"><button type="button" class="${activeCharacterFilter === 'all' ? 'active' : ''}" data-tg-character-filter="all">全部</button><button type="button" class="${activeCharacterFilter === 'favorites' ? 'active' : ''}" data-tg-character-filter="favorites">收藏</button><button type="button" class="${activeCharacterFilter === 'recent' ? 'active' : ''}" data-tg-character-filter="recent">最近</button></div>
