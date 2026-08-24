@@ -33,6 +33,7 @@
   --module-library-tab-width: 32px;
   --module-library-tab-height: 58px;
   --module-library-tab-font-size: var(--fs-sm);
+  --module-library-btn-width: 36px; /* v1.1.8：折叠/收起按钮加大到与窄条同档，竖排字签仍用 tab-width */
   /* ===== v1.1.8 简洁风设计系统（docs/UI-SYSTEM.md）：暖色扁平表面 + 发丝边框 ===== */
   --bg: #fafafa;
   --sidebar-bg: #f4f4f4;
@@ -2268,9 +2269,10 @@ th { background: var(--hover-bg); font-weight: 600; }
   flex: 1 1 auto; height: 0; min-height: 0; overflow-y: scroll; overscroll-behavior: contain; scrollbar-gutter: stable both-edges;
   border: none; border-radius: 0; padding: 0 8px 0 2px; background: transparent;
 }
-/* M11：折叠态 = 40px 窄条，保留展开按钮（修复「折叠后无法打开」） */
-.doc-shell.sidebar-collapsed .doc-sidebar { flex-basis: 40px; width: 40px; padding: 4px 0; }
+/* M11：折叠态 = 窄条，保留展开按钮（修复「折叠后无法打开」）；v1.1.8 收窄到 28px */
+.doc-shell.sidebar-collapsed .doc-sidebar { flex-basis: 28px; width: 28px; padding: 4px 0; }
 .doc-shell.sidebar-collapsed .doc-sidebar-head { justify-content: center; padding: 6px 0; }
+.doc-shell.sidebar-collapsed .doc-sidebar-head .icon-btn { width: 24px; height: 24px; }
 .doc-shell.sidebar-collapsed .doc-sidebar-title { display: none; }
 .doc-shell.sidebar-collapsed .doc-sec { display: none; }
 .doc-shell.sidebar-collapsed .ico-collapse { display: none; }
@@ -2970,8 +2972,17 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   white-space: nowrap;
 }
 #tangguanView .tg-library-collapse-btn {
+  width: var(--module-library-btn-width);
+  min-width: var(--module-library-btn-width);
+  min-height: 38px;
   font-size: var(--fs-xl);
   color: var(--primary);
+}
+/* v1.1.8：展开态收起钮 ‹（会话/角色库两处头部）与折叠态 ☰ 同档加大 */
+#tangguanView .icon-btn[data-tg-library-toggle] {
+  width: var(--module-library-btn-width);
+  height: var(--module-library-btn-width);
+  font-size: var(--fs-lg);
 }
 #tangguanView .tg-library-collapsed-tab {
   writing-mode: vertical-rl;
@@ -3276,6 +3287,15 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 }
 #createView .create-library-collapse-btn,
 #createView [data-create-library-toggle] { display: inline-flex; align-items: center; justify-content: center; }
+/* v1.1.8：折叠/收起按钮加大到 36（展开态 ‹ 与折叠后常驻 ‹ 同档）；竖排字签仍 30 起 */
+#createView .icon-btn.create-library-collapse-btn,
+#createView .icon-btn[data-create-library-toggle] {
+  width: var(--module-library-btn-width);
+  height: var(--module-library-btn-width);
+  min-width: var(--module-library-btn-width);
+  min-height: var(--module-library-btn-width);
+  font-size: var(--fs-lg);
+}
 #createView .create-library-collapsed-tab,
 #createView [data-create-library-expand] { display: none; }
 #createView .create-library-tabs {
@@ -3605,10 +3625,10 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   }
   #createView .create-library-collapse-btn,
   #createView [data-create-library-toggle] {
-    width: var(--module-library-tab-width);
-    min-width: var(--module-library-tab-width);
-    height: var(--module-library-tab-width);
-    min-height: var(--module-library-tab-width);
+    width: var(--module-library-btn-width);
+    min-width: var(--module-library-btn-width);
+    height: var(--module-library-btn-width);
+    min-height: var(--module-library-btn-width);
     padding: 0;
   }
   #createView.create-library-is-collapsed .create-library-collapsed-tab,
