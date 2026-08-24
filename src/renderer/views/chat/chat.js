@@ -124,9 +124,9 @@
   }
 
   // Module ownership must not depend on the newest marker shape. Older
-  // sessions can carry only originModule, while current Tangguan sessions
+  // sessions can carry only originModule, while current Tavern sessions
   // also carry tavernCharacterId.
-  function isTangguanConv(conv) { return ownerForConversation(conv) === 'tavern'; }
+  function isTavernConv(conv) { return ownerForConversation(conv) === 'tavern'; }
 
   function currentOwner() {
     if (surfaceState && surfaceState.owner) return surfaceState.owner;
@@ -285,11 +285,11 @@
     return (surfaceState && surfaceState.scroll) || $('chatScroll');
   }
 
-  function isTangguanConversation(id) {
+  function isTavernConversation(id) {
     const conv = conversationById('tavern', id)
       || conversationById('create', id)
       || conversationById('default', id);
-    return isTangguanConv(conv);
+    return isTavernConv(conv);
   }
 
   function isCreateConversation(conv) {
@@ -300,11 +300,11 @@
     return !!(conv && (conv.tavernCharacterId || conv.originModule === 'tavern' || isCreateConversation(conv)));
   }
 
-  function resetTangguanMessageWindow(conv) {
+  function resetTavernMessageWindow(conv) {
     const id = conv && conv.id ? String(conv.id) : '';
     if (id !== messageWindowConvId) {
       messageWindowConvId = id;
-      messageVisibleCount = isTangguanConv(conv) ? 50 : 100;
+      messageVisibleCount = isTavernConv(conv) ? 50 : 100;
     }
   }
 
@@ -393,12 +393,12 @@
         owner,
         conversationId: opts.conversationId !== undefined ? (opts.conversationId || null) : activeConversationId(owner),
         previousActiveId: App.chat._preSurfaceActiveId
-          || App.chat._preTangguanActiveId
+          || App.chat._preTavernActiveId
           || App.chat._preCreateActiveId
           || (activeConversationId('default') && !isModuleConversation(activeConversationFor('default')) ? activeConversationId('default') : null),
         controls: {},
       };
-      App.chat._preTangguanActiveId = null;
+      App.chat._preTavernActiveId = null;
       App.chat._preCreateActiveId = null;
       App.chat._preSurfaceActiveId = null;
       if (surfaceState.mode === 'tavern') {
@@ -498,7 +498,7 @@
       if (!btn) return;
       const conv = App.chat.activeConv();
       const s = providerForConversation(conv);
-      const restricted = isTangguanConv(conv);
+      const restricted = isTavernConv(conv);
       const model = (conv && conv.model) || s.model || '';
       const ok = App.isVisionModel(model);
       btn.disabled = !ok || restricted;
@@ -513,7 +513,7 @@
 
     // 读取并压缩图片，返回 base64 data URL
     async processImage(file) {
-      if (isTangguanConv(App.chat.activeConv())) {
+      if (isTavernConv(App.chat.activeConv())) {
         App.ui.toast('糖馆独立会话不支持图片或文件附件');
         return null;
       }
@@ -555,7 +555,7 @@
     // 处理图片文件：压缩后加入 pendingAttachments
     async handleImageFile(file) {
       if (!file || !file.type.startsWith('image/')) return;
-      if (isTangguanConv(App.chat.activeConv())) { App.ui.toast('糖馆独立会话不支持图片或文件附件'); return; }
+      if (isTavernConv(App.chat.activeConv())) { App.ui.toast('糖馆独立会话不支持图片或文件附件'); return; }
       if (!App.chat.isVisionModel()) { App.ui.toast('当前模型不支持图片输入'); return; }
       try {
         const data = await App.chat.processImage(file);
@@ -697,7 +697,7 @@
         App.state.conversations.unshift(conv);
         App.state.activeId = conv.id;
       }
-      resetTangguanMessageWindow(conv);
+      resetTavernMessageWindow(conv);
       App.chat.clearAttachments();
       App.chat.cancelEdit();
        if (opts.persist !== false && !isModuleOwner(owner)) setTimeout(() => App.persist(), 0); // v1.1.6（B1）：去同步——与会话切换帧解耦
@@ -738,7 +738,7 @@
       setActiveConversationId(owner, id);
       const next = conversationById(owner, id);
       if (isModuleOwner(owner) && next) persistModuleConversation(owner, next, { activeId: id });
-      resetTangguanMessageWindow(App.chat.activeConv());
+      resetTavernMessageWindow(App.chat.activeConv());
       App.chat.clearAttachments();
       App.chat.cancelEdit();
        if (opts.persist !== false && !isModuleOwner(owner)) setTimeout(() => App.persist(), 0); // v1.1.6（B1）：去同步——与会话切换帧解耦
@@ -826,7 +826,7 @@
     },
 
     attachTextFile(file) {
-      if (isTangguanConv(App.chat.activeConv())) { App.ui.toast('糖馆独立会话不支持图片或文件附件'); return; }
+      if (isTavernConv(App.chat.activeConv())) { App.ui.toast('糖馆独立会话不支持图片或文件附件'); return; }
       const reader = new FileReader();
       reader.onload = () => {
         let text = String(reader.result || '');
@@ -853,9 +853,9 @@
       const composer = $('composer');
       const conv = App.chat.activeConv();
       const owner = surfaceState && surfaceState.owner ? surfaceState.owner : currentOwner();
-      // The shared surface is reused by Tangguan and regular Chat. Clear the
+      // The shared surface is reused by Tavern and regular Chat. Clear the
       // previous conversation before showing an empty state so an empty
-      // Tangguan session can never expose the old session's DOM.
+      // Tavern session can never expose the old session's DOM.
       if (messages) messages.innerHTML = '';
       renderedConvId = null;
       renderedContentStamp = ''; // 清空态同步清戳，避免清空后重入被守卫跳过
@@ -938,7 +938,7 @@
           ? `<button class="version-switch" data-version="1" title="切换回答版本">${vIdx + 1}/${versions.length}</button>`
           : '';
         const webLabel = m.webSources ? (m.webSources + ' 个') : '多个';
-        const tavern = isTangguanConv(App.chat.activeConv()) || isTangguanConversation(App.state.activeId);
+        const tavern = isTavernConv(App.chat.activeConv()) || isTavernConversation(App.state.activeId);
         const webHtml = !tavern && (m.webSources || (App.state.web && m.role === 'assistant'))
           ? '<div class="web-indicator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>基于 ' + webLabel + '搜索来源</div>'
           : '';
@@ -1028,7 +1028,7 @@
         App.chat.updateCtxBar();
         return;
       }
-      resetTangguanMessageWindow(conv);
+      resetTavernMessageWindow(conv);
       App.chat.showChat();
        messages.innerHTML = '';
        const fragment = document.createDocumentFragment();
@@ -1089,11 +1089,11 @@
     // M12：统一构建发送给模型的系统提示内容（基础系统提示 + 智能体语气）；streamChat 与 updateCtxBar 共用，保证用量条与实际发送一致
     buildSystemContent(conv) {
       const defaultSys = (App.state.settings.prompts && App.state.settings.prompts.chat) || (typeof SYSTEM_PROMPT !== 'undefined' ? SYSTEM_PROMPT : '');
-      // Tangguan character instructions are added by preparePrompt after this
-      // base prompt. Keep the shared Chat safety rules in front of them instead
-      // of allowing a character card to replace the default system prompt.
-      const baseSys = isTangguanConv(conv)
-        ? defaultSys
+      // Tavern character instructions are added by preparePrompt after this
+      // base prompt. Character conversations use a neutral roleplay base —
+      // the assistant identity ("糖包") must not compete with the persona.
+      const baseSys = isTavernConv(conv)
+        ? (App.DEFAULT_PROMPTS.tavern || defaultSys)
         : ((conv && conv.systemPrompt) || defaultSys);
       let sc = baseSys;
       if (conv && conv.tone) sc += '\n\n# 语气要求\n请用「' + conv.tone + '」的语气回复用户。';
@@ -1106,7 +1106,7 @@
       if (!conv || !conv.messages) { if (el.style) el.style.display = 'none'; contextBarKey = ''; return; }
       if (el.style) el.style.display = '';
       const model = (conv && conv.model) || providerForConversation(conv).model || '';
-      const userMemory = isTangguanConv(conv) ? '' : (App.state.settings.userMemory || '');
+      const userMemory = isTavernConv(conv) ? '' : (App.state.settings.userMemory || '');
       const nextKey = contextBarStamp(conv, model, userMemory);
       if (nextKey === contextBarKey) return;
       contextBarKey = nextKey;
@@ -1119,7 +1119,7 @@
         recentKeep: App.context.RECENT_KEEP_CHAT, systemContent, window: ctxWindow,
       });
       const tokens = App.context.messagesTokens(compact.finalMessages);
-       const userMemTok = App.context.estimateTokens(isTangguanConv(conv) ? '' : userMemory);
+       const userMemTok = App.context.estimateTokens(isTavernConv(conv) ? '' : userMemory);
       const bd = App.context.breakdownFromFinal(compact.finalMessages, userMemTok);
       if (App.context.renderUsage) App.context.renderUsage(el, tokens + userMemTok, ctxWindow, bd);
     },
@@ -1154,7 +1154,7 @@
           </div>
         </div>`;
       const webIndicator = wrap.querySelector('.web-indicator');
-      if (isTangguanConv(conv) && webIndicator) webIndicator.remove();
+      if (isTavernConv(conv) && webIndicator) webIndicator.remove();
       $('messages').appendChild(wrap);
       if (initialContent) {
         try { wrap.querySelector('.bubble').innerHTML = App.renderMarkdown(initialContent); } catch (_) { wrap.querySelector('.bubble').textContent = initialContent; }
@@ -1219,13 +1219,13 @@
       }
       App.chat.persistConversation(conv);
       const baseSys = App.chat.buildSystemContent(conv);
-       const userMemory = isTangguanConv(conv) ? '' : (App.state.settings.userMemory || '').trim();
+       const userMemory = isTavernConv(conv) ? '' : (App.state.settings.userMemory || '').trim();
       // 聊天端享受用户长期记忆（差距 #4）：并入系统提示，与糖码后端注入方式一致
       let systemContent = userMemory ? (baseSys + '\n\n# 用户长期记忆\n' + userMemory) : baseSys;
-      // Tangguan sessions receive only the selected local character and its
+      // Tavern sessions receive only the selected local character and its
       // worldbook. Retrieval is scoped by character and never overrides the
       // base safety prompt.
-      if (isTangguanConv(conv) && App.tavern && App.tavern.preparePrompt) {
+      if (isTavernConv(conv) && App.tavern && App.tavern.preparePrompt) {
         const lastUser = conv.messages.filter((item) => item.role === 'user').pop();
         const query = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
         // 人设注入失败必须可见：此前 .catch(() => '') 把失败吞成"无提示词"，
@@ -1255,9 +1255,9 @@
           App.ui.toast('智能体指定模型 ' + conv.model + ' 不在当前账户模型中，已改用 ' + s.model);
         }
       }
-      const web = isTangguanConv(conv) ? false : ((conv.web != null) ? conv.web : App.state.web);
+      const web = isTavernConv(conv) ? false : ((conv.web != null) ? conv.web : App.state.web);
       const AGENT_BASE = App.rt.agentBase(); // 本机随机端口，运行时取
-      const allMsgs = conv.messages.filter((item) => item !== liveMessage).map(m => ({ role: m.role, content: isTangguanConv(conv) ? String(m.content || '') : App.chat.buildContent(m) }));
+      const allMsgs = conv.messages.filter((item) => item !== liveMessage).map(m => ({ role: m.role, content: isTavernConv(conv) ? String(m.content || '') : App.chat.buildContent(m) }));
       if (options && options.liveMessage) {
         allMsgs.push({ role: 'assistant', content: App.chat.buildContent(options.liveMessage) });
         allMsgs.push({ role: 'user', content: 'Continue the previous answer. Append only new information; do not repeat the existing answer.' });
@@ -1319,9 +1319,9 @@
         stream: true,
         messages: finalMessages,
       };
-       // Tangguan is tool-free. Its local policy stays on the conversation;
+       // Tavern is tool-free. Its local policy stays on the conversation;
        // only the provider-compatible empty tool list is sent.
-       if (isTangguanConv(conv)) {
+       if (isTavernConv(conv)) {
           payload.tools = [];
        }
       if (typeof conv.temperature === 'number') payload.temperature = conv.temperature;
@@ -1750,7 +1750,7 @@
         }
       }
       if (!conv) return;
-      if (isTangguanConv(conv) && atts.length) {
+      if (isTavernConv(conv) && atts.length) {
         App.ui.toast('糖馆独立会话不支持图片或文件附件');
         return;
       }
@@ -2021,7 +2021,7 @@
           const files = attachInput.files ? Array.from(attachInput.files) : [];
           if (!files.length) return;
           const conv = App.chat.activeConv();
-          if (isTangguanConv(conv)) {
+          if (isTavernConv(conv)) {
             attachInput.value = '';
             App.ui.toast('糖馆独立会话不支持图片或文件附件');
             return;

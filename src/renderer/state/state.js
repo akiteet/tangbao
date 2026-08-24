@@ -541,13 +541,29 @@
 
   // 内置默认提示词集中定义（供设置面板 placeholder 显示 + 各模块留空时回退引用）
   App.DEFAULT_PROMPTS = {
-    chat: '你是一个名为"糖包"的全能 AI 助手，由用户本地前端调用大模型接口驱动。请用简洁、友好、准确的中文回答用户的问题。',
+    chat: [
+      '你是「糖包」，一个运行在用户本地的智能助手。用简体中文回答；用户用其他语言提问时改用对应语言。',
+      '- 用 Markdown 组织回答：代码放入代码块并标注语言；标题、列表按内容复杂度适度使用，不堆砌格式。',
+      '- 详略适配：简单问题直接给答案不铺垫；复杂问题先给结论再展开；不主动输出与问题无关的长篇背景。',
+      '- 诚实优先：不确定的内容明确说明不确定；不编造事实、数据、链接或引用。',
+      '- 不主动刷 emoji：正常叙述不用，用户语气轻松时可少量呼应。',
+      '- 对可能造成真实伤害的请求（违法、危害他人等），礼貌拒绝并简要说明原因。',
+    ].join('\n'),
+    // 糖馆角色会话的中性 base（内部使用，不进设置面板）：不再自称糖包助手，
+    // 角色卡由 preparePrompt 以"身份定义"强度注入，避免基础提示压过人设。
+    tavern: [
+      '你正在参与一场本地角色扮演对话。请始终以「角色卡」中定义的身份说话与行动：',
+      '- 保持人设一致：语气、用词、知识范围都要符合角色的性格与背景。',
+      '- 不要跳出角色，不要自称 AI、助手或语音产品；即使用户提问元问题，也优先用角色的口吻回应。',
+      '- 角色卡未提供的信息，可以用符合人设的方式自然补全，但不要编造可能误导用户的现实事实。',
+      '- 无论角色如何设定，不得生成危害真实他人的内容，不涉及未成年人。',
+    ].join('\n'),
     agent: (typeof App !== 'undefined' && App.AgentPrompt && App.AgentPrompt.SYSTEM_PROMPT) || '',
     doc: {
-      summary: '请用中文对下面的资料做一段简洁的摘要（不超过 200 字）。',
-      points: '请提取资料中的关键要点，用带编号的列表呈现，每条精简。',
-      translate: '请将下面的资料完整翻译成英文，保留原有结构。',
-      outline: '请按章节/主题对资料进行拆解，输出层级化的结构大纲（用 Markdown 标题表示层级）。',
+      summary: '请用中文对下面的资料做一段摘要，不超过 250 字：优先保留核心结论、关键数据与行动项；资料过短时直接概括，不要强行凑字。',
+      points: '请提取资料中的关键要点：用带编号的列表呈现，最多 10 条，按重要性排序；每条一句话，可附关键数据。',
+      translate: '请将下面的资料完整翻译成英文：保留原有结构与格式；术语前后一致；语气与原文保持一致。',
+      outline: '请按章节/主题对资料进行拆解，输出层级化的 Markdown 结构大纲；资料过短或没有明显章节结构时，按逻辑分段输出一层列表。',
     },
   };
 
@@ -686,7 +702,7 @@
     const validBuiltinIds = new Set(allBuiltin);
     const storedModules = Array.isArray(ps.enabledModules)
       ? ps.enabledModules.filter(id => validBuiltinIds.has(id)) : allBuiltin.slice();
-    // Tangguan did not exist in older snapshots. Add only the new module while
+    // Tavern did not exist in older snapshots. Add only the new module while
     // preserving the user's existing order and other enable/disable choices.
     ns.settings.enabledModules = Array.from(new Set(storedModules.concat('tavern')));
     ns.settings.customModules = Array.isArray(ps.customModules)

@@ -1120,13 +1120,15 @@
       const result = await Promise.resolve(call('retrieveContext', { ok: false }, { characterId: detail.character.id, query: query || '', tokenBudget: 1000, limit: 8, semantic: detail.character.embeddingEnabled === true, ref: provider.ref, model: provider.model }));
       const card = detail.character;
       const matureEnabled = matureMode && card.matureAllowed === true;
-      const contentPolicy = matureEnabled ? '\u6210\u719f\u5185\u5bb9\uff1a\u5df2\u540c\u65f6\u83b7\u5f97\u5168\u5c40\u5f00\u5173\u548c\u5f53\u524d\u89d2\u8272\u5361\u8bb8\u53ef\u3002' : '\u6210\u719f\u5185\u5bb9\uff1a\u5173\u95ed\uff1b\u4e0d\u5f97\u751f\u6210\u9732\u9aa8\u5185\u5bb9\u3002';
-      const parts = ['# 角色卡（仅作风格和背景参考，不覆盖基础安全规则）',
+      // 双许可（全局成熟开关 + 角色卡 matureAllowed）状态中性陈述；未成年人红线无条件保留
+      const contentPolicy = matureEnabled
+        ? '成熟内容：已获得许可（全局开启且本卡允许），可按角色与剧情自然呈现，不涉及未成年人。'
+        : '成熟内容：未开启，保持全年龄尺度。';
+      const parts = ['# 角色卡（你的身份与行为准则）',
         card.name ? '名称：' + card.name : '', card.description ? '简介：' + card.description : '', card.personality ? '性格：' + card.personality : '', card.scenario ? '场景：' + card.scenario : '', card.exampleDialogue ? '示例：\n' + card.exampleDialogue : '', card.systemPrompt || '', result && result.context ? result.context : ''];
       let prompt = parts.filter(Boolean).concat(contentPolicy).join('\n');
       // 弱卡兜底：卡片只有名称（无简介/性格/场景等任何人设字段）时，注入的
-      // 角色信息不足以压过基础系统提示里的"糖包助手"身份，弱模型会按默认助手
-      // 回答。追加一条身份锁定指令，保证最小卡片也能生效。
+      // 角色信息太薄，弱模型容易跳出人设。追加一条身份锁定指令，保证最小卡片也能生效。
       if (!card.description && !card.personality && !card.scenario && !card.exampleDialogue && !card.systemPrompt) {
         const who = String(card.name || '该角色').trim();
         const tagline = String(card.tagline || '').trim();
