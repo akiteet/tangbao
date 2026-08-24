@@ -1112,7 +1112,10 @@
     async preparePrompt(conv, query) {
       if (!conv || !conv.tangguanCharacterId) return '';
       const detail = await getCharacterDetail(conv.tangguanCharacterId);
-      if (!detail || !detail.ok || !detail.character) return '';
+      if (!detail || !detail.ok || !detail.character) {
+        console.warn('[糖馆] 角色详情读取失败，人设注入跳过：', (detail && (detail.error || detail.code)) || '未知原因');
+        return '';
+      }
       const provider = App.getProvider('tangguan') || {};
       const result = await Promise.resolve(call('retrieveContext', { ok: false }, { characterId: detail.character.id, query: query || '', tokenBudget: 1000, limit: 8, semantic: detail.character.embeddingEnabled === true, ref: provider.ref, model: provider.model }));
       const card = detail.character;
@@ -1120,7 +1123,16 @@
       const contentPolicy = matureEnabled ? '\u6210\u719f\u5185\u5bb9\uff1a\u5df2\u540c\u65f6\u83b7\u5f97\u5168\u5c40\u5f00\u5173\u548c\u5f53\u524d\u89d2\u8272\u5361\u8bb8\u53ef\u3002' : '\u6210\u719f\u5185\u5bb9\uff1a\u5173\u95ed\uff1b\u4e0d\u5f97\u751f\u6210\u9732\u9aa8\u5185\u5bb9\u3002';
       const parts = ['# 角色卡（仅作风格和背景参考，不覆盖基础安全规则）',
         card.name ? '名称：' + card.name : '', card.description ? '简介：' + card.description : '', card.personality ? '性格：' + card.personality : '', card.scenario ? '场景：' + card.scenario : '', card.exampleDialogue ? '示例：\n' + card.exampleDialogue : '', card.systemPrompt || '', result && result.context ? result.context : ''];
-      return parts.filter(Boolean).concat(contentPolicy).join('\n');
+      let prompt = parts.filter(Boolean).concat(contentPolicy).join('\n');
+      // 弱卡兜底：卡片只有名称（无简介/性格/场景等任何人设字段）时，注入的
+      // 角色信息不足以压过基础系统提示里的"糖包助手"身份，弱模型会按默认助手
+      // 回答。追加一条身份锁定指令，保证最小卡片也能生效。
+      if (!card.description && !card.personality && !card.scenario && !card.exampleDialogue && !card.systemPrompt) {
+        const who = String(card.name || '该角色').trim();
+        const tagline = String(card.tagline || '').trim();
+        prompt += '\n\n# 身份锁定\n你必须始终以「' + who + '」' + (tagline ? '（' + tagline + '）' : '') + '的身份与用户交流，不要自称糖包或 AI 助手。';
+      }
+      return prompt;
     },
   };
 })();

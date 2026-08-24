@@ -1228,8 +1228,22 @@
       if (isTangguanConv(conv) && App.tangguan && App.tangguan.preparePrompt) {
         const lastUser = conv.messages.filter((item) => item.role === 'user').pop();
         const query = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
-        const tangguanPrompt = await App.tangguan.preparePrompt(conv, query).catch(() => '');
-        if (tangguanPrompt) systemContent += '\n\n' + tangguanPrompt;
+        // 人设注入失败必须可见：此前 .catch(() => '') 把失败吞成"无提示词"，
+        // 表现为角色卡完全不生效（模型按默认糖包助手回答）且无任何提示。
+        const tangguanPrompt = await App.tangguan.preparePrompt(conv, query).catch((error) => {
+          console.warn('[糖馆] 角色人设注入失败：', error && (error.message || error));
+          if (!App.chat._personaWarned) {
+            App.chat._personaWarned = true;
+            App.ui.toast('角色人设注入失败，本轮按默认助手回答（详情见控制台）');
+          }
+          return '';
+        });
+        if (tangguanPrompt) {
+          systemContent += '\n\n' + tangguanPrompt;
+          console.debug('[糖馆] 人设已注入，长度', tangguanPrompt.length);
+        } else {
+          console.warn('[糖馆] 本轮没有人设提示词（角色详情读取失败或会话缺少角色绑定）');
+        }
       }
       // 对话级模型优先（智能体指定），否则用聊天默认模型；联网同理
       const model = (conv.model && s.models.includes(conv.model)) ? conv.model : s.model;
