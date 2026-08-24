@@ -238,7 +238,7 @@
       const box = $('modelProfileList');
       if (!box) return;
       const modules = [
-        ['chat', '聊天'], ['agent', '糖码'], ['doc', '糖读'], ['image', '图片'], ['create', '糖创'], ['tangguan', '糖馆'],
+        ['chat', '聊天'], ['agent', '糖码'], ['doc', '糖读'], ['image', '图片'], ['create', '糖创'], ['tavern', '糖馆'],
       ];
       box.innerHTML = modules.map(([id, label]) => {
         const provider = App.ui.modelProviderFor(id);

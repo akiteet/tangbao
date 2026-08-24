@@ -18,10 +18,10 @@ function main() {
   const router = read('src/renderer/router.js');
   const app = read('src/renderer/app.js');
   const chat = read('src/renderer/views/chat/chat.js');
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   const ui = read('src/renderer/components/ui.js');
   const names = [
-    'bootMs', 'moduleSwitchMs', 'tangguanRenderMs', 'inputHandlerMs',
+    'bootMs', 'moduleSwitchMs', 'tavernRenderMs', 'inputHandlerMs',
     'streamRenderMs', 'stateSerializeMs', 'fileWriteMs', 'sqliteSyncMs',
     'ipcQueueDepth', 'stateBytes', 'messageCount',
   ];
@@ -34,7 +34,7 @@ function main() {
   assert(app.includes("measure('bootMs'"), 'boot timing is missing');
   assert(chat.includes("measure('inputHandlerMs'"), 'input timing is missing');
   assert(chat.includes("measure('streamRenderMs'"), 'stream timing is missing');
-  assert(tangguan.includes("measure('tangguanRenderMs'"), 'Tangguan render timing is missing');
+  assert(tavern.includes("measure('tavernRenderMs'"), 'Tangguan render timing is missing');
   assert(ui.includes('scheduleSidebarRender()'), 'sidebar search scheduling is missing');
   console.log(JSON.stringify({ ok: true, metrics: names, persistence: 'memory-only', defaultEnabled: false }, null, 2));
 }

@@ -1,7 +1,7 @@
 'use strict';
 
 // 分层说明（v1.1.5）：本文件是糖馆领域契约与预设角色卡（core 层）；
-// src/infrastructure/tangguan/tangguan-store.js 是同名持久化实现（infrastructure 层）。
+// src/infrastructure/tavern/tavern-store.js 是同名持久化实现（infrastructure 层）。
 // 同名是有意的分层设计，不是重复代码。
 //
 // Tangguan's data contract is deliberately independent from the app state.

@@ -28,7 +28,7 @@ const dataLocation = require('../infrastructure/storage/data-location');
 const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
 const { userSkillsDirsList, createMainSkills } = require('./main-skills'); // v1.1.7 批次 E：技能目录辅助 + 技能 IPC 工厂
 const { createMainStorage } = require('./main-storage'); // v1.1.8 批次 F：存储域工厂
-const { createMainTangguan } = require('./main-tangguan'); // v1.1.8 批次 F：糖馆域工厂
+const { createMainTangguan } = require('./main-tavern'); // v1.1.8 批次 F：糖馆域工厂
 const { createMainAgentRuns } = require('./main-agent-runs'); // v1.1.8 批次 F：糖码 Run 域工厂
 const { createMainFloat } = require('./main-float'); // v1.1.8 批次 F：浮窗域工厂
 let createRunStoreProxy; // 由底部 createMainAgentRuns 初始化后赋值，whenReady 构造 runStore 用

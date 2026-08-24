@@ -256,7 +256,7 @@ test('legacy snapshots append Tangguan without changing existing module order', 
     },
   }));
   assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(context.App.state.settings.enabledModules), ['chat', 'agent', 'tangguan']);
+  assert.deepEqual(Array.from(context.App.state.settings.enabledModules), ['chat', 'agent', 'tavern']);
 });
 
 test('account mutations persist metadata before touching secrets and restore on either failure', () => {

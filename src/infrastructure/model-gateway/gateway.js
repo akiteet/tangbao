@@ -36,10 +36,11 @@ const KIND = {
 // Module ids are UI concepts. Accept them only as a compatibility alias at
 // the boundary and normalize them before endpoint validation and telemetry.
 const KIND_ALIASES = Object.freeze({
-  tangguan: 'chat',
+  tavern: 'chat',
+  tangguan: 'chat', // v1.1.8 改名前的旧模块 id，兼容旧遥测数据/旧调用方
   create: 'chat',
   workflow: 'chat',
-  'tangguan/chat': 'chat',
+  'tavern/chat': 'chat',
   'create/chat': 'chat',
 });
 
@@ -716,7 +717,7 @@ async function createEmbeddings(ref, model, texts, options) {
   if (!key) throw jsonError(401, '该来源尚未配置 API Key', 'permission_failure');
   if (!targetModel || !inputs.length) throw jsonError(400, '缺少 Embedding 模型或输入', 'invalid_result');
   const adapter = detectAdapter(targetModel, base);
-  const call = beginModelCall({ scope: 'tangguan', callType: options && options.callType || 'embedding_index', modelId: targetModel, provider: adapter, accountRef: ref, module: 'tangguan' });
+  const call = beginModelCall({ scope: 'tavern', callType: options && options.callType || 'embedding_index', modelId: targetModel, provider: adapter, accountRef: ref, module: 'tavern' });
   const startedAt = Date.now();
   let status = 'completed';
   let errorType = '';

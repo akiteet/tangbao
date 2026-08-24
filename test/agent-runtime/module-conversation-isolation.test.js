@@ -26,11 +26,11 @@ function close(server) {
 }
 
 test('gateway normalizes legacy module request kinds', () => {
-  assert.equal(Gateway.normalizeKind('tangguan'), 'chat');
+  assert.equal(Gateway.normalizeKind('tavern'), 'chat');
   assert.equal(Gateway.normalizeKind('create'), 'chat');
   assert.equal(Gateway.normalizeKind('workflow'), 'chat');
   assert.equal(Gateway.normalizeKind({ type: 'create' }), 'chat');
-  assert.equal(Gateway.normalizeKind({ requestType: 'tangguan' }), 'chat');
+  assert.equal(Gateway.normalizeKind({ requestType: 'tavern' }), 'chat');
   assert.equal(Gateway.normalizeKind('images'), 'images');
 });
 
@@ -79,10 +79,10 @@ test('renderer gateway boundary strips nested module-only fields', async () => {
   vm.runInNewContext(read('src/renderer/runtime.js'), context, { filename: 'runtime.js' });
   await context.App.rt.gatewayFetch({
     ref: 'acc:test',
-    kind: 'tangguan',
+    kind: 'tavern',
     payload: {
       model: 'test-model',
-      extra_body: { web: false, requestKind: 'tangguan', keep: true },
+      extra_body: { web: false, requestKind: 'tavern', keep: true },
       messages: [{ role: 'user', content: { text: 'hello', allowTools: false } }],
     },
   });
@@ -144,7 +144,7 @@ test('legacy module conversations stay out of regular state after sidecar migrat
     const state = {
       conversations: [
         { id: 'chat-1', title: 'Regular', messages: [], updatedAt: 1 },
-        { id: 'tg-1', title: 'Role', tangguanCharacterId: 'role-1', messages: [], updatedAt: 2 },
+        { id: 'tg-1', title: 'Role', tavernCharacterId: 'role-1', messages: [], updatedAt: 2 },
         { id: 'create-1', title: 'Task', originModule: 'create', messages: [], updatedAt: 3 },
       ],
       activeId: 'tg-1',
@@ -152,7 +152,7 @@ test('legacy module conversations stay out of regular state after sidecar migrat
     const result = store.migrateLegacy(state);
     assert.equal(result.ok, true);
     assert.deepEqual(result.state.conversations.map((item) => item.id), ['chat-1']);
-    assert.deepEqual(store.read('tangguan').data.conversations.map((item) => item.id), ['tg-1']);
+    assert.deepEqual(store.read('tavern').data.conversations.map((item) => item.id), ['tg-1']);
     assert.deepEqual(store.read('create').data.conversations.map((item) => item.id), ['create-1']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -160,16 +160,16 @@ test('legacy module conversations stay out of regular state after sidecar migrat
 });
 
 test('Tangguan origin marker is migrated into the isolated sidecar', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tangguan-marker-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-marker-'));
   try {
     const store = ModuleSessions.createStore({ rootDir: dir });
     const result = store.migrateLegacy({
-      conversations: [{ id: 'tg-origin', originModule: 'tangguan', messages: [], updatedAt: 1 }],
+      conversations: [{ id: 'tg-origin', originModule: 'tavern', messages: [], updatedAt: 1 }],
       activeId: 'tg-origin',
     });
     assert.equal(result.ok, true);
     assert.equal(result.state.conversations.length, 0);
-    assert.equal(store.read('tangguan').data.conversations[0].id, 'tg-origin');
+    assert.equal(store.read('tavern').data.conversations[0].id, 'tg-origin');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -240,10 +240,10 @@ test('Tangchuang new sessions inherit a live agent configuration without message
 
 test('module headers use the shared model selector while accounts stay in settings', () => {
   const create = read('src/renderer/views/workflows/create.js');
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   const ui = readComponentsSource();
   assert.doesNotMatch(create, /moduleProviderMarkup\('create'\)/);
-  assert.doesNotMatch(tangguan, /moduleProviderMarkup\('tangguan'\)/);
+  assert.doesNotMatch(tavern, /moduleProviderMarkup\('tavern'\)/);
   assert.match(ui, /function currentModelModule\(\)/);
   assert.match(ui, /const p = App\.getProvider\(module\)/);
   assert.match(ui, /const conversationModel = conv && conv\.model && models\.includes\(conv\.model\)/);
@@ -260,14 +260,14 @@ test('module conversations are removed from regular state on sidecar write', () 
 
 test('module session deletion confirms, removes from the sidecar, and preserves empty-state support', () => {
   const chat = read('src/renderer/views/chat/chat.js');
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   const create = read('src/renderer/views/workflows/create.js');
   assert.match(chat, /deleteConversation\(id, options\)/);
   assert.match(chat, /removeModuleConversation\(owner, target\)/);
   assert.match(chat, /setActiveConversationId\(owner, result\.activeId \|\| null\)/);
-  assert.match(tangguan, /data-tg-session-delete/);
-  assert.match(tangguan, /App\.chat\.deleteConversation\(conv\.id, \{ owner: 'tangguan' \}\)/);
-  assert.match(tangguan, /setUiPointer\(selected && selected\.id/);
+  assert.match(tavern, /data-tg-session-delete/);
+  assert.match(tavern, /App\.chat\.deleteConversation\(conv\.id, \{ owner: 'tavern' \}\)/);
+  assert.match(tavern, /setUiPointer\(selected && selected\.id/);
   assert.match(create, /data-create-session-delete/);
   assert.match(create, /App\.chat\.deleteConversation\(conv\.id, \{ owner: 'create' \}\)/);
   assert.match(create, /taskSessionConversationId = result && result\.activeId/);

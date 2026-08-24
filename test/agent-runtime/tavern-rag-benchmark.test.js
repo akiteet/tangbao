@@ -7,8 +7,8 @@ const { performance } = require('node:perf_hooks');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const Core = require('../../src/core/tangguan/tangguan-store');
-const KeywordIndex = require('../../src/infrastructure/tangguan/keyword-index');
+const Core = require('../../src/core/tavern/tavern-store');
+const KeywordIndex = require('../../src/infrastructure/tavern/keyword-index');
 
 function makeMemories() {
   const memories = [];

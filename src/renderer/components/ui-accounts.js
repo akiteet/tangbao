@@ -351,7 +351,7 @@
       // 账户没了，它的 Key 也不该继续留在系统密钥库里
       if (s.defaultAccountId === id) s.defaultAccountId = s.accounts.length ? s.accounts[0].id : '';
       // 清理引用了被删账户的模块选择
-      for (const m of ['default', 'chat', 'agent', 'create', 'tangguan', 'image', 'doc']) {
+      for (const m of ['default', 'chat', 'agent', 'create', 'tavern', 'image', 'doc']) {
         const p = s.providers[m];
         if (p && p.accountId === id) { p.accountId = '__default__'; p.model = ''; }
       }

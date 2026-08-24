@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const Core = require('../../core/tangguan/tangguan-store');
+const Core = require('../../core/tavern/tavern-store');
 const { readJson } = require('../util/json');
 
 const VERSION = 1;

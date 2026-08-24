@@ -6,7 +6,7 @@
   const esc = (value) => App.escapeHtml(String(value == null ? '' : value));
   const call = (name, fallback, input) => {
     try {
-      const fn = App.services.tangguan && App.services.tangguan[name];
+      const fn = App.services.tavern && App.services.tavern[name];
       return fn ? fn(input) : fallback;
     } catch (_) { return fallback; }
   };
@@ -66,17 +66,17 @@
     return promise;
   }
 
-  function tangguanUi() {
+  function tavernUi() {
     const settings = App.state && App.state.settings;
     if (!settings) return null;
-    settings.tangguanUi = settings.tangguanUi && typeof settings.tangguanUi === 'object'
-      ? settings.tangguanUi : { lastCharacterId: '', lastConversationId: '' };
-    return settings.tangguanUi;
+    settings.tavernUi = settings.tavernUi && typeof settings.tavernUi === 'object'
+      ? settings.tavernUi : { lastCharacterId: '', lastConversationId: '' };
+    return settings.tavernUi;
   }
 
   function setUiPointer(characterId, conversationId, options) {
     const opts = options && typeof options === 'object' ? options : {};
-    const ui = tangguanUi();
+    const ui = tavernUi();
     if (!ui) return;
     const nextCharacterId = characterId ? String(characterId) : '';
     const nextConversationId = conversationId ? String(conversationId) : '';
@@ -89,7 +89,7 @@
   function isValidSession(item, characterId) {
     return !!(item
       && typeof item.id === 'string'
-      && item.tangguanCharacterId === String(characterId || '')
+      && item.tavernCharacterId === String(characterId || '')
       && Array.isArray(item.messages)
       && item.messages.every((message) => message
         && typeof message === 'object'
@@ -99,7 +99,7 @@
 
   function characterSessions(characterId) {
     const source = App.chat && App.chat.conversationList
-      ? App.chat.conversationList('tangguan')
+      ? App.chat.conversationList('tavern')
       : (Array.isArray(App.state && App.state.conversations) ? App.state.conversations : []);
     return source
       .filter((item) => isValidSession(item, characterId))
@@ -149,10 +149,10 @@
 
   function restoreConversation(characterId) {
     const sessions = characterSessions(characterId);
-    const ui = tangguanUi() || {};
+    const ui = tavernUi() || {};
     const preferred = sessions.find((item) => item.id === ui.lastConversationId);
     const conversation = preferred || sessions[0] || null;
-    if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tangguan', conversation ? conversation.id : null);
+    if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tavern', conversation ? conversation.id : null);
     setUiPointer(characterId, conversation && conversation.id);
     return conversation;
   }
@@ -367,7 +367,7 @@
   function characterHeaderHtml() {
     const sessions = selected ? characterSessions(selected.id) : [];
     const active = App.chat && App.chat.activeConv ? App.chat.activeConv() : null;
-    const current = active && active.tangguanCharacterId === (selected && selected.id) ? active : null;
+    const current = active && active.tavernCharacterId === (selected && selected.id) ? active : null;
     const tagline = selected && (selected.tagline || selected.description) || '选择一个角色，开始一段沉浸式会话';
     return `<div class="tg-character-header">
       <div class="tg-character-identity">${avatar(selected, 'tg-header-avatar')}<div><h1>${esc(selected ? selected.name : '糖馆')}</h1><p>${esc(tagline)}</p></div></div>
@@ -459,13 +459,13 @@
 
   function render() {
     const renderStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
-    const root = $('tangguanView');
+    const root = $('tavernView');
     if (!root) return;
     if (selected) {
       const active = App.chat && App.chat.activeConv ? App.chat.activeConv() : null;
       if (!isValidSession(active, selected.id)) restoreConversation(selected.id);
-    } else if (App.chat && App.chat.activeConversationId && App.chat.activeConversationId('tangguan')) {
-      App.chat.setActiveConversationId('tangguan', null);
+    } else if (App.chat && App.chat.activeConversationId && App.chat.activeConversationId('tavern')) {
+      App.chat.setActiveConversationId('tavern', null);
     }
     let shell = root.querySelector('.tg-shell');
     if (!shell) {
@@ -491,10 +491,10 @@
     syncChatSurface(surface);
     if (App.ui && App.ui.syncModelSelect) App.ui.syncModelSelect();
     bind(root);
-    if (!App.tangguan._resizeBound) {
-      App.tangguan._resizeBound = true;
+    if (!App.tavern._resizeBound) {
+      App.tavern._resizeBound = true;
       window.addEventListener('resize', () => {
-        if (App.state.view !== 'tangguan' || resizeFrame) return;
+        if (App.state.view !== 'tavern' || resizeFrame) return;
         resizeFrame = requestAnimationFrame(() => {
           resizeFrame = 0;
           const desktop = window.innerWidth > 900;
@@ -506,7 +506,7 @@
       });
     }
     lastDesktopLayout = desktop;
-    if (App.perf) App.perf.measure('tangguanRenderMs', renderStarted, {
+    if (App.perf) App.perf.measure('tavernRenderMs', renderStarted, {
       desktop,
       characterCount: characters.length,
       selected: !!selected,
@@ -517,11 +517,11 @@
   function syncChatSurface(surface) {
     if (!surface || !App.chat || !App.chat.mountSurface) return;
     const current = App.chat.surface && App.chat.surface();
-    const conversationId = App.chat.activeConversationId ? App.chat.activeConversationId('tangguan') : null;
+    const conversationId = App.chat.activeConversationId ? App.chat.activeConversationId('tavern') : null;
     const needsMount = !current
       || current.root !== surface
-      || current.mode !== 'tangguan'
-      || current.owner !== 'tangguan'
+      || current.mode !== 'tavern'
+      || current.owner !== 'tavern'
       || (current.conversationId || null) !== conversationId;
     if (!needsMount) {
       // setActiveConversationId updates the mounted surface pointer before
@@ -531,7 +531,7 @@
       App.chat.renderMessages();
       return;
     }
-    App.chat.mountSurface({ root: surface, conversationId, mode: 'tangguan', owner: 'tangguan' });
+    App.chat.mountSurface({ root: surface, conversationId, mode: 'tavern', owner: 'tavern' });
     if (App.chat.syncImgBtn) App.chat.syncImgBtn();
   }
 
@@ -612,7 +612,7 @@
       render();
     });
     modal.querySelectorAll('[data-tg-regenerate]').forEach((button) => button.addEventListener('click', async () => {
-      const provider = App.getProvider('tangguan') || {};
+      const provider = App.getProvider('tavern') || {};
       button.disabled = true;
       try {
         const response = await Promise.resolve(call('generateDraft', { ok: false }, { ref: provider.ref, model: provider.model, brief: `${brief}\nOnly improve this field: ${button.dataset.tgRegenerate}`, field: button.dataset.tgRegenerate }));
@@ -629,7 +629,7 @@
     const item = collectEditor();
     if (!item.name) { App.ui.toast('请填写角色名称'); return false; }
     const result = await Promise.resolve(call('saveCharacter', { ok: false }, { character: item, expectedRevision: revision }));
-    if (!result || !result.ok) { App.ui.toast(result && result.code === 'tangguan_revision_conflict' ? '角色卡已被其他窗口修改，请重新载入' : '角色卡保存失败'); return false; }
+    if (!result || !result.ok) { App.ui.toast(result && result.code === 'tavern_revision_conflict' ? '角色卡已被其他窗口修改，请重新载入' : '角色卡保存失败'); return false; }
     invalidateCharacterDetail(item.id);
     editorDirty = false;
     App.ui.toast('角色卡已保存');
@@ -703,7 +703,7 @@
     characters = result && result.ok ? all : [];
     rebuildCharacterSearchIndex();
     revision = Number(result && result.revision) || revision;
-    const ui = tangguanUi() || {};
+    const ui = tavernUi() || {};
     const hasCharacter = (id) => !!id && characters.some((item) => item.id === String(id));
     const explicit = hasCharacter(preferredId) ? String(preferredId) : '';
     const persisted = hasCharacter(ui.lastCharacterId) ? String(ui.lastCharacterId) : '';
@@ -720,7 +720,7 @@
       resetEditorBaseline();
     } else {
       memories = [];
-      if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tangguan', null);
+      if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tavern', null);
       resetEditorBaseline();
       setUiPointer('', '');
     }
@@ -778,7 +778,7 @@
       selected = null;
       selectedId = '';
       memories = [];
-      if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tangguan', null);
+      if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tavern', null);
       activeDrawer = '';
       editorDirty = false;
       editorBase = null;
@@ -797,10 +797,10 @@
       characters = Array.isArray(used.characters) ? used.characters : characters;
       selected = characters.find((item) => item.id === selected.id) || selected;
     }
-    const conv = App.chat.newConversation(null, { stay: 'tangguan', tangguanCharacterId: selected.id, persist: false });
+    const conv = App.chat.newConversation(null, { stay: 'tavern', tavernCharacterId: selected.id, persist: false });
     if (!conv) return;
-    conv.tangguanCharacterId = selected.id;
-    conv.tangguanRestricted = true;
+    conv.tavernCharacterId = selected.id;
+    conv.tavernRestricted = true;
     conv.web = false;
     conv.allowWeb = false;
     conv.allowAttachments = false;
@@ -808,7 +808,7 @@
     conv.title = '新会话';
     conv.titleMode = 'auto';
     conv.systemPrompt = selected.systemPrompt || '';
-    if (App.chat.setActiveConversationId) App.chat.setActiveConversationId('tangguan', conv.id);
+    if (App.chat.setActiveConversationId) App.chat.setActiveConversationId('tavern', conv.id);
     // Legacy snapshots used App.state.activeId = conv.id; module sessions now
     // keep this pointer in their own sidecar and never expose it to Chat.
     setUiPointer(selected.id, conv.id, { persist: false });
@@ -818,7 +818,7 @@
 
   function findSession(id) {
     const source = App.chat && App.chat.conversationList
-      ? App.chat.conversationList('tangguan')
+      ? App.chat.conversationList('tavern')
       : (Array.isArray(App.state && App.state.conversations) ? App.state.conversations : []);
     return source
       .find((item) => item && item.id === String(id || '') && isValidSession(item, selected && selected.id));
@@ -841,8 +841,8 @@
   function deleteSession(id) {
     const conv = findSession(id);
     if (!conv || !window.confirm('\u5220\u9664\u6b64\u4f1a\u8bdd\uff1f\u5220\u9664\u540e\u65e0\u6cd5\u6062\u590d\u3002')) return false;
-    const activeId = App.chat.activeConversationId ? App.chat.activeConversationId('tangguan') : null;
-    const result = App.chat.deleteConversation(conv.id, { owner: 'tangguan' });
+    const activeId = App.chat.activeConversationId ? App.chat.activeConversationId('tavern') : null;
+    const result = App.chat.deleteConversation(conv.id, { owner: 'tavern' });
     if (activeId === conv.id) setUiPointer(selected && selected.id, result && result.activeId ? result.activeId : '', { persist: false });
     render();
     return !!(result && result.ok !== false);
@@ -861,11 +861,11 @@
     const conv = findSession(id);
     if (!conv || !App.ui || !App.ui._convToMarkdown) return;
     const markdown = App.ui._convToMarkdown(conv);
-    const safeName = String(conv.title || 'tangguan-session').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    const safeName = String(conv.title || 'tavern-session').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
     const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${safeName || 'tangguan-session'}.md`;
+    anchor.download = `${safeName || 'tavern-session'}.md`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -881,7 +881,7 @@
     // change. Rebind only the newly created selects while keeping delegated
     // workspace handlers single-bound.
     if (root.dataset.tgBound === '1') {
-      if (App.ui && App.ui.bindModuleProvider) App.ui.bindModuleProvider(root, 'tangguan', () => render());
+      if (App.ui && App.ui.bindModuleProvider) App.ui.bindModuleProvider(root, 'tavern', () => render());
       return;
     }
     root.dataset.tgBound = '1';
@@ -957,7 +957,7 @@
            memories = [];
            editorBase = null;
            activeDrawer = 'editor';
-           if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tangguan', null);
+           if (App.chat && App.chat.setActiveConversationId) App.chat.setActiveConversationId('tavern', null);
            setUiPointer('', '');
            editorDirty = false;
            editorSnapshot = '';
@@ -967,7 +967,7 @@
        }
       const starter = target.closest('[data-tg-starter]');
       if (starter) {
-        if (!App.chat.activeConv() || !App.chat.activeConv().tangguanCharacterId) await startSession();
+        if (!App.chat.activeConv() || !App.chat.activeConv().tavernCharacterId) await startSession();
         const input = document.getElementById('input');
         if (input) { input.value = starter.dataset.tgStarter || ''; App.chat.autoSize(); App.chat.updateSendEnabled(); input.focus(); }
         return;
@@ -978,7 +978,7 @@
       const sessionOpen = target.closest('[data-tg-session-open]');
       if (sessionOpen) {
         const conv = findSession(sessionOpen.dataset.tgSessionOpen);
-        if (conv && App.chat && App.chat.activate) { App.chat.activate(conv.id, { stay: 'tangguan', persist: false, render: false }); setUiPointer(selected.id, conv.id); render(); }
+        if (conv && App.chat && App.chat.activate) { App.chat.activate(conv.id, { stay: 'tavern', persist: false, render: false }); setUiPointer(selected.id, conv.id); render(); }
         return;
       }
       const rename = target.closest('[data-tg-session-rename]'); if (rename) { await renameSession(rename.dataset.tgSessionRename); return; }
@@ -1010,7 +1010,7 @@
       if (target.closest('[data-tg-draft]')) {
         const button = target.closest('[data-tg-draft]'); const brief = (($('tgBrief') && $('tgBrief').value) || '').trim();
         if (!brief) { App.ui.toast('请先描述你想要的角色'); return; }
-        const provider = App.getProvider('tangguan') || {}; const status = $('tgDraftStatus'); button.disabled = true;
+        const provider = App.getProvider('tavern') || {}; const status = $('tgDraftStatus'); button.disabled = true;
         if (status) status.textContent = '正在生成草稿，确认前不会写入角色卡。';
         try { const result = await Promise.resolve(call('generateDraft', { ok: false }, { ref: provider.ref, model: provider.model, brief })); if (!result || !result.ok) { if (status) status.textContent = (result && result.error) || 'AI 草稿生成失败'; return; } showDraftPreview(result.draft, brief); } finally { button.disabled = false; }
         return;
@@ -1068,17 +1068,17 @@
     root.addEventListener('change', (event) => {
       if (event.target.id === 'tgSessionSelect') {
         const conv = findSession(event.target.value);
-        if (conv && App.chat) { App.chat.activate(conv.id, { stay: 'tangguan', persist: false, render: false }); setUiPointer(selected.id, conv.id); render(); }
+        if (conv && App.chat) { App.chat.activate(conv.id, { stay: 'tavern', persist: false, render: false }); setUiPointer(selected.id, conv.id); render(); }
       }
     });
-    if (App.ui && App.ui.bindModuleProvider) App.ui.bindModuleProvider(root, 'tangguan', () => render());
-    if (!App.tangguan._escBound) {
-      App.tangguan._escBound = true;
-      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && App.state.view === 'tangguan' && activeDrawer) closeDrawer(); });
+    if (App.ui && App.ui.bindModuleProvider) App.ui.bindModuleProvider(root, 'tavern', () => render());
+    if (!App.tavern._escBound) {
+      App.tavern._escBound = true;
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && App.state.view === 'tavern' && activeDrawer) closeDrawer(); });
     }
   }
 
-  App.tangguan = {
+  App.tavern = {
     async ensureSession() {
       if (!selected || !App.chat || !App.chat.activeConv) return null;
       const active = App.chat.activeConv();
@@ -1110,13 +1110,13 @@
     onShow() { this.init().then((fresh) => { if (!fresh) render(); }).catch(() => render()); },
     renderWelcome,
     async preparePrompt(conv, query) {
-      if (!conv || !conv.tangguanCharacterId) return '';
-      const detail = await getCharacterDetail(conv.tangguanCharacterId);
+      if (!conv || !conv.tavernCharacterId) return '';
+      const detail = await getCharacterDetail(conv.tavernCharacterId);
       if (!detail || !detail.ok || !detail.character) {
         console.warn('[糖馆] 角色详情读取失败，人设注入跳过：', (detail && (detail.error || detail.code)) || '未知原因');
         return '';
       }
-      const provider = App.getProvider('tangguan') || {};
+      const provider = App.getProvider('tavern') || {};
       const result = await Promise.resolve(call('retrieveContext', { ok: false }, { characterId: detail.character.id, query: query || '', tokenBudget: 1000, limit: 8, semantic: detail.character.embeddingEnabled === true, ref: provider.ref, model: provider.model }));
       const card = detail.character;
       const matureEnabled = matureMode && card.matureAllowed === true;

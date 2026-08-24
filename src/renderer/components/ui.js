@@ -90,7 +90,7 @@
       .map((item) => String(item));
   }
 
-  const MODEL_MODULES = new Set(['chat', 'create', 'tangguan']);
+  const MODEL_MODULES = new Set(['chat', 'create', 'tavern']);
 
   function currentModelModule() {
     const surface = App.chat && typeof App.chat.surface === 'function' ? App.chat.surface() : null;
@@ -104,8 +104,8 @@
     const conv = App.chat && typeof App.chat.activeConv === 'function' ? App.chat.activeConv() : null;
     if (!conv) return null;
     if (module === 'create') return conv.originModule === 'create' ? conv : null;
-    if (module === 'tangguan') return conv.originModule === 'tangguan' || !!conv.tangguanCharacterId ? conv : null;
-    return conv.originModule === 'create' || conv.originModule === 'tangguan' || conv.tangguanCharacterId ? null : conv;
+    if (module === 'tavern') return conv.originModule === 'tavern' || !!conv.tavernCharacterId ? conv : null;
+    return conv.originModule === 'create' || conv.originModule === 'tavern' || conv.tavernCharacterId ? null : conv;
   }
 
   App.ui = {
@@ -723,7 +723,7 @@
         btn.classList.remove('danger');
         App.state.settings.accounts = [];
         App.state.settings.defaultAccountId = '';
-        const modules = ['default', 'chat', 'agent', 'create', 'tangguan', 'image', 'doc'];
+        const modules = ['default', 'chat', 'agent', 'create', 'tavern', 'image', 'doc'];
         modules.forEach(m => { App.state.settings.providers[m] = { accountId: '__default__', apiBase: '', model: '' }; });
         // 账户与模块配置清空了，密钥库里对应的 Key 也要一并删掉（联网搜索 Key 属于另一块设置，不动）
         if (App.rt && App.rt.deleteSecretsByPrefix) {

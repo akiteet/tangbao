@@ -181,7 +181,7 @@
     // 统一的模型调用入口。渲染进程只给 ref（密钥引用）+ kind（路径白名单）+ payload，
     // 目标地址和密钥都由主进程解析，前端既指定不了转发目标，也接触不到密钥。
     normalizeGatewayKind(kind) {
-      const aliases = { tangguan: 'chat', create: 'chat', workflow: 'chat', 'tangguan/chat': 'chat', 'create/chat': 'chat' };
+      const aliases = { tavern: 'chat', create: 'chat', workflow: 'chat', 'tavern/chat': 'chat', 'create/chat': 'chat' };
       const source = kind && typeof kind === 'object'
         ? (kind.kind || kind.type || kind.requestType)
         : kind;

@@ -91,15 +91,15 @@ async function installTangguanFixture(win) {
       return character ? { ok: true, character: JSON.parse(JSON.stringify(character)), memories: memories.filter((item) => item.characterId === id), revision: 1 } : { ok: false, character: null, memories: [], revision: 1 };
     };
     const regular = { id: 'smoke-regular-conversation', title: 'Regular Chat', messages: [{ role: 'user', content: 'regular conversation' }], updatedAt: now - 3000 };
-    const tangguanA = { id: 'smoke-tangguan-a', title: 'Archivist', tangguanCharacterId: characters[0].id, model: 'smoke-model-1', messages: [{ role: 'user', content: 'saved archive message' }, { role: 'assistant', content: 'saved archive answer' }], updatedAt: now - 2000 };
-    const tangguanB = { id: 'smoke-tangguan-b', title: 'Empty session', tangguanCharacterId: characters[0].id, messages: [], updatedAt: now - 3000 };
-    const tangguanCorrupt = { id: 'smoke-tangguan-corrupt', title: 'Corrupt session', tangguanCharacterId: characters[0].id, messages: { broken: true }, updatedAt: now + 1000 };
-    const navigatorSession = { id: 'smoke-tangguan-navigator', title: 'Navigator session', tangguanCharacterId: characters[1].id, messages: [{ role: 'assistant', content: 'navigator-only answer' }], updatedAt: now - 1500 };
+    const tavernA = { id: 'smoke-tavern-a', title: 'Archivist', tavernCharacterId: characters[0].id, model: 'smoke-model-1', messages: [{ role: 'user', content: 'saved archive message' }, { role: 'assistant', content: 'saved archive answer' }], updatedAt: now - 2000 };
+    const tavernB = { id: 'smoke-tavern-b', title: 'Empty session', tavernCharacterId: characters[0].id, messages: [], updatedAt: now - 3000 };
+    const tavernCorrupt = { id: 'smoke-tavern-corrupt', title: 'Corrupt session', tavernCharacterId: characters[0].id, messages: { broken: true }, updatedAt: now + 1000 };
+    const navigatorSession = { id: 'smoke-tavern-navigator', title: 'Navigator session', tavernCharacterId: characters[1].id, messages: [{ role: 'assistant', content: 'navigator-only answer' }], updatedAt: now - 1500 };
      // Module conversations live in their sidecar buckets. Keep the regular
      // state collection clean so this smoke test catches accidental leakage
      // back into the Chat sidebar.
      const moduleData = {
-       tangguan: { conversations: [tangguanCorrupt, tangguanB, tangguanA, navigatorSession], activeId: tangguanCorrupt.id, revision: 1 },
+       tavern: { conversations: [tavernCorrupt, tavernB, tavernA, navigatorSession], activeId: tavernCorrupt.id, revision: 1 },
        create: { conversations: [], activeId: null, revision: 0 },
      };
      App.moduleSessions = { status: 'active', data: JSON.parse(JSON.stringify(moduleData)) };
@@ -107,10 +107,10 @@ async function installTangguanFixture(win) {
      App.state.activeId = regular.id;
      App.state.settings.accounts = [{ id: 'smoke-account-a', name: 'Smoke account', models: ['smoke-model-1', 'smoke-model-2'] }];
      App.state.settings.providers = Object.assign({}, App.state.settings.providers || {}, {
-       tangguan: { accountId: 'smoke-account-a', model: 'smoke-model-2' },
+       tavern: { accountId: 'smoke-account-a', model: 'smoke-model-2' },
        create: { accountId: 'smoke-account-a', model: 'smoke-model-1' },
      });
-     App.state.settings.tangguanUi = { lastCharacterId: characters[0].id, lastConversationId: tangguanCorrupt.id };
+     App.state.settings.tavernUi = { lastCharacterId: characters[0].id, lastConversationId: tavernCorrupt.id };
      App.persist = () => {};
      // Make persistence deterministic inside each Electron smoke case while
      // preserving the same renderer-facing sidecar contract.
@@ -139,7 +139,7 @@ async function installTangguanFixture(win) {
        info: () => ({ ok: true }),
      };
      window.__tgSmokeState = { saveCharacterCalls: 0, draftCalls: 0, removeCalls: [] };
-     App.services.tangguan = {
+     App.services.tavern = {
       presets: () => ({ ok: true, presets: [{ id: 'smoke-preset', label: 'Smoke preset', patch: { tagline: 'Preset tagline' } }] }),
       getMatureMode: () => ({ ok: true, matureMode: false }),
       setMatureMode: () => ({ ok: true, matureMode: false }),
@@ -163,7 +163,7 @@ async function installTangguanFixture(win) {
     return true;
   })()`, true);
   await win.webContents.executeJavaScript(`(() => {
-    if (window.App && App.router && App.router.go) App.router.go('tangguan');
+    if (window.App && App.router && App.router.go) App.router.go('tavern');
     return true;
   })()`, true);
   await wait(120);
@@ -182,7 +182,7 @@ async function inspectTangguan(win, testCase) {
     await waitFor('.tg-workspace');
     const root = document.documentElement;
     const body = document.body;
-    const host = document.getElementById('tangguanView');
+    const host = document.getElementById('tavernView');
     const workspace = host && host.querySelector('.tg-workspace');
     const library = host && host.querySelector('.tg-library');
     const main = host && host.querySelector('.tg-main');
@@ -218,7 +218,7 @@ async function inspectTangguan(win, testCase) {
     if (selectedAvatar && ${testCase.width} > 900 && (selectedAvatar.getBoundingClientRect().width <= 0 || selectedAvatar.getBoundingClientRect().height <= 0)) failures.push('desktop character card avatar is collapsed');
     const header = host && host.querySelector('.tg-character-header h1');
     if (!header || !header.textContent.includes('Archivist')) failures.push('restored character header is missing');
-    const moduleProvider = host && host.querySelector('[data-module-provider="tangguan"]');
+    const moduleProvider = host && host.querySelector('[data-module-provider="tavern"]');
     const moduleAccountSelect = host && host.querySelector('[data-module-provider-account]');
     const modelButton = document.getElementById('modelSelectBtn');
     const modelDropdown = document.getElementById('modelDropdown');
@@ -226,27 +226,27 @@ async function inspectTangguan(win, testCase) {
     if (!modelButton || modelButton.hidden) failures.push('Tangguan common model selector is missing');
     if (!modelDropdown || modelDropdown.querySelectorAll('[data-model]').length < 2) failures.push('Tangguan common model selector did not expose account models');
     if (modelButton && !modelButton.textContent.includes('smoke-model-1')) failures.push('valid Tangguan conversation model override is not displayed');
-    const tangguanProviderBeforeModel = App.state.settings.providers.tangguan && App.state.settings.providers.tangguan.accountId;
-    const tangguanModelOption = modelDropdown && modelDropdown.querySelector('[data-model="smoke-model-2"]');
-    if (tangguanModelOption) tangguanModelOption.click();
-    if (!App.state.settings.providers.tangguan || App.state.settings.providers.tangguan.model !== 'smoke-model-2') failures.push('Tangguan model selection did not persist to the module provider');
-    if (tangguanProviderBeforeModel && App.state.settings.providers.tangguan.accountId !== tangguanProviderBeforeModel) failures.push('Tangguan model selection changed the configured account');
-    const tangguanOverride = App.chat.conversationList('tangguan').find((item) => item.id === 'smoke-tangguan-a');
-    if (!tangguanOverride || tangguanOverride.model !== 'smoke-model-2') failures.push('Tangguan conversation model override did not update');
+    const tavernProviderBeforeModel = App.state.settings.providers.tavern && App.state.settings.providers.tavern.accountId;
+    const tavernModelOption = modelDropdown && modelDropdown.querySelector('[data-model="smoke-model-2"]');
+    if (tavernModelOption) tavernModelOption.click();
+    if (!App.state.settings.providers.tavern || App.state.settings.providers.tavern.model !== 'smoke-model-2') failures.push('Tangguan model selection did not persist to the module provider');
+    if (tavernProviderBeforeModel && App.state.settings.providers.tavern.accountId !== tavernProviderBeforeModel) failures.push('Tangguan model selection changed the configured account');
+    const tavernOverride = App.chat.conversationList('tavern').find((item) => item.id === 'smoke-tavern-a');
+    if (!tavernOverride || tavernOverride.model !== 'smoke-model-2') failures.push('Tangguan conversation model override did not update');
     const message = host && host.querySelector('#messages .assistant .bubble');
     const initialActiveId = App.state && App.state.activeId;
-    const initialModuleActiveId = App.chat && App.chat.activeConversationId ? App.chat.activeConversationId('tangguan') : null;
+    const initialModuleActiveId = App.chat && App.chat.activeConversationId ? App.chat.activeConversationId('tavern') : null;
     const initialMessageText = host && host.querySelector('#messages') ? host.querySelector('#messages').textContent : '';
     const initialWelcomeText = host && host.querySelector('#welcome') ? host.querySelector('#welcome').textContent : '';
     if (!message || !message.textContent.includes('saved archive answer')) failures.push('last Tangguan session was not restored');
     if (initialActiveId !== 'smoke-regular-conversation') failures.push('regular Chat active pointer was changed by Tangguan');
-    if (initialModuleActiveId !== 'smoke-tangguan-a') failures.push('corrupt Tangguan pointer was not recovered to the latest valid session');
+    if (initialModuleActiveId !== 'smoke-tavern-a') failures.push('corrupt Tangguan pointer was not recovered to the latest valid session');
     const restoredSessionTitle = host && host.querySelector('#tgSessionSelect') ? host.querySelector('#tgSessionSelect').textContent : '';
     if (!restoredSessionTitle.includes('saved archive message')) failures.push('legacy character-name session title did not fall back to the first user message');
     if (selectedCard && selectedCard.textContent.includes('Keeps long descriptions inside the character card')) failures.push('character card still renders the full description');
     if (selectedCard && !selectedCard.querySelector('[data-tg-recent]')) failures.push('character card does not expose recent-use status');
-    if (host && host.querySelector('[data-tg-session-open="smoke-tangguan-corrupt"]')) failures.push('corrupt session was exposed in the session list');
-    const emptySession = host && host.querySelector('#tgSessionSelect option[value="smoke-tangguan-b"]');
+    if (host && host.querySelector('[data-tg-session-open="smoke-tavern-corrupt"]')) failures.push('corrupt session was exposed in the session list');
+    const emptySession = host && host.querySelector('#tgSessionSelect option[value="smoke-tavern-b"]');
     if (!emptySession) failures.push('empty session is not available in the session selector');
 
     const editorButton = host && host.querySelector('[data-tg-open-editor]');
@@ -320,7 +320,7 @@ async function inspectTangguan(win, testCase) {
       if (!libraryDrawer || !libraryDrawer.classList.contains('tg-drawer-library-host')) failures.push('narrow library drawer did not open');
       const sessionTab = libraryDrawer && libraryDrawer.querySelector('[data-tg-library-tab="sessions"]');
       if (sessionTab) sessionTab.click();
-      const sessionContent = host && host.querySelector('.tg-drawer:not([hidden]) [data-tg-session-open="smoke-tangguan-a"]');
+      const sessionContent = host && host.querySelector('.tg-drawer:not([hidden]) [data-tg-session-open="smoke-tavern-a"]');
       if (!sessionContent) failures.push('narrow session drawer tab did not render sessions');
       if (mask && mask.hidden) failures.push('narrow drawer mask is not visible');
       if (mask) mask.click();
@@ -329,7 +329,7 @@ async function inspectTangguan(win, testCase) {
     // Select the empty session and assert that the old answer is removed.
     const select = host && host.querySelector('#tgSessionSelect');
     if (select) {
-      select.value = 'smoke-tangguan-b';
+      select.value = 'smoke-tavern-b';
       select.dispatchEvent(new Event('change', { bubbles: true }));
     }
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -339,82 +339,82 @@ async function inspectTangguan(win, testCase) {
      // Sending from an empty Tangguan surface must create its session in the
      // Tangguan sidecar instead of falling back to the regular Chat route.
      const beforeDirectTangguanRegular = App.state.conversations.length;
-     App.chat.setActiveConversationId('tangguan', null);
-     if (App.router && App.router.go) App.router.go('tangguan', { persist: false });
+     App.chat.setActiveConversationId('tavern', null);
+     if (App.router && App.router.go) App.router.go('tavern', { persist: false });
      await new Promise((resolve) => setTimeout(resolve, 40));
-     App.chat.setActiveConversationId('tangguan', null);
+     App.chat.setActiveConversationId('tavern', null);
      App.chat.renderMessages();
      const directTangguanInput = document.getElementById('input');
      if (directTangguanInput) directTangguanInput.value = 'direct Tangguan smoke message';
      if (directTangguanInput && App.chat.send) await App.chat.send();
      await new Promise((resolve) => setTimeout(resolve, 50));
      const directTangguan = App.chat.activeConv();
-     if (App.state.view !== 'tangguan') failures.push('direct Tangguan send escaped to regular Chat');
-     if (!directTangguan || directTangguan.originModule !== 'tangguan') failures.push('direct Tangguan send did not create a Tangguan conversation');
+     if (App.state.view !== 'tavern') failures.push('direct Tangguan send escaped to regular Chat');
+     if (!directTangguan || directTangguan.originModule !== 'tavern') failures.push('direct Tangguan send did not create a Tangguan conversation');
      if (App.state.conversations.length !== beforeDirectTangguanRegular) failures.push('direct Tangguan send changed regular Chat conversations');
 
      // New-session and session-management actions must operate on the current
      // character without silently changing the regular Chat collection.
      const beforeNewSession = App.state.conversations.length;
-     const beforeModuleSessions = App.chat && App.chat.conversationList ? App.chat.conversationList('tangguan').length : 0;
+     const beforeModuleSessions = App.chat && App.chat.conversationList ? App.chat.conversationList('tavern').length : 0;
      const newSessionButton = host && host.querySelector('[data-tg-new-session]');
      if (!newSessionButton) failures.push('new session action is missing');
        if (newSessionButton) {
       newSessionButton.click();
       await new Promise((resolve) => setTimeout(resolve, 40));
       if (App.state.conversations.length !== beforeNewSession) failures.push('new Tangguan session leaked into regular Chat conversations');
-      if (App.chat.conversationList('tangguan').length !== beforeModuleSessions + 1) failures.push('new session did not create exactly one module conversation');
+      if (App.chat.conversationList('tavern').length !== beforeModuleSessions + 1) failures.push('new session did not create exactly one module conversation');
       const newSession = App.chat.activeConv();
-      if (!newSession || newSession.tangguanCharacterId !== 'smoke-character-a') failures.push('new session escaped the selected character scope');
+      if (!newSession || newSession.tavernCharacterId !== 'smoke-character-a') failures.push('new session escaped the selected character scope');
       if (!newSession || !Array.isArray(newSession.messages) || newSession.messages.length !== 0) failures.push('new session did not start with an empty message list');
       if (newSession && newSession.title !== '新会话') failures.push('new session did not retain the empty-session title');
-      if (App.router && App.router.go) App.router.go('tangguan');
+      if (App.router && App.router.go) App.router.go('tavern');
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
      const sessionsButton = host && host.querySelector('[data-tg-open-sessions]');
      if (sessionsButton) sessionsButton.click();
      await new Promise((resolve) => setTimeout(resolve, 40));
-     const sessionRow = host && host.querySelector('[data-tg-session-open="smoke-tangguan-a"]');
+     const sessionRow = host && host.querySelector('[data-tg-session-open="smoke-tavern-a"]');
      if (!sessionRow) failures.push('session management panel did not render the target session');
      const originalPromptModal = App.ui.promptModal;
      App.ui.promptModal = async () => 'Renamed smoke session';
-     const renameButton = host && host.querySelector('[data-tg-session-rename="smoke-tangguan-a"]');
+     const renameButton = host && host.querySelector('[data-tg-session-rename="smoke-tavern-a"]');
      if (renameButton) renameButton.click();
      await new Promise((resolve) => setTimeout(resolve, 40));
      App.ui.promptModal = originalPromptModal;
-     const renamedSession = host && host.querySelector('[data-tg-session-open="smoke-tangguan-a"]');
+     const renamedSession = host && host.querySelector('[data-tg-session-open="smoke-tavern-a"]');
      if (!renamedSession || !renamedSession.textContent.includes('Renamed smoke session')) failures.push('session rename did not persist');
      const clearConfirm = window.confirm;
      window.confirm = () => true;
-     const clearButton = host && host.querySelector('[data-tg-session-clear="smoke-tangguan-a"]');
+     const clearButton = host && host.querySelector('[data-tg-session-clear="smoke-tavern-a"]');
      if (clearButton) clearButton.click();
      await new Promise((resolve) => setTimeout(resolve, 30));
      window.confirm = clearConfirm;
-     const cleared = App.chat.conversationList('tangguan').find((item) => item.id === 'smoke-tangguan-a');
+     const cleared = App.chat.conversationList('tavern').find((item) => item.id === 'smoke-tavern-a');
      if (!cleared || cleared.messages.length !== 0) failures.push('session clear did not remove only the target messages');
-     const exportButton = host && host.querySelector('[data-tg-session-export="smoke-tangguan-a"]');
+     const exportButton = host && host.querySelector('[data-tg-session-export="smoke-tavern-a"]');
      if (exportButton) exportButton.click();
-     const activeSessionRow = host && host.querySelector('[data-tg-session-open="smoke-tangguan-a"]');
+     const activeSessionRow = host && host.querySelector('[data-tg-session-open="smoke-tavern-a"]');
      if (activeSessionRow) activeSessionRow.click();
      await new Promise((resolve) => setTimeout(resolve, 35));
      const deleteConfirm = window.confirm;
-     const moduleCountBeforeDelete = App.chat.conversationList('tangguan').length;
+     const moduleCountBeforeDelete = App.chat.conversationList('tavern').length;
      window.confirm = () => false;
-     let deleteButton = host && host.querySelector('[data-tg-session-delete="smoke-tangguan-a"]');
+     let deleteButton = host && host.querySelector('[data-tg-session-delete="smoke-tavern-a"]');
      if (deleteButton) deleteButton.click();
      await new Promise((resolve) => setTimeout(resolve, 35));
-     if (App.chat.conversationList('tangguan').length !== moduleCountBeforeDelete) failures.push('cancelled Tangguan deletion changed the sidecar');
-     if (!App.chat.conversationList('tangguan').some((item) => item.id === 'smoke-tangguan-a')) failures.push('cancelled Tangguan deletion removed the session');
-     if (App.chat.activeConversationId('tangguan') !== 'smoke-tangguan-a') failures.push('cancelled Tangguan deletion changed the active session');
+     if (App.chat.conversationList('tavern').length !== moduleCountBeforeDelete) failures.push('cancelled Tangguan deletion changed the sidecar');
+     if (!App.chat.conversationList('tavern').some((item) => item.id === 'smoke-tavern-a')) failures.push('cancelled Tangguan deletion removed the session');
+     if (App.chat.activeConversationId('tavern') !== 'smoke-tavern-a') failures.push('cancelled Tangguan deletion changed the active session');
      window.confirm = () => true;
-     deleteButton = host && host.querySelector('[data-tg-session-delete="smoke-tangguan-a"]');
+     deleteButton = host && host.querySelector('[data-tg-session-delete="smoke-tavern-a"]');
      if (deleteButton) deleteButton.click();
      await new Promise((resolve) => setTimeout(resolve, 50));
      window.confirm = deleteConfirm;
-     if (App.chat.conversationList('tangguan').some((item) => item.id === 'smoke-tangguan-a')) failures.push('confirmed Tangguan deletion kept the session in the sidecar');
-     if (App.chat.activeConversationId('tangguan') === 'smoke-tangguan-a') failures.push('confirmed Tangguan deletion kept the deleted active id');
-     if (!window.__tgSmokeState.removeCalls.some((call) => call.module === 'tangguan' && call.id === 'smoke-tangguan-a')) failures.push('confirmed Tangguan deletion did not call the tangguan sidecar remover');
-     if (host && host.querySelector('[data-tg-session-open="smoke-tangguan-a"]')) failures.push('confirmed Tangguan deletion left the row in the UI');
+     if (App.chat.conversationList('tavern').some((item) => item.id === 'smoke-tavern-a')) failures.push('confirmed Tangguan deletion kept the session in the sidecar');
+     if (App.chat.activeConversationId('tavern') === 'smoke-tavern-a') failures.push('confirmed Tangguan deletion kept the deleted active id');
+     if (!window.__tgSmokeState.removeCalls.some((call) => call.module === 'tavern' && call.id === 'smoke-tavern-a')) failures.push('confirmed Tangguan deletion did not call the tavern sidecar remover');
+     if (host && host.querySelector('[data-tg-session-open="smoke-tavern-a"]')) failures.push('confirmed Tangguan deletion left the row in the UI');
 
      // Presets and AI drafts only change the editor draft. A save call is
      // expected only after the explicit Save character action.
@@ -462,17 +462,17 @@ async function inspectTangguan(win, testCase) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     const chatView = document.querySelector('[data-view="chat"]');
-    const tangguanView = document.querySelector('[data-view="tangguan"]');
+    const tavernView = document.querySelector('[data-view="tavern"]');
     const regularChat = App.chat && App.chat.activeConv ? App.chat.activeConv() : null;
     const regularMessages = document.getElementById('messages');
     if (!chatView || chatView.hidden) failures.push('returning to Chat did not show the regular Chat view');
-    if (!tangguanView || !tangguanView.hidden) failures.push('returning to Chat left the Tangguan view visible');
+    if (!tavernView || !tavernView.hidden) failures.push('returning to Chat left the Tangguan view visible');
     if (!regularChat || regularChat.id !== 'smoke-regular-conversation') failures.push('returning to Chat did not restore the regular conversation');
     if (regularMessages && !regularMessages.textContent.includes('regular conversation')) failures.push('regular Chat message DOM was not restored');
     const surfaceAfterReturn = App.chat && App.chat.surface ? App.chat.surface() : null;
-    if (surfaceAfterReturn && surfaceAfterReturn.owner === 'tangguan') failures.push('Tangguan Chat Surface remained mounted after returning to Chat');
+    if (surfaceAfterReturn && surfaceAfterReturn.owner === 'tavern') failures.push('Tangguan Chat Surface remained mounted after returning to Chat');
 
-    return { viewport: { width: window.innerWidth, height: window.innerHeight }, overflow, bounds: [host, workspace, library, main, surface].filter(Boolean).map(rect), initialActiveId, initialModuleActiveId, initialMessageText, initialWelcomeText, activeId: App.state && App.state.activeId, tangguanActiveId: App.chat && App.chat.activeConversationId ? App.chat.activeConversationId('tangguan') : null, tangguanUi: App.state && App.state.settings && App.state.settings.tangguanUi, activeConversation: App.chat && App.chat.activeConv ? (App.chat.activeConv() || null) : null, regularConversations: App.state && App.state.conversations ? App.state.conversations.map((item) => ({ id: item.id, messages: Array.isArray(item.messages) ? item.messages.map((message) => message.content) : null })) : [], moduleConversations: App.chat && App.chat.conversationList ? App.chat.conversationList('tangguan').map((item) => ({ id: item.id, tangguanCharacterId: item.tangguanCharacterId, messages: Array.isArray(item.messages) ? item.messages.map((message) => message.content) : null })) : [], messageText: host && host.querySelector('#messages') ? host.querySelector('#messages').textContent : '', selectedCardHtml: selectedCard ? selectedCard.innerHTML : '', failures };
+    return { viewport: { width: window.innerWidth, height: window.innerHeight }, overflow, bounds: [host, workspace, library, main, surface].filter(Boolean).map(rect), initialActiveId, initialModuleActiveId, initialMessageText, initialWelcomeText, activeId: App.state && App.state.activeId, tavernActiveId: App.chat && App.chat.activeConversationId ? App.chat.activeConversationId('tavern') : null, tavernUi: App.state && App.state.settings && App.state.settings.tavernUi, activeConversation: App.chat && App.chat.activeConv ? (App.chat.activeConv() || null) : null, regularConversations: App.state && App.state.conversations ? App.state.conversations.map((item) => ({ id: item.id, messages: Array.isArray(item.messages) ? item.messages.map((message) => message.content) : null })) : [], moduleConversations: App.chat && App.chat.conversationList ? App.chat.conversationList('tavern').map((item) => ({ id: item.id, tavernCharacterId: item.tavernCharacterId, messages: Array.isArray(item.messages) ? item.messages.map((message) => message.content) : null })) : [], messageText: host && host.querySelector('#messages') ? host.querySelector('#messages').textContent : '', selectedCardHtml: selectedCard ? selectedCard.innerHTML : '', failures };
   })()`, true);
 }
 
@@ -950,16 +950,16 @@ async function main() {
       await waitForApp(win);
       const realResult = await inspectRealRenderer(win, testCase);
       await installTangguanFixture(win);
-      const tangguanResult = await inspectTangguan(win, testCase);
+      const tavernResult = await inspectTangguan(win, testCase);
       await installDocFixture(win);
       const docResult = await inspectDoc(win, testCase);
       const createResult = await inspectCreateTaskSurface(win, testCase);
       await installFixture(win);
       const result = await inspect(win, testCase);
-      result.tangguanDiagnostics = tangguanResult;
+      result.tavernDiagnostics = tavernResult;
       result.docDiagnostics = docResult;
       result.createDiagnostics = createResult;
-      result.failures = (realResult.failures || []).concat(tangguanResult.failures || [], docResult.failures || [], createResult.failures || [], result.failures || []);
+      result.failures = (realResult.failures || []).concat(tavernResult.failures || [], docResult.failures || [], createResult.failures || [], result.failures || []);
       if (result.failures.length) {
         const screenshot = await captureFailure(win, failureDir, testCase);
         failures.push({ case: testCase.name, result, screenshot });

@@ -41,8 +41,8 @@
         local.push({ id: 'local:' + scope + ':' + id, title, detail });
       };
       const regularConversations = (App.state.conversations || []).filter((item) => !(item && (
-        item.tangguanCharacterId
-        || item.originModule === 'tangguan'
+        item.tavernCharacterId
+        || item.originModule === 'tavern'
         || item.originModule === 'create'
       )));
       for (const item of regularConversations) addLocal('conversation', item.id, item.title || '未命名会话', '会话');
@@ -60,8 +60,8 @@
       if (value.startsWith('local:conversation:')) {
         const id = value.slice('local:conversation:'.length);
         const conv = (App.state.conversations || []).find((item) => item && item.id === id);
-        const stay = conv && (conv.tangguanCharacterId || conv.originModule === 'tangguan')
-          ? 'tangguan' : conv && conv.originModule === 'create' ? 'create' : undefined;
+        const stay = conv && (conv.tavernCharacterId || conv.originModule === 'tavern')
+          ? 'tavern' : conv && conv.originModule === 'create' ? 'create' : undefined;
         App.chat.activate(id, stay ? { stay } : undefined);
         return;
       }

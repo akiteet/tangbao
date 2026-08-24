@@ -1879,7 +1879,7 @@ th { background: var(--hover-bg); font-weight: 600; }
   .agent-engine-stat { padding: 9px; }
 }
 
-/* v1.1.4：糖馆角色卡、快捷填写与角色限定世界书（沉浸式布局覆盖见后部 #tangguanView 块） */
+/* v1.1.4：糖馆角色卡、快捷填写与角色限定世界书（沉浸式布局覆盖见后部 #tavernView 块） */
 .tg-shell { width: 100%; min-height: 100%; display: flex; flex-direction: column; }
 .tg-library-head, .tg-editor-head, .tg-memory-actions, .tg-ai-row {
   display: flex;
@@ -2736,31 +2736,31 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 }
 
 /* v1.1.4 糖馆沉浸式工作区。放在旧糖馆规则之后，保证历史角色卡字段继续可用。 */
-.tangguan-view-content {
+.tavern-view-content {
   padding: 0;
   overflow: hidden;
 }
-#tangguanView {
+#tavernView {
   height: 100%;
   min-height: 0;
   padding: 0;
   overflow: hidden;
 }
-#tangguanView .tg-shell,
-#tangguanView .tg-workspace {
+#tavernView .tg-shell,
+#tavernView .tg-workspace {
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
 }
-#tangguanView .tg-workspace {
+#tavernView .tg-workspace {
   position: relative;
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
   overflow: hidden;
   background: var(--bg);
 }
-#tangguanView .tg-library {
+#tavernView .tg-library {
   display: flex;
   flex-direction: column;
   min-width: 240px;
@@ -2773,7 +2773,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   box-shadow: none;
   background: var(--panel-bg); /* v1.1.8 J3-a：角色库面板化，与主区形成层级 */
 }
-#tangguanView .tg-main {
+#tavernView .tg-main {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -2782,13 +2782,13 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   gap: 0;
   overflow: hidden;
 }
-#tangguanView #tgCharacterHeader {
+#tavernView #tgCharacterHeader {
   flex: 0 0 auto;
   min-width: 0;
   border-bottom: 1px solid var(--border);
   background: var(--panel-bg);
 }
-#tangguanView .tg-character-header {
+#tavernView .tg-character-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2797,30 +2797,30 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   min-height: 72px;
   padding: 12px 18px;
 }
-#tangguanView .tg-character-identity,
-#tangguanView .tg-header-actions,
-#tangguanView .tg-library-head,
-#tangguanView .tg-drawer-top,
-#tangguanView .tg-editor-head {
+#tavernView .tg-character-identity,
+#tavernView .tg-header-actions,
+#tavernView .tg-library-head,
+#tavernView .tg-drawer-top,
+#tavernView .tg-editor-head {
   display: flex;
   align-items: center;
   min-width: 0;
 }
-#tangguanView .tg-character-identity { gap: 11px; }
-#tangguanView .tg-character-identity > div,
-#tangguanView .tg-library-head > div,
-#tangguanView .tg-drawer-top > div { min-width: 0; }
-#tangguanView .tg-character-identity h1 { margin: 0; font-size: var(--fs-xl); line-height: 1.3; overflow-wrap: anywhere; }
-#tangguanView .tg-character-identity p,
-#tangguanView .tg-library-head small,
-#tangguanView .tg-drawer-top small { display: block; margin: 2px 0 0; color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.35; overflow-wrap: anywhere; }
-#tangguanView .tg-header-actions { justify-content: flex-end; gap: 6px; flex: 0 1 auto; flex-wrap: wrap; }
-#tangguanView .tg-header-actions > * { flex: 0 0 auto; }
-#tangguanView .tg-session-select { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; color: var(--text-tertiary); font-size: var(--fs-xs); }
-#tangguanView .tg-session-select select { max-width: 190px; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-#tangguanView .tg-avatar,
-#tangguanView .tg-header-avatar,
-#tangguanView .tg-welcome-avatar {
+#tavernView .tg-character-identity { gap: 11px; }
+#tavernView .tg-character-identity > div,
+#tavernView .tg-library-head > div,
+#tavernView .tg-drawer-top > div { min-width: 0; }
+#tavernView .tg-character-identity h1 { margin: 0; font-size: var(--fs-xl); line-height: 1.3; overflow-wrap: anywhere; }
+#tavernView .tg-character-identity p,
+#tavernView .tg-library-head small,
+#tavernView .tg-drawer-top small { display: block; margin: 2px 0 0; color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.35; overflow-wrap: anywhere; }
+#tavernView .tg-header-actions { justify-content: flex-end; gap: 6px; flex: 0 1 auto; flex-wrap: wrap; }
+#tavernView .tg-header-actions > * { flex: 0 0 auto; }
+#tavernView .tg-session-select { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; color: var(--text-tertiary); font-size: var(--fs-xs); }
+#tavernView .tg-session-select select { max-width: 190px; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+#tavernView .tg-avatar,
+#tavernView .tg-header-avatar,
+#tavernView .tg-welcome-avatar {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
@@ -2830,36 +2830,36 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   color: var(--primary);
   font-weight: 600;
 }
-#tangguanView .tg-avatar { width: 34px; height: 34px; border-radius: var(--radius-sm); }
-#tangguanView .tg-header-avatar { width: 42px; height: 42px; border-radius: var(--radius-md); }
-#tangguanView .tg-welcome-avatar { width: 72px; height: 72px; margin: 0 auto var(--sp-3); border-radius: var(--radius-lg); font-size: var(--fs-hero); }
-#tangguanView .tg-avatar img { width: 100%; height: 100%; object-fit: cover; }
-#tangguanView .tg-card-avatar img,
-#tangguanView .tg-header-avatar img,
-#tangguanView .tg-welcome-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
-#tangguanView .tg-chat-surface { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-#tangguanView .tg-chat-surface > .tg-chat-scroll { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-#tangguanView .tg-chat-message-slot { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
-#tangguanView .tg-chat-surface .welcome { flex: 1 0 auto; min-height: 280px; padding: var(--sp-6) var(--sp-4) var(--sp-5); }
-#tangguanView .tg-chat-surface .messages { flex: 0 0 auto; width: min(900px, 100%); min-width: 0; margin: 0 auto; padding: var(--sp-5) var(--sp-6) var(--sp-4); }
-#tangguanView .tg-chat-surface .composer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: var(--sp-2) max(var(--sp-4), calc((100% - 900px) / 2)); background: color-mix(in srgb, var(--bg) 94%, transparent); }
-#tangguanView .tg-chat-surface .disclaimer { margin-top: 4px; }
-#tangguanView .tg-library-head { justify-content: space-between; gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-3); }
-#tangguanView .tg-library-head b { font-size: var(--fs-md); }
-#tangguanView .tg-library-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: var(--radius-sm); background: var(--hover-bg); }
-#tangguanView .tg-library-tabs button,
-#tangguanView .tg-library-filters button { min-width: 0; padding: 5px 6px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-tertiary); font-size: var(--fs-xs); white-space: nowrap;  transition: background var(--dur-press) var(--ease-smooth); }
-#tangguanView .tg-library-tabs button:hover, #tangguanView .tg-library-filters button:hover { background: var(--hover-bg); }
-#tangguanView .tg-library-tabs button.active,
-#tangguanView .tg-library-filters button.active { background: var(--panel-bg); color: var(--text); box-shadow: none; }
-#tangguanView .tg-library-tabs button.active, #tangguanView .tg-library-filters button.active { box-shadow: var(--elevation-1); } /* v1.1.8 J3-d */
-#tangguanView .tg-library-search { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-tertiary); }
-#tangguanView .tg-library-search input { width: 100%; min-width: 0; border: 0; outline: 0; box-shadow: none; background: transparent; /* T7 */ color: var(--text); font-size: var(--fs-sm); }
-#tangguanView .tg-library-filters { display: flex; gap: 3px; margin: 8px 0; }
-#tangguanView .tg-character-list { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px 0 0; overflow-y: auto; gap: var(--sp-2); }
-#tangguanView .tg-character-card { align-items: stretch; gap: var(--sp-1); padding: var(--sp-2); transition: background var(--dur-hover) var(--ease-smooth); border-radius: var(--radius-sm); }
-#tangguanView .tg-character-card:hover { background: var(--hover-bg); } /* v1.1.8 J3-b */
-#tangguanView .tg-card-main small {
+#tavernView .tg-avatar { width: 34px; height: 34px; border-radius: var(--radius-sm); }
+#tavernView .tg-header-avatar { width: 42px; height: 42px; border-radius: var(--radius-md); }
+#tavernView .tg-welcome-avatar { width: 72px; height: 72px; margin: 0 auto var(--sp-3); border-radius: var(--radius-lg); font-size: var(--fs-hero); }
+#tavernView .tg-avatar img { width: 100%; height: 100%; object-fit: cover; }
+#tavernView .tg-card-avatar img,
+#tavernView .tg-header-avatar img,
+#tavernView .tg-welcome-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+#tavernView .tg-chat-surface { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#tavernView .tg-chat-surface > .tg-chat-scroll { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#tavernView .tg-chat-message-slot { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+#tavernView .tg-chat-surface .welcome { flex: 1 0 auto; min-height: 280px; padding: var(--sp-6) var(--sp-4) var(--sp-5); }
+#tavernView .tg-chat-surface .messages { flex: 0 0 auto; width: min(900px, 100%); min-width: 0; margin: 0 auto; padding: var(--sp-5) var(--sp-6) var(--sp-4); }
+#tavernView .tg-chat-surface .composer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: var(--sp-2) max(var(--sp-4), calc((100% - 900px) / 2)); background: color-mix(in srgb, var(--bg) 94%, transparent); }
+#tavernView .tg-chat-surface .disclaimer { margin-top: 4px; }
+#tavernView .tg-library-head { justify-content: space-between; gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-3); }
+#tavernView .tg-library-head b { font-size: var(--fs-md); }
+#tavernView .tg-library-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: var(--radius-sm); background: var(--hover-bg); }
+#tavernView .tg-library-tabs button,
+#tavernView .tg-library-filters button { min-width: 0; padding: 5px 6px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-tertiary); font-size: var(--fs-xs); white-space: nowrap;  transition: background var(--dur-press) var(--ease-smooth); }
+#tavernView .tg-library-tabs button:hover, #tavernView .tg-library-filters button:hover { background: var(--hover-bg); }
+#tavernView .tg-library-tabs button.active,
+#tavernView .tg-library-filters button.active { background: var(--panel-bg); color: var(--text); box-shadow: none; }
+#tavernView .tg-library-tabs button.active, #tavernView .tg-library-filters button.active { box-shadow: var(--elevation-1); } /* v1.1.8 J3-d */
+#tavernView .tg-library-search { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-tertiary); }
+#tavernView .tg-library-search input { width: 100%; min-width: 0; border: 0; outline: 0; box-shadow: none; background: transparent; /* T7 */ color: var(--text); font-size: var(--fs-sm); }
+#tavernView .tg-library-filters { display: flex; gap: 3px; margin: 8px 0; }
+#tavernView .tg-character-list { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px 0 0; overflow-y: auto; gap: var(--sp-2); }
+#tavernView .tg-character-card { align-items: stretch; gap: var(--sp-1); padding: var(--sp-2); transition: background var(--dur-hover) var(--ease-smooth); border-radius: var(--radius-sm); }
+#tavernView .tg-character-card:hover { background: var(--hover-bg); } /* v1.1.8 J3-b */
+#tavernView .tg-card-main small {
   display: block;
   min-width: 0;
   color: var(--text-tertiary);
@@ -2869,82 +2869,82 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#tangguanView .tg-card-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#tangguanView .tg-character-card .lib-bar-row2 { overflow: hidden; }
-#tangguanView .tg-character-card .tg-tags { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+#tavernView .tg-card-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tavernView .tg-character-card .lib-bar-row2 { overflow: hidden; }
+#tavernView .tg-character-card .tg-tags { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 
 /* v1.1.8：糖创目录里的会话行与糖馆同一套紧凑两行（操作行四钮同排） */
-#tangguanView .tg-preset-list { display: flex; flex-direction: column; gap: 7px; }
-#tangguanView .tg-preset-option {
+#tavernView .tg-preset-list { display: flex; flex-direction: column; gap: 7px; }
+#tavernView .tg-preset-option {
   display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
   width: 100%; min-width: 0; padding: 9px 10px; text-align: left;
   white-space: normal; overflow-wrap: anywhere;
 }
-#tangguanView .tg-preset-option b,
-#tangguanView .tg-preset-option small { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
-#tangguanView .tg-preset-option b { color: var(--text); line-height: 1.35; }
-#tangguanView .tg-preset-option small {
+#tavernView .tg-preset-option b,
+#tavernView .tg-preset-option small { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+#tavernView .tg-preset-option b { color: var(--text); line-height: 1.35; }
+#tavernView .tg-preset-option small {
   color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.45;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
-#tangguanView .tg-library-footer { display: flex; gap: 6px; padding-top: 10px; }
-#tangguanView .tg-library-footer button { flex: 1 1 0; min-width: 0; padding: 7px 4px; font-size: var(--fs-xs); white-space: nowrap; }
-#tangguanView .tg-library-scroll { min-height: 0; overflow-y: auto; }
-#tangguanView .tg-sessions { padding: 12px 0 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
-#tangguanView .tg-session-list { margin-top: 8px; }
-#tangguanView .tg-session-row, #createView .create-session-row.tg-session-row { flex-direction: column; gap: 5px; padding: 8px; }
-#tangguanView .tg-session-actions, #createView .create-session-row-actions { width: 100%; max-width: none; justify-content: flex-start; flex-wrap: nowrap; }
-#tangguanView .tg-empty-state,
-#tangguanView .tg-welcome-card { width: min(620px, 100%); margin: auto; text-align: center; }
-#tangguanView .tg-empty-mark { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 14px; border-radius: var(--radius-lg); background: var(--primary-soft); color: var(--primary); font-size: var(--fs-hero); font-weight: 600; }
-#tangguanView .tg-empty-state h2,
-#tangguanView .tg-welcome-card h2 { margin: 0; font-size: var(--fs-hero); line-height: 1.3; overflow-wrap: anywhere; }
-#tangguanView .tg-empty-state p,
-#tangguanView .tg-welcome-tagline { margin: 7px auto 16px; color: var(--text-secondary); font-size: var(--fs-base); overflow-wrap: anywhere; }
-#tangguanView .tg-empty-state button { margin: 3px; }
-#tangguanView .tg-welcome-greeting { margin: var(--sp-4) auto; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel-bg); color: var(--text); text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
-#tangguanView .tg-welcome-card > small { color: var(--text-tertiary); font-size: var(--fs-xs); }
-#tangguanView .tg-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
-#tangguanView .tg-starters button { max-width: 100%; overflow-wrap: anywhere; }
-#tangguanView .tg-drawer { position: absolute; z-index: 20; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: min(460px, calc(100% - 20px)); min-width: 0; border-left: 1px solid var(--border); background: var(--panel-bg); box-shadow: var(--elevation-2); }
-#tangguanView .tg-drawer[hidden] { display: none; }
-#tangguanView .tg-drawer-top { flex: 0 0 auto; justify-content: space-between; gap: 10px; padding: 15px 16px; border-bottom: 1px solid var(--border); }
-#tangguanView .tg-drawer-top b { font-size: var(--fs-lg); }
-#tangguanView .tg-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 20px; }
-#tangguanView .tg-drawer-library { padding: 0 12px 14px; }
-#tangguanView .tg-drawer-library .tg-library-head { display: none; }
-#tangguanView .tg-drawer-footer { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 7px; padding: 11px 16px; border-top: 1px solid var(--border); background: var(--panel-bg); }
-#tangguanView .tg-editor-head { justify-content: space-between; align-items: flex-start; gap: 10px; padding: 14px 0 4px; }
-#tangguanView .tg-editor-head p { margin: 0; color: var(--text-tertiary); font-size: var(--fs-xs); overflow-wrap: anywhere; }
-#tangguanView .tg-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; flex: 0 0 auto; }
-#tangguanView .tg-editor-group { min-width: 0; border-bottom: 1px solid var(--border); }
-#tangguanView .tg-group-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 0; border: 0; background: transparent; color: var(--text); text-align: left; font-size: var(--fs-base); font-weight: 600;  transition: background var(--dur-press) var(--ease-smooth); }
+#tavernView .tg-library-footer { display: flex; gap: 6px; padding-top: 10px; }
+#tavernView .tg-library-footer button { flex: 1 1 0; min-width: 0; padding: 7px 4px; font-size: var(--fs-xs); white-space: nowrap; }
+#tavernView .tg-library-scroll { min-height: 0; overflow-y: auto; }
+#tavernView .tg-sessions { padding: 12px 0 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+#tavernView .tg-session-list { margin-top: 8px; }
+#tavernView .tg-session-row, #createView .create-session-row.tg-session-row { flex-direction: column; gap: 5px; padding: 8px; }
+#tavernView .tg-session-actions, #createView .create-session-row-actions { width: 100%; max-width: none; justify-content: flex-start; flex-wrap: nowrap; }
+#tavernView .tg-empty-state,
+#tavernView .tg-welcome-card { width: min(620px, 100%); margin: auto; text-align: center; }
+#tavernView .tg-empty-mark { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 14px; border-radius: var(--radius-lg); background: var(--primary-soft); color: var(--primary); font-size: var(--fs-hero); font-weight: 600; }
+#tavernView .tg-empty-state h2,
+#tavernView .tg-welcome-card h2 { margin: 0; font-size: var(--fs-hero); line-height: 1.3; overflow-wrap: anywhere; }
+#tavernView .tg-empty-state p,
+#tavernView .tg-welcome-tagline { margin: 7px auto 16px; color: var(--text-secondary); font-size: var(--fs-base); overflow-wrap: anywhere; }
+#tavernView .tg-empty-state button { margin: 3px; }
+#tavernView .tg-welcome-greeting { margin: var(--sp-4) auto; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel-bg); color: var(--text); text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
+#tavernView .tg-welcome-card > small { color: var(--text-tertiary); font-size: var(--fs-xs); }
+#tavernView .tg-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+#tavernView .tg-starters button { max-width: 100%; overflow-wrap: anywhere; }
+#tavernView .tg-drawer { position: absolute; z-index: 20; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: min(460px, calc(100% - 20px)); min-width: 0; border-left: 1px solid var(--border); background: var(--panel-bg); box-shadow: var(--elevation-2); }
+#tavernView .tg-drawer[hidden] { display: none; }
+#tavernView .tg-drawer-top { flex: 0 0 auto; justify-content: space-between; gap: 10px; padding: 15px 16px; border-bottom: 1px solid var(--border); }
+#tavernView .tg-drawer-top b { font-size: var(--fs-lg); }
+#tavernView .tg-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 20px; }
+#tavernView .tg-drawer-library { padding: 0 12px 14px; }
+#tavernView .tg-drawer-library .tg-library-head { display: none; }
+#tavernView .tg-drawer-footer { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 7px; padding: 11px 16px; border-top: 1px solid var(--border); background: var(--panel-bg); }
+#tavernView .tg-editor-head { justify-content: space-between; align-items: flex-start; gap: 10px; padding: 14px 0 4px; }
+#tavernView .tg-editor-head p { margin: 0; color: var(--text-tertiary); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+#tavernView .tg-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; flex: 0 0 auto; }
+#tavernView .tg-editor-group { min-width: 0; border-bottom: 1px solid var(--border); }
+#tavernView .tg-group-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 0; border: 0; background: transparent; color: var(--text); text-align: left; font-size: var(--fs-base); font-weight: 600;  transition: background var(--dur-press) var(--ease-smooth); }
 .tg-group-toggle:hover { background: var(--hover-bg); }
-#tangguanView .tg-group-body { padding: 0 0 14px; }
-#tangguanView .tg-form-grid { grid-template-columns: 1fr; gap: 9px; margin-top: 0; }
-#tangguanView .tg-field:nth-child(n + 3) { grid-column: auto; }
-#tangguanView .tg-field input, #tangguanView .tg-field textarea { font-size: var(--fs-sm); }
-#tangguanView .tg-ai-draft { margin-top: 0; padding-top: 0; border-top: 0; }
-#tangguanView .tg-semantic-note, #tangguanView .tg-semantic-controls { margin-top: 9px; }
-#tangguanView .tg-semantic-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--hover-bg); font-size: var(--fs-xs); }
-#tangguanView .tg-semantic-controls label { display: inline-flex; align-items: center; gap: 5px; }
-#tangguanView .tg-semantic-controls small { flex: 1 1 100%; color: var(--text-tertiary); overflow-wrap: anywhere; }
-#tangguanView .tg-semantic-note { color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
-#tangguanView .tg-mobile-only { display: none; }
-#tangguanView .tg-drawer-mask { position: absolute; z-index: 15; inset: 0; background: var(--mask-bg); }
-#tangguanView .tg-drawer-mask[hidden] { display: none; }
+#tavernView .tg-group-body { padding: 0 0 14px; }
+#tavernView .tg-form-grid { grid-template-columns: 1fr; gap: 9px; margin-top: 0; }
+#tavernView .tg-field:nth-child(n + 3) { grid-column: auto; }
+#tavernView .tg-field input, #tavernView .tg-field textarea { font-size: var(--fs-sm); }
+#tavernView .tg-ai-draft { margin-top: 0; padding-top: 0; border-top: 0; }
+#tavernView .tg-semantic-note, #tavernView .tg-semantic-controls { margin-top: 9px; }
+#tavernView .tg-semantic-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--hover-bg); font-size: var(--fs-xs); }
+#tavernView .tg-semantic-controls label { display: inline-flex; align-items: center; gap: 5px; }
+#tavernView .tg-semantic-controls small { flex: 1 1 100%; color: var(--text-tertiary); overflow-wrap: anywhere; }
+#tavernView .tg-semantic-note { color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+#tavernView .tg-mobile-only { display: none; }
+#tavernView .tg-drawer-mask { position: absolute; z-index: 15; inset: 0; background: var(--mask-bg); }
+#tavernView .tg-drawer-mask[hidden] { display: none; }
 
 /* 糖馆桌面角色库：运行时收起为窄图标栏，不写入持久化状态。 */
-#tangguanView .tg-workspace.tg-library-is-collapsed {
+#tavernView .tg-workspace.tg-library-is-collapsed {
   grid-template-columns: var(--module-library-rail-width) minmax(0, 1fr);
 }
-#tangguanView .tg-workspace.tg-library-is-collapsed .tg-library {
+#tavernView .tg-workspace.tg-library-is-collapsed .tg-library {
   width: var(--module-library-rail-width);
   min-width: var(--module-library-rail-width);
   padding: 12px 4px;
   align-items: center;
 }
-#tangguanView .tg-library-collapsed {
+#tavernView .tg-library-collapsed {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
@@ -2953,8 +2953,8 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   align-items: center;
   gap: 10px;
 }
-#tangguanView .tg-library-collapse-btn,
-#tangguanView .tg-library-collapsed-tab {
+#tavernView .tg-library-collapse-btn,
+#tavernView .tg-library-collapsed-tab {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -2970,7 +2970,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   font-size: var(--module-library-tab-font-size);
   white-space: nowrap;
 }
-#tangguanView .tg-library-collapse-btn {
+#tavernView .tg-library-collapse-btn {
   width: var(--module-library-tab-width);
   min-width: var(--module-library-tab-width);
   height: var(--module-library-tab-width);
@@ -2978,15 +2978,15 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   padding: 0;
   color: var(--primary);
 }
-#tangguanView .tg-library-collapsed-tab {
+#tavernView .tg-library-collapsed-tab {
   writing-mode: vertical-rl;
   text-orientation: upright;
   min-height: var(--module-library-tab-height);
 }
-#tangguanView .tg-library-collapse-btn:hover,
-#tangguanView .tg-library-collapsed-tab:hover { background: var(--hover-bg); color: var(--primary); }
-#tangguanView .tg-library-head-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
-#tangguanView .tg-desktop-only { display: inline-flex; }
+#tavernView .tg-library-collapse-btn:hover,
+#tavernView .tg-library-collapsed-tab:hover { background: var(--hover-bg); color: var(--primary); }
+#tavernView .tg-library-head-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+#tavernView .tg-desktop-only { display: inline-flex; }
 
 /* 糖创任务会话抽屉复用 Chat Surface，不复制聊天请求和流式渲染。 */
 #createView { position: relative; min-height: 100%; }
@@ -2996,26 +2996,26 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #createView .create-task-welcome p { margin: 8px auto 0; color: var(--text-secondary); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
-  #tangguanView .tg-workspace { display: block; }
-  #tangguanView .tg-library { display: none; }
-  #tangguanView .tg-main { width: 100%; height: 100%; }
-  #tangguanView .tg-mobile-only { display: inline-flex; }
-  #tangguanView .tg-character-header { align-items: flex-start; padding: 10px 12px; }
-  #tangguanView .tg-header-actions { gap: 4px; }
-  #tangguanView .tg-header-actions .tg-session-select { order: 5; flex: 1 1 100%; }
-  #tangguanView .tg-session-select select { flex: 1 1 auto; max-width: none; }
-  #tangguanView .tg-drawer { width: min(430px, calc(100% - 14px)); }
-  #tangguanView .tg-drawer-library-host { left: 0; right: auto; border-right: 1px solid var(--border); border-left: 0; box-shadow: var(--elevation-2); }
-  #tangguanView .tg-desktop-only { display: none; }
+  #tavernView .tg-workspace { display: block; }
+  #tavernView .tg-library { display: none; }
+  #tavernView .tg-main { width: 100%; height: 100%; }
+  #tavernView .tg-mobile-only { display: inline-flex; }
+  #tavernView .tg-character-header { align-items: flex-start; padding: 10px 12px; }
+  #tavernView .tg-header-actions { gap: 4px; }
+  #tavernView .tg-header-actions .tg-session-select { order: 5; flex: 1 1 100%; }
+  #tavernView .tg-session-select select { flex: 1 1 auto; max-width: none; }
+  #tavernView .tg-drawer { width: min(430px, calc(100% - 14px)); }
+  #tavernView .tg-drawer-library-host { left: 0; right: auto; border-right: 1px solid var(--border); border-left: 0; box-shadow: var(--elevation-2); }
+  #tavernView .tg-desktop-only { display: none; }
 }
 @media (max-width: 620px) {
-  #tangguanView .tg-character-header { min-height: 64px; }
-  #tangguanView .tg-character-identity h1 { font-size: var(--fs-lg); }
-  #tangguanView .tg-character-identity p { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #tangguanView .tg-chat-surface .messages { padding: 16px 12px 12px; }
-  #tangguanView .tg-chat-surface .composer { padding: 8px 10px; }
-  #tangguanView .tg-header-actions > .btn-ghost:not(.tg-mobile-only) { padding-left: 7px; padding-right: 7px; }
-  #tangguanView .tg-drawer { width: calc(100% - 8px); }
+  #tavernView .tg-character-header { min-height: 64px; }
+  #tavernView .tg-character-identity h1 { font-size: var(--fs-lg); }
+  #tavernView .tg-character-identity p { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tavernView .tg-chat-surface .messages { padding: 16px 12px 12px; }
+  #tavernView .tg-chat-surface .composer { padding: 8px 10px; }
+  #tavernView .tg-header-actions > .btn-ghost:not(.tg-mobile-only) { padding-left: 7px; padding-right: 7px; }
+  #tavernView .tg-drawer { width: calc(100% - 8px); }
 }
 
 /* v1.1.5 module chat surfaces: keep Create conversations in Create instead
@@ -3043,9 +3043,9 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .module-provider-controls .module-provider-account { width: 128px; }
 .module-provider-controls .module-provider-model { width: 154px; }
 
-#tangguanView .tg-character-identity { flex: 1 1 220px; min-width: 0; }
-#tangguanView .tg-header-actions { min-width: 0; }
-#tangguanView .tg-header-actions .module-provider-controls { flex: 0 1 auto; }
+#tavernView .tg-character-identity { flex: 1 1 220px; min-width: 0; }
+#tavernView .tg-header-actions { min-width: 0; }
+#tavernView .tg-header-actions .module-provider-controls { flex: 0 1 auto; }
 
 #createView .create-shell {
   min-width: 0;
@@ -3140,8 +3140,8 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   #createView .create-shell { padding: 10px; }
   #createView .create-catalog { flex-basis: 190px; }
   #createView .create-session-pane { min-height: 460px; }
-  #tangguanView .tg-header-actions .module-provider-controls { width: 100%; order: 4; }
-  #tangguanView .tg-header-actions .module-provider-controls select { flex: 1 1 0; max-width: none; }
+  #tavernView .tg-header-actions .module-provider-controls { width: 100%; order: 4; }
+  #tavernView .tg-header-actions .module-provider-controls select { flex: 1 1 0; max-width: none; }
 }
 
 /* 账户模型配置在窄窗口改为纵向字段，避免固定表格把模型名挤没。桌面端仍保持原表格。 */
@@ -3200,7 +3200,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #createView .create-session-header > div:first-child { flex: 0 0 auto; }
 
 /* Use a stable two-row header instead of allowing controls to wrap unevenly. */
-#tangguanView .tg-header-actions {
+#tavernView .tg-header-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
   grid-template-areas:
@@ -3209,22 +3209,22 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   align-items: center;
   gap: var(--sp-2);
 }
-#tangguanView .tg-header-actions .module-provider-controls {
+#tavernView .tg-header-actions .module-provider-controls {
   grid-area: providers;
   justify-content: flex-end;
 }
-#tangguanView .tg-header-actions .tg-session-select {
+#tavernView .tg-header-actions .tg-session-select {
   grid-area: session;
   width: 100%;
   min-width: 0;
 }
-#tangguanView .tg-header-actions [data-tg-new-session] { grid-area: new; }
-#tangguanView .tg-header-actions [data-tg-open-editor] { grid-area: edit; }
-#tangguanView .tg-header-actions [data-tg-open-sessions] {
+#tavernView .tg-header-actions [data-tg-new-session] { grid-area: new; }
+#tavernView .tg-header-actions [data-tg-open-editor] { grid-area: edit; }
+#tavernView .tg-header-actions [data-tg-open-sessions] {
   grid-area: menu;
   align-self: center;
 }
-#tangguanView .tg-session-select select { width: 100%; max-width: none; }
+#tavernView .tg-session-select select { width: 100%; max-width: none; }
 
 /* Delegated CSS: compact Create library and module-owned input controls. */
 #createView .create-catalog {
@@ -3471,16 +3471,16 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 }
 
 /* A provider moved out of the module header must not leave an empty grid row. */
-#tangguanView .tg-header-actions {
+#tavernView .tg-header-actions {
   grid-template-columns: minmax(0, 1fr) auto auto auto;
   grid-template-areas: "session new edit menu";
 }
-#tangguanView .tg-header-actions:has(.module-provider-controls) {
+#tavernView .tg-header-actions:has(.module-provider-controls) {
   grid-template-areas:
     "providers providers providers menu"
     "session new edit menu";
 }
-#tangguanView .tg-header-actions .tg-session-select { min-width: 0; }
+#tavernView .tg-header-actions .tg-session-select { min-width: 0; }
 #createView .create-session-actions { min-width: 0; }
 #createView .create-session-actions > * { min-width: 0; }
 
@@ -3548,18 +3548,18 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
     max-height: 36%;
   }
   #createView .create-library-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #tangguanView .tg-header-actions {
+  #tavernView .tg-header-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
   }
-  #tangguanView .tg-header-actions .tg-session-select {
+  #tavernView .tg-header-actions .tg-session-select {
     order: 5;
     flex: 1 1 100%;
   }
-  #tangguanView .tg-header-actions .module-provider-controls { order: 4; width: 100%; }
-  #tangguanView .tg-header-actions .module-provider-controls select { flex: 1 1 0; max-width: none; }
+  #tavernView .tg-header-actions .module-provider-controls { order: 4; width: 100%; }
+  #tavernView .tg-header-actions .module-provider-controls select { flex: 1 1 0; max-width: none; }
   .input-toggles-right .topbar-menu-wrap,
   .input-toggles-right .module-provider-controls { flex: 1 1 auto; max-width: 100%; }
   .input-toggles-right #modelSelectBtn,
@@ -3874,11 +3874,11 @@ button.chip:hover, button.pill-chip:hover { background: var(--active-bg); border
 .lib-bar--add:hover { color: var(--primary); border-color: var(--primary); }
 /* 列表容器：单列纵排 + 显式禁横向滚动 */
 .lib-bar-list { display: flex; flex-direction: column; gap: var(--sp-2); }
-#tangguanView .tg-character-list { overflow-x: hidden; }
+#tavernView .tg-character-list { overflow-x: hidden; }
 #createView .create-catalog { overflow-x: hidden; }
 
 /* v1.1.8 R：卡片规格收尾 */
-#tangguanView .tg-character-card { padding: var(--sp-1) var(--sp-2); }
+#tavernView .tg-character-card { padding: var(--sp-1) var(--sp-2); }
 #createView .create-session-row-actions { width: 100%; max-width: none; justify-content: flex-start; }
 #createSessionPane .create-session-list { gap: var(--sp-1); }
 

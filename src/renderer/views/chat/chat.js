@@ -96,7 +96,7 @@
   const markdownCache = new Map();
   const MARKDOWN_CACHE_LIMIT = 160;
   let contextBarKey = '';
-  const MODULE_OWNERS = new Set(['tangguan', 'create']);
+  const MODULE_OWNERS = new Set(['tavern', 'create']);
   // All writes for one module are serialized. Streaming checkpoints and the
   // final conversation snapshot otherwise race through separate IPC calls and
   // an older snapshot can overwrite the latest assistant output.
@@ -118,15 +118,15 @@
   function isModuleOwner(owner) { return MODULE_OWNERS.has(String(owner || '')); }
 
   function ownerForConversation(conv) {
-    if (conv && (conv.tangguanCharacterId || conv.originModule === 'tangguan')) return 'tangguan';
+    if (conv && (conv.tavernCharacterId || conv.originModule === 'tavern')) return 'tavern';
     if (conv && conv.originModule === 'create') return 'create';
     return 'default';
   }
 
   // Module ownership must not depend on the newest marker shape. Older
   // sessions can carry only originModule, while current Tangguan sessions
-  // also carry tangguanCharacterId.
-  function isTangguanConv(conv) { return ownerForConversation(conv) === 'tangguan'; }
+  // also carry tavernCharacterId.
+  function isTangguanConv(conv) { return ownerForConversation(conv) === 'tavern'; }
 
   function currentOwner() {
     if (surfaceState && surfaceState.owner) return surfaceState.owner;
@@ -261,7 +261,7 @@
 
   function providerForConversation(conv) {
     const owner = ownerForConversation(conv);
-    return App.getProvider(owner === 'tangguan' || owner === 'create' ? owner : 'chat');
+    return App.getProvider(owner === 'tavern' || owner === 'create' ? owner : 'chat');
   }
 
   function flushDraft(options) {
@@ -286,7 +286,7 @@
   }
 
   function isTangguanConversation(id) {
-    const conv = conversationById('tangguan', id)
+    const conv = conversationById('tavern', id)
       || conversationById('create', id)
       || conversationById('default', id);
     return isTangguanConv(conv);
@@ -297,7 +297,7 @@
   }
 
   function isModuleConversation(conv) {
-    return !!(conv && (conv.tangguanCharacterId || conv.originModule === 'tangguan' || isCreateConversation(conv)));
+    return !!(conv && (conv.tavernCharacterId || conv.originModule === 'tavern' || isCreateConversation(conv)));
   }
 
   function resetTangguanMessageWindow(conv) {
@@ -401,7 +401,7 @@
       App.chat._preTangguanActiveId = null;
       App.chat._preCreateActiveId = null;
       App.chat._preSurfaceActiveId = null;
-      if (surfaceState.mode === 'tangguan') {
+      if (surfaceState.mode === 'tavern') {
         ['webBtn', 'imgBtn', 'attachBtn'].forEach((id) => {
           const node = $(id);
           if (!node) return;
@@ -423,7 +423,7 @@
       const state = surfaceState;
       if (opts.preserveActiveId) {
         if (state.previousActiveId) App.chat._preSurfaceActiveId = state.previousActiveId;
-      } else if (state.mode === 'tangguan' || state.owner === 'create') {
+      } else if (state.mode === 'tavern' || state.owner === 'create') {
         const previous = state.previousActiveId;
         setActiveConversationId(state.owner, state.conversationId || activeConversationId(state.owner));
         if (previous && conversationById('default', previous) && !isModuleConversation(conversationById('default', previous))) App.state.activeId = previous;
@@ -449,7 +449,7 @@
     // v1.1.8 U2：当前活动滚动容器——按视图归一（一键回到底部按钮/流式跟随共用）
     activeScrollContainer() {
       const s = surfaceState && surfaceState.scroll;
-      if (s) return s;                       // tangguan / create 挂载的内层滚动容器
+      if (s) return s;                       // tavern / create 挂载的内层滚动容器
       const v = App.state && App.state.view;
       if (v === 'agent') return $('agentThread');
       if (v === 'doc') return $('docMessages');
@@ -640,8 +640,8 @@
     newConversation(agent, options) {
       const opts = options && typeof options === 'object' ? options : {};
       const requestedOwner = String(opts.owner || opts.originModule || opts.stay || '').trim().toLowerCase();
-      const owner = opts.tangguanCharacterId || requestedOwner === 'tangguan'
-        ? 'tangguan'
+      const owner = opts.tavernCharacterId || requestedOwner === 'tavern'
+        ? 'tavern'
         : (requestedOwner === 'create' ? 'create' : 'default');
       if (isModuleOwner(owner) && ensureModuleRuntime().status === 'failed') {
         if (App.ui && App.ui.toast) App.ui.toast('模块会话迁移失败，请先恢复迁移后再新建会话');
@@ -649,7 +649,7 @@
       }
       flushDraft({ owner, conversationId: activeConversationId(owner) });
       const previous = activeConversationFor(owner);
-      if ((opts.stay === 'tangguan' || opts.stay === 'create') && previous && !isModuleConversation(previous)) {
+      if ((opts.stay === 'tavern' || opts.stay === 'create') && previous && !isModuleConversation(previous)) {
         App.chat._preSurfaceActiveId = previous.id;
       }
       const inheritedAgent = owner === 'create' && !agent && opts.inheritActive !== false && previous && previous.agentId
@@ -659,9 +659,9 @@
       const configSource = agent || (inheritedAgent ? previous : null);
       const configAgent = agent || inheritedAgent;
       const conv = { id: App.uid(), title: '新对话', messages: [], updatedAt: Date.now() };
-      if (owner === 'tangguan') {
-        conv.originModule = 'tangguan';
-        conv.tangguanRestricted = true;
+      if (owner === 'tavern') {
+        conv.originModule = 'tavern';
+        conv.tavernRestricted = true;
         conv.web = false;
         conv.allowWeb = false;
         conv.allowAttachments = false;
@@ -671,9 +671,9 @@
       } else if (opts.originModule) {
         conv.originModule = String(opts.originModule);
       }
-      if (owner === 'tangguan' && opts.tangguanCharacterId) {
-        conv.originModule = 'tangguan';
-        conv.tangguanCharacterId = String(opts.tangguanCharacterId);
+      if (owner === 'tavern' && opts.tavernCharacterId) {
+        conv.originModule = 'tavern';
+        conv.tavernCharacterId = String(opts.tavernCharacterId);
       }
       if (configAgent) {
         conv.title = configAgent.name;
@@ -701,8 +701,8 @@
       App.chat.clearAttachments();
       App.chat.cancelEdit();
        if (opts.persist !== false && !isModuleOwner(owner)) setTimeout(() => App.persist(), 0); // v1.1.6（B1）：去同步——与会话切换帧解耦
-       if (opts.stay === 'tangguan') {
-         if (App.state.view !== 'tangguan') App.router.go('tangguan', { persist: opts.persist !== false, skipDraftFlush: true });
+       if (opts.stay === 'tavern') {
+         if (App.state.view !== 'tavern') App.router.go('tavern', { persist: opts.persist !== false, skipDraftFlush: true });
        } else if (opts.stay === 'create') {
          if (App.state.view !== 'create') App.router.go('create', { persist: opts.persist !== false, skipDraftFlush: true });
       } else {
@@ -727,12 +727,12 @@
 
     activate(id, options) {
       const opts = options && typeof options === 'object' ? options : {};
-      const owner = opts.owner || (opts.originModule === 'tangguan' || opts.stay === 'tangguan'
-        ? 'tangguan'
+      const owner = opts.owner || (opts.originModule === 'tavern' || opts.stay === 'tavern'
+        ? 'tavern'
         : opts.originModule === 'create' || opts.stay === 'create' ? 'create' : currentOwner());
       flushDraft({ owner, conversationId: activeConversationId(owner) });
       const current = activeConversationFor(owner);
-      if (opts.stay === 'tangguan' || opts.stay === 'create') {
+      if (opts.stay === 'tavern' || opts.stay === 'create') {
         if (current && !isModuleConversation(current)) App.chat._preSurfaceActiveId = current.id;
       }
       setActiveConversationId(owner, id);
@@ -742,8 +742,8 @@
       App.chat.clearAttachments();
       App.chat.cancelEdit();
        if (opts.persist !== false && !isModuleOwner(owner)) setTimeout(() => App.persist(), 0); // v1.1.6（B1）：去同步——与会话切换帧解耦
-       if (opts.stay === 'tangguan') {
-         if (App.state.view !== 'tangguan') App.router.go('tangguan', { persist: opts.persist !== false, skipDraftFlush: true });
+       if (opts.stay === 'tavern') {
+         if (App.state.view !== 'tavern') App.router.go('tavern', { persist: opts.persist !== false, skipDraftFlush: true });
        } else if (opts.stay === 'create') {
          if (App.state.view !== 'create') App.router.go('create', { persist: opts.persist !== false, skipDraftFlush: true });
       } else {
@@ -866,11 +866,11 @@
         App.create.renderTaskWelcome(welcome, conv);
         return;
       }
-      if (owner === 'tangguan' && App.tangguan && typeof App.tangguan.renderWelcome === 'function') {
+      if (owner === 'tavern' && App.tavern && typeof App.tavern.renderWelcome === 'function') {
         welcome.style.display = 'flex';
         messages.style.display = 'none';
         composer.style.display = 'block';
-        App.tangguan.renderWelcome(welcome, conv);
+        App.tavern.renderWelcome(welcome, conv);
         return;
       }
       welcome.style.display = 'flex';
@@ -938,8 +938,8 @@
           ? `<button class="version-switch" data-version="1" title="切换回答版本">${vIdx + 1}/${versions.length}</button>`
           : '';
         const webLabel = m.webSources ? (m.webSources + ' 个') : '多个';
-        const tangguan = isTangguanConv(App.chat.activeConv()) || isTangguanConversation(App.state.activeId);
-        const webHtml = !tangguan && (m.webSources || (App.state.web && m.role === 'assistant'))
+        const tavern = isTangguanConv(App.chat.activeConv()) || isTangguanConversation(App.state.activeId);
+        const webHtml = !tavern && (m.webSources || (App.state.web && m.role === 'assistant'))
           ? '<div class="web-indicator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>基于 ' + webLabel + '搜索来源</div>'
           : '';
         wrap.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
@@ -1036,7 +1036,7 @@
        if (start > 0) {
         const more = document.createElement('button');
         more.type = 'button';
-        more.className = 'btn-ghost mini tangguan-history-more';
+        more.className = 'btn-ghost mini tavern-history-more';
         more.textContent = '加载更早消息';
          more.addEventListener('click', () => { messageVisibleCount += 50; App.chat.renderMessages(); });
          fragment.appendChild(more);
@@ -1180,7 +1180,7 @@
 
     async streamChat(conv, ui, options) {
       const streamOwner = ownerForConversation(conv);
-      const providerModule = streamOwner === 'tangguan' || streamOwner === 'create' ? streamOwner : 'chat';
+      const providerModule = streamOwner === 'tavern' || streamOwner === 'create' ? streamOwner : 'chat';
       // Provider adapters all receive a chat request. The module name selects
       // local credentials only; it is never sent as a gateway request kind.
       const transportKind = 'chat';
@@ -1208,7 +1208,7 @@
       liveMessage.requestId = 'chat_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       conv.updatedAt = Date.now();
       if (!s.ref || !s.hasKey || !s.model) {
-        const errorText = '尚未配置当前模块 API。请在设置中为“' + (providerModule === 'tangguan' ? '糖馆' : providerModule === 'create' ? '糖创' : '聊天') + '”选择账户、模型和 API Key。';
+        const errorText = '尚未配置当前模块 API。请在设置中为“' + (providerModule === 'tavern' ? '糖馆' : providerModule === 'create' ? '糖创' : '聊天') + '”选择账户、模型和 API Key。';
         liveMessage.streamStatus = 'failed';
         liveMessage.error = errorText;
         liveMessage.updatedAt = Date.now();
@@ -1225,12 +1225,12 @@
       // Tangguan sessions receive only the selected local character and its
       // worldbook. Retrieval is scoped by character and never overrides the
       // base safety prompt.
-      if (isTangguanConv(conv) && App.tangguan && App.tangguan.preparePrompt) {
+      if (isTangguanConv(conv) && App.tavern && App.tavern.preparePrompt) {
         const lastUser = conv.messages.filter((item) => item.role === 'user').pop();
         const query = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
         // 人设注入失败必须可见：此前 .catch(() => '') 把失败吞成"无提示词"，
         // 表现为角色卡完全不生效（模型按默认糖包助手回答）且无任何提示。
-        const tangguanPrompt = await App.tangguan.preparePrompt(conv, query).catch((error) => {
+        const tavernPrompt = await App.tavern.preparePrompt(conv, query).catch((error) => {
           console.warn('[糖馆] 角色人设注入失败：', error && (error.message || error));
           if (!App.chat._personaWarned) {
             App.chat._personaWarned = true;
@@ -1238,9 +1238,9 @@
           }
           return '';
         });
-        if (tangguanPrompt) {
-          systemContent += '\n\n' + tangguanPrompt;
-          console.debug('[糖馆] 人设已注入，长度', tangguanPrompt.length);
+        if (tavernPrompt) {
+          systemContent += '\n\n' + tavernPrompt;
+          console.debug('[糖馆] 人设已注入，长度', tavernPrompt.length);
         } else {
           console.warn('[糖馆] 本轮没有人设提示词（角色详情读取失败或会话缺少角色绑定）');
         }
@@ -1544,7 +1544,7 @@
         // The renderer sends one canonical gateway request. `gatewayFetch` is
         // the only boundary that strips renderer-only policy fields and adds
         // the local auth token; rebuilding the request here used to reintroduce
-        // module aliases such as `create`/`tangguan` in older callers.
+        // module aliases such as `create`/`tavern` in older callers.
         const res = await raceTimeout(App.rt.gatewayFetch({
           ref: s.ref,
           kind: 'chat',
@@ -1737,11 +1737,11 @@
       let conv = App.chat.activeConv();
       if (!conv) {
         const owner = currentOwner();
-        if (owner === 'tangguan') {
+        if (owner === 'tavern') {
           // A module surface can be empty on first entry. Never let the
           // shared composer fall back to the regular Chat store in that case.
-          conv = App.tangguan && typeof App.tangguan.ensureSession === 'function'
-            ? await App.tangguan.ensureSession()
+          conv = App.tavern && typeof App.tavern.ensureSession === 'function'
+            ? await App.tavern.ensureSession()
             : null;
         } else if (owner === 'create') {
           conv = App.chat.newConversation(null, { stay: 'create', originModule: 'create' });
@@ -1990,7 +1990,7 @@
       const editCancel = $('editCancel');
       if (editCancel) editCancel.addEventListener('click', () => App.chat.cancelEdit());
       // 回到底部按钮：滚动偏离底部时显示，点击平滑回到底部
-      // v1.1.8 U2：绑定目标从写死 #chatScroll 泛化为"当前活动滚动容器"，覆盖 agent/doc/image/tangguan/create
+      // v1.1.8 U2：绑定目标从写死 #chatScroll 泛化为"当前活动滚动容器"，覆盖 agent/doc/image/tavern/create
       const sbBtn = $('scrollBottomBtn');
       if (sbBtn) {
         const syncSb = () => { const c = App.chat.activeScrollContainer(); sbBtn.hidden = !c || App.chat.isNearBottom(); };

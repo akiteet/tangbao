@@ -10,18 +10,18 @@ const ROOT = path.join(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
 test('v1.1.4 Tangguan library collapse is runtime-only and uses the 900px desktop boundary', () => {
-  const view = read('src/renderer/views/tangguan/tangguan.js');
+  const view = read('src/renderer/views/tavern/tavern.js');
   const css = read('styles.css');
   assert.match(view, /let libraryCollapsed = false;/);
   assert.match(view, /tg-library-is-collapsed/);
   assert.match(view, /data-tg-library-toggle/);
   assert.match(view, /window\.innerWidth > 900/);
-  assert.doesNotMatch(view, /tangguanUi\(\)[\s\S]{0,240}libraryCollapsed/);
+  assert.doesNotMatch(view, /tavernUi\(\)[\s\S]{0,240}libraryCollapsed/);
   assert.match(css, /--module-library-rail-width:\s*40px/);
   assert.match(css, /--module-library-tab-width:\s*32px/);
   assert.match(css, /--module-library-tab-height:\s*58px/);
   assert.match(css, /--module-library-tab-font-size:\s*var\(--fs-sm\)/);
-  assert.match(css, /#tangguanView \.tg-workspace\.tg-library-is-collapsed[\s\S]*grid-template-columns: var\(--module-library-rail-width\)/);
+  assert.match(css, /#tavernView \.tg-workspace\.tg-library-is-collapsed[\s\S]*grid-template-columns: var\(--module-library-rail-width\)/);
   assert.match(css, /#createView \.create-library-head > div[\s\S]*flex-direction: column/);
   assert.match(css, /#createView \.create-library-head small[\s\S]*display: block/);
   assert.match(css, /#createView\.create-library-is-collapsed[\s\S]*grid-template-columns: var\(--module-library-rail-width\)/);
@@ -30,10 +30,10 @@ test('v1.1.4 Tangguan library collapse is runtime-only and uses the 900px deskto
 });
 
 test('Tangguan every legacy session entry stays in Tangguan and mounts an owned Chat Surface', () => {
-  const view = read('src/renderer/views/tangguan/tangguan.js');
+  const view = read('src/renderer/views/tavern/tavern.js');
   assert.doesNotMatch(view, /App\.chat\.activate\(conv\.id\);/);
-  assert.match(view, /App\.chat\.activate\(conv\.id, \{ stay: 'tangguan', persist: false, render: false \}\)/);
-  assert.match(view, /mode: 'tangguan', owner: 'tangguan'/);
+  assert.match(view, /App\.chat\.activate\(conv\.id, \{ stay: 'tavern', persist: false, render: false \}\)/);
+  assert.match(view, /mode: 'tavern', owner: 'tavern'/);
   assert.match(view, /App\.state\.activeId = conv\.id;/);
 });
 
@@ -43,17 +43,17 @@ test('Chat navigation flushes drafts and keeps module conversations on their own
   assert.match(chat, /flushSurface\(\)/);
   assert.match(chat, /providerForConversation\(conv\)/);
   assert.match(chat, /function ownerForConversation\(conv\)/);
-  assert.match(chat, /return App\.getProvider\(owner === 'tangguan' \|\| owner === 'create' \? owner : 'chat'\)/);
+  assert.match(chat, /return App\.getProvider\(owner === 'tavern' \|\| owner === 'create' \? owner : 'chat'\)/);
   assert.match(router, /skipDraftFlush !== true/);
   assert.match(chat, /flushDraft\(\{ conversationId: App\.state && App\.state\.activeId \}\)/);
 });
 
 test('Tangguan character cards and Chat history use bounded local rendering windows', () => {
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   const chat = read('src/renderer/views/chat/chat.js');
-  assert.match(tangguan, /let characterVisibleCount = 50;/);
-  assert.match(tangguan, /items\.slice\(0, characterVisibleCount\)/);
-  assert.match(tangguan, /data-tg-character-more/);
+  assert.match(tavern, /let characterVisibleCount = 50;/);
+  assert.match(tavern, /items\.slice\(0, characterVisibleCount\)/);
+  assert.match(tavern, /data-tg-character-more/);
   assert.match(chat, /let messageVisibleCount = 100;/);
   assert.match(chat, /conv\.messages\.slice\(start\)/);
   assert.match(chat, /messageVisibleCount \+= 50/);
@@ -66,7 +66,7 @@ test('Chat Surface and create sessions keep task conversations inside Tangchuang
   assert.match(chat, /function isCreateConversation\(conv\)/);
   assert.match(chat, /opts\.originModule[\s\S]{0,120}conv\.originModule = String\(opts\.originModule\)/);
   assert.match(chat, /if \(opts\.stay === 'create'\)[\s\S]{0,220}App\.router\.go\('create'(?:,\s*\{[^}]*\})?\)/);
-  assert.match(chat, /const owner = opts\.owner \|\| \(opts\.originModule === 'tangguan'/);
+  assert.match(chat, /const owner = opts\.owner \|\| \(opts\.originModule === 'tavern'/);
   assert.match(create, /createTaskDrawer/);
   assert.match(create, /App\.chat\.mountSurface\(\{[\s\S]{0,180}owner: 'create'/);
   assert.match(chat, /startWithAgent\(agent\) \{[\s\S]{0,120}newConversation\(agent, \{ owner: 'create', stay: 'create', originModule: 'create' \}\)/);
@@ -91,13 +91,13 @@ test('Tangchuang catalog modes keep the shared library head after removing templ
 
 test('Module session actions delete instead of toggling legacy archived state', () => {
   const create = read('src/renderer/views/workflows/create.js');
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   assert.match(create, /deleteCreateSession/);
   assert.match(create, /data-create-session-delete/);
-  assert.match(tangguan, /deleteSession/);
-  assert.match(tangguan, /data-tg-session-delete/);
+  assert.match(tavern, /deleteSession/);
+  assert.match(tavern, /data-tg-session-delete/);
   assert.doesNotMatch(create, /toggleCreateSessionArchive/);
-  assert.doesNotMatch(tangguan, /toggleSessionArchive/);
+  assert.doesNotMatch(tavern, /toggleSessionArchive/);
 });
 
 test('普通 UI uses the unified font token while code remains monospace', () => {
@@ -114,7 +114,7 @@ test('普通 UI uses the unified font token while code remains monospace', () =>
 });
 
 test('Tangguan empty state keeps only character actions and no module introduction block', () => {
-  const view = read('src/renderer/views/tangguan/tangguan.js');
+  const view = read('src/renderer/views/tavern/tavern.js');
   const start = view.indexOf('function renderWelcome(');
   const end = view.indexOf('function switchDrawer(', start);
   const emptyState = view.slice(start, end);

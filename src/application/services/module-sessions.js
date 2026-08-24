@@ -3,7 +3,7 @@
 /* Isolated conversation storage for Tangguan and Create. */
 (function () {
   App.services = App.services || {};
-  const MODULES = new Set(['tangguan', 'create']);
+  const MODULES = new Set(['tavern', 'create']);
   const empty = (module) => ({
     format: 'tangbao-module-sessions',
     version: 1,

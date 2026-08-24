@@ -173,8 +173,8 @@
     if (!Array.isArray(source.conversations)) return source;
     const copy = Object.assign({}, source);
     copy.conversations = source.conversations.filter((item) => !(item && (
-      item.tangguanCharacterId
-      || item.originModule === 'tangguan'
+      item.tavernCharacterId
+      || item.originModule === 'tavern'
       || item.originModule === 'create'
     )));
     if (copy.activeId && !copy.conversations.some((item) => item && item.id === copy.activeId)) {
@@ -494,7 +494,7 @@
         chat:    { accountId: '__default__', apiBase: '', model: '' },
         agent:   { accountId: '__default__', apiBase: '', model: '' },
         create:  { accountId: '__default__', apiBase: '', model: '' },
-        tangguan:{ accountId: '__default__', apiBase: '', model: '' },
+        tavern:{ accountId: '__default__', apiBase: '', model: '' },
         image:   { accountId: '__default__', apiBase: '', model: '' },
         doc:     { accountId: '__default__', apiBase: '', model: '' },
       },
@@ -512,7 +512,7 @@
         doc: { summary: '', points: '', translate: '', outline: '' }, // 糖读分析提示
       },
       appearance: { mode: 'system', accent: '', radius: '' }, // 外观主题：mode=light|dark|system
-      enabledModules: ['chat', 'image', 'doc', 'create', 'tangguan', 'agent'], // 启用的内置模块
+      enabledModules: ['chat', 'image', 'doc', 'create', 'tavern', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
       search: {},                // 联网搜索配置；Key 存在密钥库的 'search' 引用下，不落 state
       userMemory: '',         // 用户级长期记忆，注入糖码 system prompt
@@ -520,7 +520,7 @@
       visionModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'], // 视觉模型白名单
       permissionRules: [],       // v2（权限大改）：全局权限规则（所有项目生效，项目规则优先）[{ id, tool, pattern, path, allow, scope:'global', force? }]
       // 糖馆只保存可恢复指针；抽屉、标签和编辑脏状态只存在运行时。
-      tangguanUi: { lastCharacterId: '', lastConversationId: '' },
+      tavernUi: { lastCharacterId: '', lastConversationId: '' },
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
     activeThreadId: null,        // 当前激活的糖码会话线程 id
@@ -682,13 +682,13 @@
       radius: typeof psAp.radius === 'string' ? psAp.radius : '',
     };
     // 模块开关 / 自定义模块（保留用户自定义顺序，仅过滤非法 id）
-    const allBuiltin = ['chat', 'image', 'doc', 'create', 'tangguan', 'agent'];
+    const allBuiltin = ['chat', 'image', 'doc', 'create', 'tavern', 'agent'];
     const validBuiltinIds = new Set(allBuiltin);
     const storedModules = Array.isArray(ps.enabledModules)
       ? ps.enabledModules.filter(id => validBuiltinIds.has(id)) : allBuiltin.slice();
     // Tangguan did not exist in older snapshots. Add only the new module while
     // preserving the user's existing order and other enable/disable choices.
-    ns.settings.enabledModules = Array.from(new Set(storedModules.concat('tangguan')));
+    ns.settings.enabledModules = Array.from(new Set(storedModules.concat('tavern')));
     ns.settings.customModules = Array.isArray(ps.customModules)
       ? ps.customModules.filter(m => m && m.id && m.label && m.url).map(m => ({ id: m.id, label: String(m.label), url: String(m.url), forceEmbed: !!m.forceEmbed, hidden: !!m.hidden }))
       : [];
@@ -714,8 +714,11 @@
     ns.settings.visionModels = Array.isArray(ps.visionModels) && ps.visionModels.length
       ? ps.visionModels
       : ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'];
-    const tgUi = (ps.tangguanUi && typeof ps.tangguanUi === 'object') ? ps.tangguanUi : {};
-    ns.settings.tangguanUi = {
+    // v1.1.8 模块改名：旧快照的 settings.tangguanUi → tavernUi
+    const tgUiSource = (ps.tavernUi && typeof ps.tavernUi === 'object') ? ps.tavernUi
+      : (ps.tangguanUi && typeof ps.tangguanUi === 'object') ? ps.tangguanUi : {};
+    const tgUi = tgUiSource;
+    ns.settings.tavernUi = {
       lastCharacterId: typeof tgUi.lastCharacterId === 'string' ? tgUi.lastCharacterId : '',
       lastConversationId: typeof tgUi.lastConversationId === 'string' ? tgUi.lastConversationId : '',
     };
@@ -817,9 +820,11 @@
       ? wantId
       : (threads[0] ? threads[0].id : null);
     const oldProviders = ps.providers || {};
+    // v1.1.8 模块改名：旧快照的 providers.tangguan → tavern
+    if (oldProviders.tangguan && !oldProviders.tavern) oldProviders.tavern = oldProviders.tangguan;
     const newProviders = {};
-    // 聊天修复 C：保留全部模块；糖馆单独使用 tangguan Provider，旧快照缺失时跟随默认账户
-    for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create', 'tangguan']) {
+    // 聊天修复 C：保留全部模块；糖馆单独使用 tavern Provider，旧快照缺失时跟随默认账户
+    for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create', 'tavern']) {
       const op = oldProviders[m] || {};
       let accountId = (op.accountId !== undefined) ? op.accountId
         : (op.useDefault === false ? '__custom__' : '__default__');
@@ -843,7 +848,7 @@
       if (oldProviders.default.apiKey) acc.apiKey = oldProviders.default.apiKey;
       ns.settings.accounts = [acc];
       ns.settings.defaultAccountId = acc.id;
-      for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create', 'tangguan']) ns.settings.providers[m].accountId = '__default__';
+      for (const m of ['default', 'chat', 'image', 'doc', 'agent', 'create', 'tavern']) ns.settings.providers[m].accountId = '__default__';
     }
     syncImageCapabilityStore(ns.settings);
     App.state = ns;

@@ -1,14 +1,16 @@
 'use strict';
 
 // 分层说明（v1.1.5）：本文件是糖馆持久化实现（infrastructure 层，依赖 fs）；
-// 领域契约与预设角色卡在 src/core/tangguan/tangguan-store.js。同名是有意的分层设计。
+// 领域契约与预设角色卡在 src/core/tavern/tavern-store.js。同名是有意的分层设计。
 const fs = require('fs');
 const path = require('path');
-const Core = require('../../core/tangguan/tangguan-store');
+const Core = require('../../core/tavern/tavern-store');
 const EmbeddingIndex = require('./embedding-index');
 const KeywordIndex = require('./keyword-index');
 const { readJson } = require('../util/json');
 
+// 持久化键刻意保留旧名 'tangguan:library:v1'（v1.1.8 模块改名 tavern 时未迁移）：
+// kv_meta 与 sidecar 都按此键存取，改键名等于让既有用户全部角色卡"消失"。
 const KV_KEY = 'tangguan:library:v1';
 
 function writeJsonAtomic(filePath, value) {
@@ -63,7 +65,7 @@ function createStore(options) {
     }
     let fileOk = false;
     try { if (filePath) { writeJsonAtomic(filePath, value); fileOk = true; } } catch (_) { fileOk = false; }
-    if (!sqliteOk && !fileOk) throw new Error('tangguan_store_write_failed');
+    if (!sqliteOk && !fileOk) throw new Error('tavern_store_write_failed');
     cache = value;
     try { keywordStore.rebuild(value.memories); } catch (_) { /* keyword retrieval can fall back to a scan */ }
     return value;
@@ -72,7 +74,7 @@ function createStore(options) {
   function mutate(mutator, expectedRevision) {
     const current = load();
     if (expectedRevision != null && Number(expectedRevision) !== Number(current.revision)) {
-      return { ok: false, code: 'tangguan_revision_conflict', revision: current.revision };
+      return { ok: false, code: 'tavern_revision_conflict', revision: current.revision };
     }
     const next = { version: Core.VERSION, revision: current.revision + 1, characters: current.characters.slice(), memories: current.memories.slice(), matureMode: current.matureMode === true };
     mutator(next);
@@ -80,7 +82,7 @@ function createStore(options) {
       const saved = save(next);
       return { ok: true, revision: saved.revision, characters: saved.characters, memories: saved.memories };
     } catch (error) {
-      return { ok: false, code: 'tangguan_store_write_failed', error: error.message || String(error), revision: current.revision };
+      return { ok: false, code: 'tavern_store_write_failed', error: error.message || String(error), revision: current.revision };
     }
   }
 
@@ -125,7 +127,7 @@ function createStore(options) {
       const current = load();
       const existingMemories = current.memories.filter((item) => item.characterId === normalized.id);
       if (Core.characterCardBytes(normalized, existingMemories) > Core.MAX_CARD_BYTES) {
-        return { ok: false, code: 'tangguan_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
+        return { ok: false, code: 'tavern_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
       }
       return mutate((next) => {
         const index = next.characters.findIndex((item) => item.id === normalized.id);
@@ -138,7 +140,7 @@ function createStore(options) {
     toggleFavorite(id, favorite, expectedRevision) {
       const target = String(id || '');
       const current = load().characters.find((item) => item.id === target);
-      if (!current) return { ok: false, code: 'tangguan_character_not_found' };
+      if (!current) return { ok: false, code: 'tavern_character_not_found' };
       const nextFavorite = favorite == null ? !current.favorite : favorite === true;
       return mutate((next) => {
         const item = next.characters.find((entry) => entry.id === target);
@@ -151,7 +153,7 @@ function createStore(options) {
     touchCharacter(id, expectedRevision) {
       const target = String(id || '');
       const current = load().characters.find((item) => item.id === target);
-      if (!current) return { ok: false, code: 'tangguan_character_not_found' };
+      if (!current) return { ok: false, code: 'tavern_character_not_found' };
       const now = Date.now();
       return mutate((next) => {
         const item = next.characters.find((entry) => entry.id === target);
@@ -166,7 +168,7 @@ function createStore(options) {
       const target = String(id || '');
       const current = load();
       const source = current.characters.find((item) => item.id === target);
-      if (!source) return { ok: false, code: 'tangguan_character_not_found' };
+      if (!source) return { ok: false, code: 'tavern_character_not_found' };
       const now = Date.now();
       const character = Core.normalizeCharacter(Object.assign({}, source, {
         id: Core.id('char'),
@@ -187,7 +189,7 @@ function createStore(options) {
           updatedAt: now,
         }), character.id));
       if (Core.characterCardBytes(character, memories) > Core.MAX_CARD_BYTES) {
-        return { ok: false, code: 'tangguan_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
+        return { ok: false, code: 'tavern_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
       }
       const result = mutate((next) => {
         next.characters.unshift(character);
@@ -205,7 +207,7 @@ function createStore(options) {
     importBundle(bundle, expectedRevision) {
       const imported = Core.importBundle(bundle);
       if (Core.characterCardBytes(imported.character, imported.memories) > Core.MAX_CARD_BYTES) {
-        return { ok: false, code: 'tangguan_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
+        return { ok: false, code: 'tavern_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
       }
       // Imported cards always become a new local record. This prevents an
       // exported id from overwriting an existing card during a preview import.
@@ -228,15 +230,15 @@ function createStore(options) {
       const target = String(characterId || '');
       const current = load();
       const character = current.characters.find((item) => item.id === target);
-      if (!character) return { ok: false, code: 'tangguan_character_not_found' };
+      if (!character) return { ok: false, code: 'tavern_character_not_found' };
       const imported = Core.importWorldbook(bundle, target).map((item) => Object.assign({}, item, {
         id: Core.id('memory'),
         characterId: target,
       }));
-      if (!imported.length) return { ok: false, code: 'tangguan_worldbook_empty', error: 'No valid worldbook entries found.' };
+      if (!imported.length) return { ok: false, code: 'tavern_worldbook_empty', error: 'No valid worldbook entries found.' };
       const existing = current.memories.filter((item) => item.characterId === target);
       if (Core.characterCardBytes(character, existing.concat(imported)) > Core.MAX_CARD_BYTES) {
-        return { ok: false, code: 'tangguan_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
+        return { ok: false, code: 'tavern_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
       }
       const result = mutate((next) => {
         next.memories.unshift(...imported);
@@ -305,19 +307,19 @@ function createStore(options) {
       const next = Core.normalizeEnvelope(envelope);
       next.revision = load().revision + 1;
       next.matureMode = load().matureMode === true;
-      try { const saved = save(next); return { ok: true, revision: saved.revision }; } catch (error) { return { ok: false, code: 'tangguan_store_write_failed', error: error.message || String(error) }; }
+      try { const saved = save(next); return { ok: true, revision: saved.revision }; } catch (error) { return { ok: false, code: 'tavern_store_write_failed', error: error.message || String(error) }; }
     },
     getMatureMode() { return load().matureMode === true; },
     setMatureMode(enabled, confirmed) {
       const current = load();
       if (confirmed !== true) {
-        return { ok: false, code: 'tangguan_mature_confirmation_required', matureMode: current.matureMode === true };
+        return { ok: false, code: 'tavern_mature_confirmation_required', matureMode: current.matureMode === true };
       }
       try {
         const saved = save(Object.assign({}, current, { revision: current.revision + 1, matureMode: enabled === true }));
         return { ok: true, matureMode: saved.matureMode === true, revision: saved.revision };
       } catch (error) {
-        return { ok: false, code: 'tangguan_mature_mode_write_failed', error: error.message || String(error), matureMode: current.matureMode === true };
+        return { ok: false, code: 'tavern_mature_mode_write_failed', error: error.message || String(error), matureMode: current.matureMode === true };
       }
     },
     filePath,

@@ -6,7 +6,7 @@
   window.App = window.App || {};
   const CAPACITY = 120;
   const NAMES = new Set([
-    'bootMs', 'moduleSwitchMs', 'tangguanRenderMs', 'inputHandlerMs',
+    'bootMs', 'moduleSwitchMs', 'tavernRenderMs', 'inputHandlerMs',
     'streamRenderMs', 'stateSerializeMs', 'fileWriteMs', 'sqliteSyncMs',
     'ipcQueueDepth', 'stateBytes', 'messageCount',
   ]);

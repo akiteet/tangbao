@@ -4,8 +4,8 @@
 
   const $ = (id) => document.getElementById(id);
   const isModuleConversation = (item) => !!(item && (
-    item.tangguanCharacterId
-    || item.originModule === 'tangguan'
+    item.tavernCharacterId
+    || item.originModule === 'tavern'
     || item.originModule === 'create'
   ));
 
@@ -82,7 +82,7 @@
         App.chat._preCreateActiveId = null;
         App.chat._preSurfaceActiveId = null;
       }
-      if (module === 'tangguan' && App.chat) {
+      if (module === 'tavern' && App.chat) {
         const active = App.chat.activeConv && App.chat.activeConv();
         if (active && !isModuleConversation(active)) App.chat._preTangguanActiveId = active.id;
       }

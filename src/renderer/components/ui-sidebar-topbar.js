@@ -38,7 +38,7 @@
       .filter(Boolean)
       .map((item) => String(item));
   }
-  const MODEL_MODULES = new Set(['chat', 'create', 'tangguan']);
+  const MODEL_MODULES = new Set(['chat', 'create', 'tavern']);
   function currentModelModule() {
     const surface = App.chat && typeof App.chat.surface === 'function' ? App.chat.surface() : null;
     const surfaceOwner = surface && String(surface.owner || '').toLowerCase();
@@ -50,8 +50,8 @@
     const conv = App.chat && typeof App.chat.activeConv === 'function' ? App.chat.activeConv() : null;
     if (!conv) return null;
     if (module === 'create') return conv.originModule === 'create' ? conv : null;
-    if (module === 'tangguan') return conv.originModule === 'tangguan' || !!conv.tangguanCharacterId ? conv : null;
-    return conv.originModule === 'create' || conv.originModule === 'tangguan' || conv.tangguanCharacterId ? null : conv;
+    if (module === 'tavern') return conv.originModule === 'tavern' || !!conv.tavernCharacterId ? conv : null;
+    return conv.originModule === 'create' || conv.originModule === 'tavern' || conv.tavernCharacterId ? null : conv;
   }
   Object.assign(window.App.ui, {
     scheduleSidebarRender() {
@@ -74,8 +74,8 @@
       // route, so a legacy snapshot can never leak Tangguan/Create records
       // back into the normal sidebar.
       const moduleConversation = (item) => !!(item && (
-        item.tangguanCharacterId
-        || item.originModule === 'tangguan'
+        item.tavernCharacterId
+        || item.originModule === 'tavern'
         || item.originModule === 'create'
       ));
       let convs = App.state.conversations.filter((item) => !moduleConversation(item));
@@ -223,7 +223,7 @@
     syncWeb(on, notify) {
       App.state.web = on;
       const activeConversation = App.chat && App.chat.activeConv ? App.chat.activeConv() : null;
-      const restricted = !!(activeConversation && (activeConversation.tangguanCharacterId || activeConversation.originModule === 'tangguan'));
+      const restricted = !!(activeConversation && (activeConversation.tavernCharacterId || activeConversation.originModule === 'tavern'));
       const b = $('webBtn');
       if (b) {
         b.classList.toggle('active', !!on && !restricted);

@@ -6,9 +6,9 @@ const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const Core = require('../../src/core/tangguan/tangguan-store');
-const Infra = require('../../src/infrastructure/tangguan/tangguan-store');
-const EmbeddingIndex = require('../../src/infrastructure/tangguan/embedding-index');
+const Core = require('../../src/core/tavern/tavern-store');
+const Infra = require('../../src/infrastructure/tavern/tavern-store');
+const EmbeddingIndex = require('../../src/infrastructure/tavern/embedding-index');
 const Gateway = require('../../src/infrastructure/model-gateway/gateway');
 
 test('character cards expose shortcut fields, presets, and safe local avatars', () => {
@@ -59,14 +59,14 @@ test('character cards expose shortcut fields, presets, and safe local avatars', 
 
 test('Tangguan keeps stream output across surface changes and hides web indicators', () => {
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.doesNotMatch(chat, /renderMessages\(\) \{\s*if \(streaming\) \{/);
   assert.match(chat, /let streamUi = null;/);
   assert.match(chat, /bindStreamUi\(ui, node\)/);
   assert.match(chat, /streamUi\.messageId = liveMessage\.id/);
   assert.match(chat, /if \(m\.id\) wrap\.dataset\.messageId = m\.id/);
-  assert.match(chat, /const tangguan = isTangguanConv\(App\.chat\.activeConv\(\)\) \|\| isTangguanConversation\(App\.state\.activeId\)/);
-  assert.match(chat, /const webHtml = !tangguan &&/);
+  assert.match(chat, /const tavern = isTangguanConv\(App\.chat\.activeConv\(\)\) \|\| isTangguanConversation\(App\.state\.activeId\)/);
+  assert.match(chat, /const webHtml = !tavern &&/);
   assert.match(chat, /if \(isTangguanConv\(conv\) && webIndicator\) webIndicator\.remove\(\)/);
   assert.match(view, /function switchDrawer\(kind\)/);
   assert.match(view, /restoreEditorBase\(\)/);
@@ -164,7 +164,7 @@ test('worldbook preview detects the projected card size before writing', () => {
 });
 
 test('worldbook import conflict, size failure, and write failure leave existing data unchanged', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tangguan-import-fail-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-import-fail-'));
   try {
     const filePath = path.join(dir, 'library.json');
     const store = Infra.createStore({ filePath });
@@ -173,14 +173,14 @@ test('worldbook import conflict, size failure, and write failure leave existing 
     const before = store.getCharacter('char-a');
     const conflict = store.importWorldbook('char-a', { entries: [{ content: 'stale write' }] }, 1);
     assert.equal(conflict.ok, false);
-    assert.equal(conflict.code, 'tangguan_revision_conflict');
+    assert.equal(conflict.code, 'tavern_revision_conflict');
     assert.deepEqual(store.getCharacter('char-a').memories, before.memories);
 
     const oversized = store.importWorldbook('char-a', {
       entries: Array.from({ length: 30 }, (_, index) => ({ title: 'Large ' + index, content: 'x'.repeat(12000) })),
     }, before.revision);
     assert.equal(oversized.ok, false);
-    assert.equal(oversized.code, 'tangguan_card_too_large');
+    assert.equal(oversized.code, 'tavern_card_too_large');
     assert.deepEqual(store.getCharacter('char-a').memories, before.memories);
 
     const seededCharacter = Core.normalizeCharacter({ id: 'char-a', name: 'A' });
@@ -197,7 +197,7 @@ test('worldbook import conflict, size failure, and write failure leave existing 
     });
     const failed = failingStore.importWorldbook('char-a', { entries: [{ content: 'must not persist' }] }, 1);
     assert.equal(failed.ok, false);
-    assert.equal(failed.code, 'tangguan_store_write_failed');
+    assert.equal(failed.code, 'tavern_store_write_failed');
     assert.deepEqual(failingStore.getCharacter('char-a').memories.map((item) => item.content), ['keep me']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -218,8 +218,8 @@ test('worldbook retrieval is character-scoped, ranked, and budgeted', () => {
   assert.equal(result.semantic, false);
 });
 
-test('tangguan store persists revisions and rejects stale writes', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tangguan-'));
+test('tavern store persists revisions and rejects stale writes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-'));
   try {
     const store = Infra.createStore({ filePath: path.join(dir, 'library.json') });
     const saved = store.saveCharacter({ id: 'char-a', name: 'A' }, 0);
@@ -227,7 +227,7 @@ test('tangguan store persists revisions and rejects stale writes', () => {
     assert.equal(saved.revision, 1);
     const stale = store.saveMemory('char-a', { id: 'memory-a', content: 'fact' }, 0);
     assert.equal(stale.ok, false);
-    assert.equal(stale.code, 'tangguan_revision_conflict');
+    assert.equal(stale.code, 'tavern_revision_conflict');
     const memory = store.saveMemory('char-a', { id: 'memory-a', content: 'fact', keywords: ['fact'] }, 1);
     assert.equal(memory.ok, true);
     const reloaded = Infra.createStore({ filePath: path.join(dir, 'library.json') });
@@ -240,7 +240,7 @@ test('tangguan store persists revisions and rejects stale writes', () => {
 });
 
 test('imports always receive new ids and semantic indexes become stale after worldbook edits', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tangguan-index-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-index-'));
   try {
     const store = Infra.createStore({
       filePath: path.join(dir, 'library.json'),
@@ -279,7 +279,7 @@ test('imports always receive new ids and semantic indexes become stale after wor
 });
 
 test('embedding index reports corruption without affecting the character library', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tangguan-corrupt-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-corrupt-'));
   const indexPath = path.join(dir, 'embeddings.index.json');
   try {
     fs.writeFileSync(indexPath, '{broken', 'utf8');
@@ -310,7 +310,7 @@ test('embedding calls record request identity and an explicit non-cacheable metr
     const result = await Gateway.createEmbeddings('acct-embedding', 'text-embedding-test', ['hello'], { callType: 'embedding_query' });
     assert.equal(result.ok, true);
     assert.equal(metrics.length, 1);
-    assert.equal(metrics[0].scope, 'tangguan');
+    assert.equal(metrics[0].scope, 'tavern');
     assert.equal(metrics[0].callType, 'embedding_query');
     assert.match(metrics[0].requestId, /^embedding_query_/);
     assert.equal(metrics[0].cache.mode, 'not_eligible');
@@ -337,17 +337,17 @@ test('Tangguan transport uses chat kind while retaining module telemetry', () =>
 });
 
 test('Tangguan new sessions start empty and auto-title from the first user turn', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
   assert.match(view, /conv\.title = '新会话';/);
   assert.doesNotMatch(view, /conv\.messages\.push\(\{ id: App\.uid\(\), role: 'assistant', content: greeting/);
   assert.match(chat, /conv\.titleMode !== 'manual'/);
   assert.match(chat, /conv\.title = \(text \|\|/);
-  assert.doesNotMatch(chat, /conv\.title === '新会话' \|\| conv\.tangguanCharacterId/);
+  assert.doesNotMatch(chat, /conv\.title === '新会话' \|\| conv\.tavernCharacterId/);
 });
 
 test('Tangguan editor keeps a single worldbook heading and exposes standalone import', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const memory = view.slice(view.indexOf('function memoryHtml()'), view.indexOf('function sessionHtml()'));
   assert.doesNotMatch(memory, /tg-section-title.*世界书/);
   assert.match(view, /data-tg-worldbook-import/);
@@ -355,7 +355,7 @@ test('Tangguan editor keeps a single worldbook heading and exposes standalone im
 });
 
 test('Tangguan worldbook mutations invalidate detail cache before rerender', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const deleteStart = view.indexOf('const memoryDelete = target.closest');
   const importStart = view.indexOf('const worldbookImport = target.closest');
   assert.ok(deleteStart >= 0);
@@ -365,14 +365,14 @@ test('Tangguan worldbook mutations invalidate detail cache before rerender', () 
 });
 
 test('Tangguan character replacement is guarded while the editor is dirty', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /function runWithEditorGuard\(action\)/);
   assert.match(view, /runWithEditorGuard\(async \(\) => \{[\s\S]{0,180}loadCharacters\(select\.dataset\.tgSelect\)/);
   assert.match(view, /runWithEditorGuard\(\(\) => \{[\s\S]{0,180}activeDrawer = 'editor'/);
 });
 
 test('Tangguan local interactions coalesce search and editor dirty work', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /let characterSearchTimer = null;/);
   assert.match(view, /setTimeout\(\(\) => \{[\s\S]{0,260}renderCharacterList\(query, list\)/);
   assert.match(view, /function scheduleEditorDirtyCheck\(\)/);
@@ -383,7 +383,7 @@ test('Tangguan local interactions coalesce search and editor dirty work', () => 
 });
 
 test('Tangguan editor exposes immersive draft fields without legacy duplicate controls', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.doesNotMatch(view, /tgSystemPrompt|bindLegacy|legacyParseDraft/);
   assert.match(view, /tgFirstMessage/);
   assert.match(view, /tgStarters/);
@@ -395,7 +395,7 @@ test('Tangguan editor exposes immersive draft fields without legacy duplicate co
 
 test('Tangguan keeps the default Chat prompt and isolates global user memory', () => {
   const chat = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/chat/chat.js'), 'utf8');
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(chat, /const baseSys = isTangguanConv\(conv\)/);
   assert.match(chat, /const userMemory = isTangguanConv\(conv\) \? ''/);
   assert.match(chat, /const userMemTok = App\.context\.estimateTokens\(isTangguanConv\(conv\) \? ''/);
@@ -405,14 +405,14 @@ test('Tangguan keeps the default Chat prompt and isolates global user memory', (
 });
 
 test('Tangguan invalid character pointers fall back to a valid recent card', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /const explicit = hasCharacter\(preferredId\) \? String\(preferredId\) : ''/);
   assert.match(view, /const persisted = hasCharacter\(ui\.lastCharacterId\) \? String\(ui\.lastCharacterId\) : ''/);
   assert.match(view, /selectedId = explicit \|\| persisted \|\| \(fallback && fallback\.id\) \|\| currentId \|\|/);
 });
 
 test('Tangguan library cards stay compact and ignore malformed sessions', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tangguan/tangguan.js'), 'utf8');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   const cardSource = view.slice(view.indexOf('function card(item)'), view.indexOf('function renderCharacterList'));
   assert.doesNotMatch(cardSource, /item\.description/);
   assert.match(cardSource, /data-tg-recent/);

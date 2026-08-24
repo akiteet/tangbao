@@ -14,7 +14,7 @@ const { clone } = require('../../core/util/clone');
 
 const FORMAT = 'tangbao-module-sessions';
 const VERSION = 1;
-const MODULES = new Set(['tangguan', 'create']);
+const MODULES = new Set(['tavern', 'create']);
 
 function moduleName(value) {
   const name = String(value || '').trim();
@@ -115,6 +115,10 @@ function createStore(options) {
     atomicWrite(markerFile, Object.assign({}, marker() || {}, value || {}, { updatedAt: new Date().toISOString() }));
   };
 
+  // v1.1.8 模块改名（tangguan → tavern）：旧桶文件一次性搬迁到新桶，旧文件
+  // 加 .migrated-<ts> 后缀保留，避免回滚旧版本时丢会话，也避免重复搬迁。
+  const LEGACY_BUCKET = { tavern: 'tangguan' };
+
   const read = (module) => {
     const name = moduleName(module);
     const file = fileFor(name);
@@ -122,7 +126,23 @@ function createStore(options) {
     try { raw = readJson(file); } catch (error) {
       return { ok: false, code: 'module_session_read_failed', module: name, path: file, error: error.message || String(error) };
     }
-    if (raw == null) return { ok: true, module: name, path: file, exists: false, data: normalizeEnvelope(name, {}) };
+    if (raw == null) {
+      const legacyName = LEGACY_BUCKET[name];
+      if (legacyName) {
+        const legacyFile = path.join(dir, legacyName + '.json');
+        let legacyRaw = null;
+        try { legacyRaw = readJson(legacyFile); } catch (_) { legacyRaw = null; }
+        if (legacyRaw && legacyRaw.format === FORMAT && Number(legacyRaw.version) === VERSION) {
+          const migrated = normalizeEnvelope(name, legacyRaw);
+          try {
+            atomicWrite(file, migrated);
+            try { fs.renameSync(legacyFile, legacyFile + '.migrated-' + Date.now().toString(36)); } catch (_) {}
+            return { ok: true, module: name, path: file, exists: true, data: normalizeEnvelope(name, migrated), migratedFromLegacy: legacyName };
+          } catch (_) { /* 搬迁失败则按空桶处理，下次再试 */ }
+        }
+      }
+      return { ok: true, module: name, path: file, exists: false, data: normalizeEnvelope(name, {}) };
+    }
     if (!raw || raw.format !== FORMAT || Number(raw.version) !== VERSION || raw.module !== name) {
       return { ok: false, code: 'module_session_invalid', module: name, path: file, error: 'invalid_module_session_envelope' };
     }
@@ -182,15 +202,19 @@ function createStore(options) {
   const migrateLegacy = (state) => {
     const source = state && typeof state === 'object' ? state : {};
     const legacy = Array.isArray(source.conversations) ? source.conversations : [];
+    // 注意：这里的输入是"旧版 state.json"，字段名是改名前的旧名
+    // （tangguanCharacterId / originModule:'tangguan'），刻意不跟随新命名。
+    const isLegacyTavern = (item) => !!(item && (item.tangguanCharacterId || item.originModule === 'tangguan'
+      || item.tavernCharacterId || item.originModule === 'tavern'));
     const groups = {
-      tangguan: legacy.filter((item) => item && (item.tangguanCharacterId || item.originModule === 'tangguan')),
+      tavern: legacy.filter(isLegacyTavern),
       create: legacy.filter((item) => item && item.originModule === 'create'),
     };
-    if (!groups.tangguan.length && !groups.create.length) {
+    if (!groups.tavern.length && !groups.create.length) {
       return { ok: true, migrated: false, state: source, sessions: {} };
     }
     const existing = {};
-    for (const name of ['tangguan', 'create']) {
+    for (const name of ['tavern', 'create']) {
       const result = read(name);
       if (!result.ok) return result;
       existing[name] = result;
@@ -198,15 +222,15 @@ function createStore(options) {
     const oldMarker = marker();
     const sourceHash = digest(legacy);
     if (oldMarker && oldMarker.sourceHash === sourceHash && oldMarker.status === 'verified') {
-      const clean = Object.assign({}, source, { conversations: legacy.filter((item) => !item || (!item.tangguanCharacterId && item.originModule !== 'tangguan' && item.originModule !== 'create')) });
-      return { ok: true, migrated: true, resumed: true, state: clean, sessions: { tangguan: existing.tangguan.data, create: existing.create.data } };
+      const clean = Object.assign({}, source, { conversations: legacy.filter((item) => !item || (!isLegacyTavern(item) && item.originModule !== 'create')) });
+      return { ok: true, migrated: true, resumed: true, state: clean, sessions: { tavern: existing.tavern.data, create: existing.create.data } };
     }
     const migrationId = 'module_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
     const created = [];
     try {
-      writeMarker({ migrationId, status: 'copying', sourceHash, counts: { tangguan: groups.tangguan.length, create: groups.create.length } });
+      writeMarker({ migrationId, status: 'copying', sourceHash, counts: { tavern: groups.tavern.length, create: groups.create.length } });
       const sessions = {};
-      for (const name of ['tangguan', 'create']) {
+      for (const name of ['tavern', 'create']) {
         const current = existing[name].data;
         const byId = new Map(current.conversations.map((item) => [item.id, item]));
         for (const item of groups[name]) {
@@ -219,12 +243,12 @@ function createStore(options) {
         sessions[name] = result.data;
         if (!existing[name].exists) created.push(fileFor(name));
       }
-      for (const name of ['tangguan', 'create']) {
+      for (const name of ['tavern', 'create']) {
         const check = read(name);
         if (!check.ok || !check.data || check.data.module !== name) throw new Error('module_session_verify_failed');
       }
       const clean = Object.assign({}, source, {
-        conversations: legacy.filter((item) => !item || (!item.tangguanCharacterId && item.originModule !== 'tangguan' && item.originModule !== 'create')),
+        conversations: legacy.filter((item) => !item || (!isLegacyTavern(item) && item.originModule !== 'create')),
       });
       writeMarker({ migrationId, status: 'verified', sourceHash, stateHash: digest(clean) });
       return { ok: true, migrated: true, migrationId, state: clean, sessions };
@@ -237,7 +261,7 @@ function createStore(options) {
 
   const info = () => {
     const modules = {};
-    for (const name of ['tangguan', 'create']) {
+    for (const name of ['tavern', 'create']) {
       const file = fileFor(name);
       let stat = null;
       try { stat = fs.statSync(file); } catch (_) {}

@@ -21,13 +21,13 @@ test('interactive slow paths expose timing contracts without recording user cont
   const router = read('src/renderer/router.js');
   const app = read('src/renderer/app.js');
   const chat = read('src/renderer/views/chat/chat.js');
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   const ui = readComponentsSource();
   assert.match(router, /measure\('moduleSwitchMs'/);
   assert.match(app, /measure\('bootMs'/);
   assert.match(chat, /measure\('inputHandlerMs'/);
   assert.match(chat, /measure\('streamRenderMs'/);
-  assert.match(tangguan, /measure\('tangguanRenderMs'/);
+  assert.match(tavern, /measure\('tavernRenderMs'/);
   assert.match(ui, /scheduleSidebarRender\(\)/);
   assert.doesNotMatch(chat, /measure\('(?:inputHandlerMs|streamRenderMs)'[^\n]*content/);
 });
@@ -43,11 +43,11 @@ test('chat streaming reuses one text node and caches context-bar work', () => {
 
 test('large local lists have bounded rendering and indexed search', () => {
   const ui = readComponentsSource();
-  const tangguan = read('src/renderer/views/tangguan/tangguan.js');
+  const tavern = read('src/renderer/views/tavern/tavern.js');
   assert.match(ui, /HISTORY_INITIAL_COUNT = 100/);
   assert.match(ui, /data-history-more/);
   assert.match(ui, /_conversationSearchCache: new Map\(\)/);
-  assert.match(tangguan, /characterSearchIndex = new Map/);
-  assert.match(tangguan, /characterMatches\(item, needle\)/);
-  assert.match(tangguan, /canReuseList/);
+  assert.match(tavern, /characterSearchIndex = new Map/);
+  assert.match(tavern, /characterMatches\(item, needle\)/);
+  assert.match(tavern, /canReuseList/);
 });

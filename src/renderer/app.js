@@ -5,7 +5,7 @@
   App.moduleSessions = App.moduleSessions || {
     status: 'pending',
     data: {
-      tangguan: { conversations: [], activeId: null },
+      tavern: { conversations: [], activeId: null },
       create: { conversations: [], activeId: null },
     },
   };
@@ -34,10 +34,25 @@
   }
 
   const isModuleConversation = (item) => !!(item && (
-    item.tangguanCharacterId
-    || item.originModule === 'tangguan'
+    item.tavernCharacterId
+    || item.originModule === 'tavern'
     || item.originModule === 'create'
   ));
+
+  // v1.1.8 模块改名：旧桶/旧快照里的会话字段还是旧名（tangguanCharacterId /
+  // originModule:'tangguan'），加载进内存时统一映射为新名，读写两侧即一致。
+  function normalizeModuleConversationFields(item) {
+    if (!item || typeof item !== 'object') return item;
+    if (item.tangguanCharacterId && !item.tavernCharacterId) {
+      item.tavernCharacterId = String(item.tangguanCharacterId);
+      delete item.tangguanCharacterId;
+    }
+    if (item.originModule === 'tangguan') item.originModule = 'tavern';
+    return item;
+  }
+  function normalizeModuleConversationList(list) {
+    return (Array.isArray(list) ? list : []).map(normalizeModuleConversationFields);
+  }
 
   function mergeModuleSessions(primary, fallback) {
     const list = Array.isArray(primary) ? primary.filter((item) => item && item.id) : [];
@@ -54,7 +69,8 @@
     const source = Array.isArray(conversations) ? conversations : [];
     return {
       normal: source.filter((item) => !isModuleConversation(item)),
-      tangguan: source.filter((item) => item && (item.tangguanCharacterId || item.originModule === 'tangguan')),
+      // 兼容新旧字段名：输入可能是未归一化的旧快照
+      tavern: source.filter((item) => item && (item.tavernCharacterId || item.tangguanCharacterId || item.originModule === 'tavern' || item.originModule === 'tangguan')),
       create: source.filter((item) => item && item.originModule === 'create'),
     };
   }
@@ -86,10 +102,10 @@
       // them, while the original snapshot remains untouched for recovery.
       const split = splitLegacyModuleSessions(App.state && App.state.conversations);
       const data = {};
-      for (const module of ['tangguan', 'create']) {
+      for (const module of ['tavern', 'create']) {
         const loaded = await Promise.resolve(service.load(module)).catch(() => null);
         const sidecar = loaded && loaded.ok && loaded.data ? loaded.data : null;
-        const conversations = mergeModuleSessions(sidecar && sidecar.conversations, split[module]);
+        const conversations = normalizeModuleConversationList(mergeModuleSessions(sidecar && sidecar.conversations, split[module]));
         const activeId = sidecar && sidecar.activeId && conversations.some((item) => item.id === sidecar.activeId)
           ? sidecar.activeId : (conversations[0] ? conversations[0].id : null);
         data[module] = { conversations, activeId, revision: Number(sidecar && sidecar.revision) || 0 };
@@ -110,20 +126,20 @@
     }
     const data = {};
     let loadFailed = null;
-    for (const module of ['tangguan', 'create']) {
+    for (const module of ['tavern', 'create']) {
       const loaded = await service.load(module);
       if (!loaded || !loaded.ok || !loaded.data) {
         loadFailed = loaded || { ok: false, code: 'module_session_load_failed', module };
         const fallback = migration.sessions && migration.sessions[module];
         data[module] = {
-          conversations: Array.isArray(fallback && fallback.conversations) ? fallback.conversations : [],
+          conversations: normalizeModuleConversationList(Array.isArray(fallback && fallback.conversations) ? fallback.conversations : []),
           activeId: fallback && fallback.activeId || null,
           revision: Number(fallback && fallback.revision) || 0,
         };
         continue;
       }
       data[module] = {
-        conversations: Array.isArray(loaded.data.conversations) ? loaded.data.conversations : [],
+        conversations: normalizeModuleConversationList(Array.isArray(loaded.data.conversations) ? loaded.data.conversations : []),
         activeId: loaded.data.activeId || null,
         revision: Number(loaded.data.revision) || 0,
       };
