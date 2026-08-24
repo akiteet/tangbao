@@ -1023,7 +1023,7 @@
       const stamp = conv.id + '|' + conv.messages.length + '|' + stampSum + '|' + ((lastMsg && lastMsg.streamStatus) || '');
       if (stamp === renderedContentStamp && renderedConvId === conv.id
         && messages.children.length > 0 && messages.style.display !== 'none') {
-        App.chat.scrollBottom(true);
+        App.chat.scrollBottomSettled();
         App.ui.renderTopbarTitle();
         App.chat.updateCtxBar();
         return;
@@ -1080,7 +1080,7 @@
         const liveNode = Array.from(messages.children).find((node) => node.dataset && node.dataset.messageId === streamUi.messageId);
         if (liveNode) App.chat.bindStreamUi(streamUi, liveNode);
       }
-      App.chat.scrollBottom(true);
+      App.chat.scrollBottomSettled();
       App.ui.renderTopbarTitle();
       App.chat.updateCtxBar();
     },
@@ -1134,6 +1134,21 @@
       if (!c) return;
       // 仅在强制或用户已贴近底部时跟随，避免打断向上翻看
       if (force || App.chat.isNearBottom()) c.scrollTop = c.scrollHeight;
+    },
+    // 会话激活/整窗重绘后的"落定式"归底：单次 scrollTop 赋值时内容高度往往
+    // 还没定型（每条助手消息的头像 <img> 异步加载、Markdown 图片、字体度量），
+    // 长会话会停在半空。在随后数帧与 250ms 各补一次强制归底；刚点进会话的
+    // 瞬间用户来不及向上翻看，不会打断阅读。
+    scrollBottomSettled() {
+      App.chat.scrollBottom(true);
+      const rescroll = () => App.chat.scrollBottom(true);
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(rescroll);
+        window.requestAnimationFrame(() => window.requestAnimationFrame(rescroll));
+      } else {
+        setTimeout(rescroll, 32);
+      }
+      setTimeout(rescroll, 250);
     },
 
     appendAssistant(initialContent) {
