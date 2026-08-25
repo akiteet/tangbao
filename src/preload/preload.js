@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('electron', {
   renameWorkspaceRoot: (workspaceId, rootId, name) => ipcRenderer.invoke('workspace:renameRoot', workspaceId, rootId, name),
   setPrimaryWorkspaceRoot: (workspaceId, rootId) => ipcRenderer.invoke('workspace:setPrimary', workspaceId, rootId),
   setTitleBarOverlay: (opts) => ipcRenderer.send('set-titlebar-overlay', opts),
+  // 启动闪屏交接：boot() 结束（成功或失败）都通知主进程显示主窗、撤掉闪屏（单向 send，无返回值）
+  notifyBootDone: (payload) => ipcRenderer.send('app:boot-done', payload || { ok: true }),
   showDirDialog: () => ipcRenderer.invoke('dialog:showDir'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   // 本地文件（如用户设置的本地模块）用系统关联程序打开：仅允许绝对路径，且主进程拒绝可执行后缀

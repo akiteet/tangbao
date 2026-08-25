@@ -622,17 +622,120 @@ function startStaticServer() {
 // 改为：渲染进程调用 app:registerLocalFile(绝对路径) → 主进程发不透明 fileId → 经 tangbao-file://<fileId> 自定义协议读取
 // （处理器见 app.whenReady 内的 protocol.handle('tangbao-file')）。URL 不含任何真实路径，fileId 不可枚举。
 
+// 启动闪屏：冷启动时先于主窗出现（深色卡片，splash.html 自包含静态页，file:// 加载与随机端口无关），
+// 等渲染层 boot 完成（数据恢复+首屏渲染+主题应用）发 app:boot-done 后淡出、主窗接管——全程看不到加载过程。
+// 闪屏每进程只建一次（macOS activate 重建主窗 / 渲染层 reload 重跑 boot 都不重弹）；
+// 无 preload 无 IPC，主进程单向控制其生死；20s 兜底定时器保证渲染层卡死时应用仍可见。
+let splashWindow = null;
+let splashCreated = false;
+let splashShownAt = 0;
+let splashFallbackTimer = null;
+
+// 最短展示时长：机器快时闪屏一闪而过反而像闪烁；boot-done 提前到达时补齐到至少 3s 再淡出
+const SPLASH_MIN_MS = 3000;
+
+function destroySplash(immediate) {
+  if (splashFallbackTimer) { clearTimeout(splashFallbackTimer); splashFallbackTimer = null; }
+  const win = splashWindow;
+  splashWindow = null;
+  if (!win || win.isDestroyed()) return;
+  if (immediate) { try { win.destroy(); } catch (_) {} return; }
+  // 先给页面加 .is-done 触发 CSS 淡出再销毁；executeJavaScript 失败（页面未就绪/已关）则直接销毁
+  try {
+    win.webContents.executeJavaScript('document.body.classList.add("is-done");').catch(() => {});
+    setTimeout(() => { try { if (!win.isDestroyed()) win.destroy(); } catch (_) {} }, 220);
+  } catch (_) {
+    try { win.destroy(); } catch (_) {}
+  }
+}
+
+// 幂等：闪屏不存在时只负责清兜底定时器；主窗已可见（reload 重跑 boot）时不重复 show/focus
+function revealMainWindow() {
+  const win = splashWindow;
+  if (splashFallbackTimer) { clearTimeout(splashFallbackTimer); splashFallbackTimer = null; }
+  const reveal = () => {
+    destroySplash(false);
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
+    mainWindow.show();
+    mainWindow.focus();
+  };
+  // 展示不足最短时长时补齐等待（win 暂存：等待期间 destroySplash 被别处调用也安全）
+  const elapsed = splashShownAt ? Date.now() - splashShownAt : SPLASH_MIN_MS;
+  const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
+  if (wait > 0 && win) setTimeout(reveal, wait);
+  else reveal();
+}
+
+// Windows 亚克力模糊背景需 Win11（build ≥ 22621）；不支持则回退实色深灰，
+// 页面经 ?bg= 参数得知模式并铺底色，两种情况都不会发白。
+function splashUsesAcrylic() {
+  if (process.platform !== 'win32') return false;
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(process.getSystemVersion() || '');
+  return !!m && Number(m[3]) >= 22621;
+}
+
+// 用户自定义主题色（settings.appearance.accent，空 = 渲染层 CSS 默认蓝）经查询参数注入闪屏，
+// 呼吸砖用它发光；非法值/读取异常返回空串，闪屏自行回退中性灰，绝不影响启动
+function splashAccentParam() {
+  try {
+    const st = readActiveStateObject();
+    const raw = st && st.settings && st.settings.appearance ? String(st.settings.appearance.accent || '') : '';
+    if (!raw) return '&accent=1a5cff'; // 未自定义时与渲染层默认主色一致
+    const m = /^#?([0-9a-fA-F]{6})$/.exec(raw);
+    return m ? '&accent=' + m[1].toLowerCase() : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function createSplash() {
+  if (splashCreated) return;
+  splashCreated = true;
+  const acrylic = splashUsesAcrylic();
+  const opts = {
+    width: 600,
+    height: 340,
+    frame: false,
+    backgroundColor: acrylic ? '#00000000' : '#171717',
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false, // 纯状态展示，不抢当前焦点
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  };
+  if (acrylic) opts.backgroundMaterial = 'acrylic'; // ZCode 同款：模糊桌面透出
+  splashWindow = new BrowserWindow(opts);
+  splashWindow.loadFile(path.join(__dirname, '..', '..', 'splash.html'), { search: 'bg=' + (acrylic ? 'acrylic' : 'solid') + splashAccentParam() });
+  splashWindow.once('ready-to-show', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashShownAt = Date.now();
+      splashWindow.show();
+    }
+  });
+  splashFallbackTimer = setTimeout(() => {
+    console.warn('[糖包] 启动闪屏兜底超时（20s 未收到 boot-done），强制显示主窗口');
+    revealMainWindow();
+  }, 20000);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#eef2fb',
+    backgroundColor: '#f4f4f4',
     icon: path.join(__dirname, '..', '..', 'assets', 'app-icon.ico'),
     // 去掉原生标题栏的“框”感：隐藏标题栏，仅保留系统的最小/最大/关闭按钮（叠加在右上角）
     // v1.1.8：height 与 .topbar(54px) 对齐——此前 36px 导致窗口按钮比顶栏矮一截；
     // 初始色为中性亮色板，运行时由渲染层 applyAppearance 随主题/强调色更新
+    // 启动闪屏方案：先隐藏，等渲染层 boot 完成发 app:boot-done 再 show（revealMainWindow）
+    show: false,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: 'rgba(250,250,250,0.96)',
@@ -649,6 +752,10 @@ function createWindow() {
   });
   mainWindow.loadURL(`http://127.0.0.1:${appPort}/`);
   trustWindow(mainWindow);
+  // 主窗加载失败也必须可见（闪屏兜底之外的第二道保险），否则用户面对永久空白
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame && errorCode !== -3 /* ERR_ABORTED：导航被打断不算失败 */) revealMainWindow();
+  });
   // 导航守卫：仅允许本应用同源 URL 的顶层导航，其余一律阻止（防钓鱼/跳转逃逸）
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (!isAppUrl(url)) event.preventDefault();
@@ -668,6 +775,13 @@ function createWindow() {
 
 // 渲染进程启动时取本地服务端口 + 启动令牌（端口随机分配，令牌每次启动重新生成）
 safeHandle('app:ports', () => ({ app: appPort, agent: agentPort, token: LOCAL_TOKEN }));
+
+// 渲染层 boot() 结束（成功或失败）都会发；失败也要显示主窗——页内已有 toast/console 报错，
+// 不能把用户关在闪屏后面。重复收到（reload 重跑 boot）由 revealMainWindow 幂等消化。
+safeOn('app:boot-done', (e, payload) => {
+  if (payload && payload.ok === false) console.warn('[糖包] 渲染层启动报告失败，显示主窗以便查看错误：', payload && payload.error);
+  revealMainWindow();
+});
 
 // M5（#254）：渲染进程用本地文件绝对路径换取不透明 fileId（仅登记真实存在的文件，绝不回传路径/内容）
 safeHandle('app:registerLocalFile', (e, absPath) => {
@@ -1311,6 +1425,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
+    revealMainWindow(); // 首实例还在启动（闪屏期）时，二次启动视为用户催促：直接显示主窗
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -1329,6 +1444,8 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // 启动闪屏最先出现（此后密钥库/服务启动/页面加载全程被盖住）；splash.html 为 file:// 静态页，不依赖下方端口
+    createSplash();
     // 密钥库必须在 app ready 之后初始化（safeStorage 依赖 app ready）。
     // 密钥文件与 state.json 同目录，但内容由系统密钥服务加密，明文不再进 state.json / localStorage。
     try {

@@ -110,7 +110,7 @@ tangbao/
 └── package.json
 ```
 
-- **Tests**: `npm test` (498 cases; 492 pass, 6 skipped — 5 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
+- **Tests**: `npm test` (506 cases; 500 pass, 6 skipped — 5 SQLite-ABI cases run for real under Electron via `npm run check:sqlite`, 1 eval-archive case needs `TANGBAO_EVAL_ARCHIVE_DIR` — 0 failures)
 - **Release gates**: `npm run check:version`, `npm run check:storage`, `npm run check:perf`, `npm run check:electron-abi`, `npm run check:sqlite`, `npm run check:ui`, `npm run check:release`, and `npm run bench:offline`
 - **Package**: `npm run dist` (Electron 31 + electron-builder, output in `dist/`)
 - **Data model**: see [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
@@ -119,7 +119,7 @@ tangbao/
 
 ### v1.1.8 (persistence integrity, engineering completion & UI system redesign)
 
-- **UI redesign (neutral professional)**: a fresh design system — dual-theme neutral grays with unified base components and one standard for spacing, radii, font sizes, scrollbars, cards, modals and collapse controls across the app; list cards and action layouts reworked in every module; one-click scroll-to-bottom for long replies; 糖读 gains work-record bars for parse/analysis tasks; dark-mode stability fix.
+- **UI redesign (neutral professional)**: a fresh design system — dual-theme neutral grays with unified base components and one standard for spacing, radii, font sizes, scrollbars, cards, modals and collapse controls across the app; list cards and action layouts reworked in every module; one-click scroll-to-bottom for long replies; 糖读 gains work-record bars for parse/analysis tasks; a splash screen now bridges launch until the app is fully ready; dark-mode stability fix.
 - **P0 fix: image model partition survives restart**: a v1.1.6 regression made image-generation classifications revert to the text group after restarting. Fixed alongside a local database structure upgrade. Note: classifications already stripped before upgrading must be re-marked once in Settings.
 - **Default prompt upgrades**: the chat prompt is now structured (format discipline / length adaptation / honesty first); 糖馆 roleplay uses a neutral roleplay framework — the character card is the identity & behavior definition, and the base prompt no longer introduces itself as an assistant; AI character drafts and the four 糖读 analysis prompts (summary / points / translate / outline) carry clearer quality requirements. Users who never customized prompts get these automatically.
 - **Data & streaming fixes**: entering an old conversation reliably lands at the true bottom; streaming timeouts now actually disconnect the request instead of stalling repeatedly when a provider rate-limits; multiple data-loss protections strengthened (abnormal snapshots can no longer overwrite configured fields).

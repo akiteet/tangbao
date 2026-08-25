@@ -380,6 +380,13 @@
       }
     } finally {
       if (App.perf) App.perf.measure('bootMs', bootStarted);
+      // 启动闪屏交接：成功/失败都通知主进程撤掉闪屏并显示主窗（失败时页内已有 toast 报错）。
+      // 浮窗跑同一份 boot（App.__floatMode），不发此信号——否则浮窗先就绪会把还没 boot 完的主窗提前放出。
+      try {
+        if (!App.__floatMode && window.electron && window.electron.notifyBootDone) {
+          window.electron.notifyBootDone({ ok: App.__bootReady === true, error: App.__bootReady ? undefined : 'boot_failed' });
+        }
+      } catch (_) {}
     }
   }
 

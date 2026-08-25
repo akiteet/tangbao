@@ -24,6 +24,10 @@ v1.1.8 is the persistence-integrity, structure, and UI-system release. It fixes 
 
 Every document parse and every analysis (摘要/要点/翻译/拆解, including per-segment progress for long documents) produces a compact record bar reusing the 糖绘 queue-card pattern: status dot + name + result/failure reason + retry + dismiss. Failures persist as records instead of toast-only; done/canceled records auto-dismiss after 10s and failures after 60s; the list shows at most two rows (scroll for more) so the outline section keeps its space when idle.
 
+### Splash screen
+
+Launch shows a hand-crafted pixel wordmark — "TangBao", built from a hard-coded glyph bitmap (square blocks only, no font files bundled, nothing rasterized at runtime) — with a left-to-right gray→white gradient across the columns. It sits on a crisp full-width dark band over an acrylic-blurred backdrop on Windows 11 (solid dark fallback on older systems); both the band and the page veil carry a tint of the user's custom accent color, which the main process reads from settings and passes to the splash at boot. A terminal-style block cursor blinks in that accent beside the wordmark, and about a quarter of the letter blocks shimmer in fast wandering pulses after a quick column-sweep entrance. Blocks are drawn on an integer device-pixel grid, so the letterforms stay perfectly seamless at any DPI. The splash stays on screen for at least three seconds before fading out. The main window is revealed only after the renderer reports boot complete (state restored, first view rendered, theme applied), so users no longer watch an empty frame fill in piece by piece or flash white before dark mode applies. Failsafes keep the app reachable if boot stalls: a 20s timeout and main-frame load failures both force the main window visible; reloads and macOS window recreation never re-trigger the splash.
+
 ### 糖馆 renamed to `tavern` (with data migration)
 
 - Renamed across the codebase: module id, `App.tavern`, `#tavernView`, `tavern:*` IPC channels, error codes, conversation fields (`tavernCharacterId`), and file/directory names.
@@ -43,6 +47,7 @@ Every document parse and every analysis (摘要/要点/翻译/拆解, including 
 - Entering an old conversation now reliably lands at the very bottom: the full-rebuild and stamp-guard render paths use a settled scroll (immediate + double animation-frame + 250ms compensation) that covers async avatar/image height growth.
 - Data-loss guards: drag-reorder no longer persists empty lists; five `acceptStateRevision` guards (accounts / customModules / visionModels / agentThreads / projects) plus default-project overwrite protection keep transient partial snapshots from wiping configured fields.
 - Stream-watchdog timeouts now truly disconnect: when the 30s first-byte / 90s idle watchdog fires, the renderer aborts the gateway request so the upstream call is cancelled instead of lingering in the background. Previously each timed-out request kept its upstream connection alive (observed: a rate-limited provider holding requests ~180s before answering 429), so orphaned calls stacked up and exhausted the provider's concurrency quota — surfacing as 糖馆 "总是流式空闲超时". The timeout message now also points at provider rate-limiting/congestion instead of implying a local network fault.
+- The topbar settings button's hover tooltip said 「API 设置」 although it opens the general settings dialog; it now reads 「设置」.
 
 ## P0 fix: image model partition flag survives restart
 
@@ -88,6 +93,6 @@ A closure-dependency audit found the candidate blocks lean on 3–14 shared help
 
 ## Verification
 
-- Full suite: 497 tests / 491 pass / 0 fail / 5 skipped (+1 real-SQLite case skipped under plain Node, covered by `check:sqlite` under Electron ABI).
+- Full suite: 506 tests / 500 pass / 0 fail / 6 skipped (cases requiring the Electron ABI — real-SQLite round-trips and the archived-eval corpus — run via `check:sqlite`).
 - Gates: version / storage / perf / release checks green at 1.1.8.
 - Electron UI smoke: desktop / small-desktop / compact / narrow all pass.

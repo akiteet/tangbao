@@ -32,6 +32,7 @@
     "files": [
       "src/**/*",
       "index.html",
+      "splash.html",
       "styles.css",
       "assets/**/*",
       "vendor/**/*",
