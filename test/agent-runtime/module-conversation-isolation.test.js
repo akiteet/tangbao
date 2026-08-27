@@ -159,6 +159,32 @@ test('legacy module conversations stay out of regular state after sidecar migrat
   }
 });
 
+test('group silence system rows survive the sidecar roundtrip (v1.2.0 群聊空消息修复)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-group-silence-'));
+  try {
+    const store = ModuleSessions.createStore({ rootDir: dir });
+    const conv = {
+      id: 'tg-silence', title: 'Group', tavernCharacterId: 'role-1',
+      tavernCharacterIds: ['role-1', 'role-2'],
+      messages: [
+        { role: 'user', content: '大家好', ts: 1 },
+        { role: 'system', content: '「A」沉默了', characterId: 'role-1', ts: 2 },
+        { role: 'assistant', content: 'B：你好', characterId: 'role-2', ts: 3 },
+      ],
+      updatedAt: 4,
+    };
+    const save = store.saveConversation('tavern', conv, conv.id);
+    assert.equal(save.ok, true);
+    const back = store.read('tavern').data.conversations.find((c) => c.id === 'tg-silence');
+    assert.ok(back, '会话已落盘');
+    assert.equal(back.messages.length, 3, 'system 沉默提示行不再被存储层静默丢弃');
+    assert.equal(back.messages[1].role, 'system');
+    assert.equal(back.messages[1].content, '「A」沉默了');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Tavern origin marker is migrated into the isolated sidecar', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-marker-'));
   try {

@@ -8,7 +8,9 @@
  *     2. 引用已删除令牌 --sheen / --shadow
  *     3. 已删除的装饰 keyframes（shine / jello-press / glow-breathe）
  *   WARN 项（打印基线计数，暂不失败，供逐模块清零）：
- *     - 非令牌 border-radius 字面值、色板外硬编码 hex 的行数
+ *     - 非令牌 border-radius 字面值、组件层硬编码 hex、间距 px 字面值的行数
+ *
+ *   v1.2.0 批次 1：--glass* / --modal-bg 重映射别名全部退役，引用并入死令牌 FAIL 规则。
  *
  * 用法：npm run check:ui-consistency（已并入 check:ui 前置链）
  */
@@ -31,9 +33,9 @@ function main() {
     if (/backdrop-filter\s*:/i.test(line) && !/backdrop-filter\s*:\s*(none|unset)/i.test(line)) {
       failures.push(`L${no} backdrop-filter 非法使用：${line.trim().slice(0, 100)}`);
     }
-    // 2. 已删除令牌引用
-    if (/var\(--sheen\)|var\(--shadow\)/.test(line)) {
-      failures.push(`L${no} 引用已删除令牌（--sheen/--shadow）：${line.trim().slice(0, 100)}`);
+    // 2. 已删除令牌引用（v1.2.0 起含玻璃系别名 --glass* 与 --modal-bg）
+    if (/var\(--sheen\)|var\(--shadow\)|var\(--glass[-a-z]*\)|var\(--modal-bg\)/.test(line)) {
+      failures.push(`L${no} 引用已删除令牌（--sheen/--shadow/--glass*/--modal-bg）：${line.trim().slice(0, 100)}`);
     }
     // 3. 已删除装饰 keyframes
     if (/@keyframes\s+(shine|jello-press|glow-breathe)\b/.test(line)) {
@@ -74,6 +76,21 @@ function main() {
   // WARN 基线：非令牌圆角字面值行数（border-radius: <n>px 且不含 var(--radius）
   const radiusDebt = lines.filter((l) => /border-radius\s*:\s*\d/.test(l) && !/var\(--radius/.test(l)).length;
   if (radiusDebt > 0) warns.push(`非令牌 border-radius 字面值行数：${radiusDebt}（目标随模块迁移归零）`);
+
+  // WARN 基线（v1.2.0 批次 1）：组件层硬编码 hex——剔除 :root 与 [data-theme="dark"] 两个令牌定义块后统计
+  {
+    const noComments = lines.join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+    const componentLayer = noComments
+      .replace(/(^|\n):root\s*\{[\s\S]*?\n\}/g, '$1')
+      .replace(/(^|\n)\[data-theme="dark"\]\s*\{[\s\S]*?\n\}/g, '$1');
+    const hexLines = componentLayer.split('\n').filter((l) => /#[0-9a-fA-F]{3,8}\b/.test(l));
+    if (hexLines.length > 0) warns.push(`组件层硬编码 hex 行数：${hexLines.length}（应改用语义令牌，随模块迁移归零）`);
+    // WARN 基线：padding/margin/gap 的 px 字面值（未走 --sp-* 阶梯）
+    const spaceDebt = componentLayer.split('\n')
+      .filter((l) => /\b(padding|margin|gap)\s*:[^;]*/.test(l) && /\d+px/.test(l) && !/var\(--sp/.test(l))
+      .length;
+    if (spaceDebt > 0) warns.push(`间距 px 字面值行数：${spaceDebt}（应走 --sp-* 阶梯，随模块迁移归零）`);
+  }
 
   if (failures.length) {
     console.error('[check:ui-consistency] 违例 ' + failures.length + ' 项：');

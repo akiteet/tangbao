@@ -28,13 +28,15 @@ const dataLocation = require('../infrastructure/storage/data-location');
 const { createTokenChecker, isLoopbackHost } = require('../infrastructure/http/request-auth');
 const { userSkillsDirsList, createMainSkills } = require('./main-skills'); // v1.1.7 批次 E：技能目录辅助 + 技能 IPC 工厂
 const { createMainStorage } = require('./main-storage'); // v1.1.8 批次 F：存储域工厂
+const { createMainMcp } = require('./main-mcp'); // v1.2.0 批次 5：MCP 连接管理器
+const { createMainShortcuts } = require('./main-shortcuts'); // v1.2.0 批次 6a：全局快捷键（设置驱动）
 const { createMainTavern } = require('./main-tavern'); // v1.1.8 批次 F：糖馆域工厂
 const { createMainAgentRuns } = require('./main-agent-runs'); // v1.1.8 批次 F：糖码 Run 域工厂
 const { createMainFloat } = require('./main-float'); // v1.1.8 批次 F：浮窗域工厂
 let createRunStoreProxy; // 由底部 createMainAgentRuns 初始化后赋值，whenReady 构造 runStore 用
-// v1.1.8 批次 F：浮窗三件套由底部 createMainFloat 初始化后赋值（托盘/快捷键/启动恢复/主窗关闭钩子使用）
+// v1.1.8 批次 F：浮窗三件套由底部 createMainFloat 初始化后赋值（托盘/快捷键/启动重置/主窗关闭钩子使用）
 let toggleFloatWindow;
-let restoreFloatWindowIfOpen;
+let resetFloatWindowOnBoot;
 let closeAllFloatWindows;
 let managedSkillRoots; // 由底部 createMainSkills 初始化后赋值，搜索 handler 请求时读取
 // v1.1.8 批次 F：存储域三件套由底部 createMainStorage 初始化后赋值（IPC 请求/退出钩子均在初始化后触发）
@@ -514,7 +516,27 @@ const CSP_LOCAL = [
 
 // 可信渲染进程白名单：仅这些窗口的 IPC 才被接受（主窗 + 浮窗，均加载本应用同源页面）
 const trustedWebContents = new Set();
-function trustWindow(win) { try { if (win && win.webContents) trustedWebContents.add(win.webContents); } catch (_) {} }
+// v1.2.0：Ctrl/Cmd +/-/0 页面缩放。Chromium 默认只给 Ctrl+滚轮，键盘没有放大路径——
+// 用户滚轮缩小后无法恢复（第十轮反馈）。挂在 trustWindow 这个所有可信窗口的必经点，
+// 主窗/浮窗/子窗口统一获得；步长 0.5 级（zoomFactor=1.2^level，约 0.4x–2.5x），0 级=100%。
+function attachZoomShortcuts(wc) {
+  if (!wc || wc.__tbZoomAttached) return;
+  wc.__tbZoomAttached = true;
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (!(input.control || input.meta) || input.alt || input.shift) return;
+    let handled = false;
+    if (input.key === '=' || input.key === '+') { wc.zoomLevel = Math.min(wc.zoomLevel + 0.5, 5); handled = true; }
+    else if (input.key === '-') { wc.zoomLevel = Math.max(wc.zoomLevel - 0.5, -4); handled = true; }
+    else if (input.key === '0') { wc.zoomLevel = 0; handled = true; }
+    if (handled) event.preventDefault();
+  });
+}
+function trustWindow(win) {
+  try {
+    if (win && win.webContents) { trustedWebContents.add(win.webContents); attachZoomShortcuts(win.webContents); }
+  } catch (_) {}
+}
 function untrustWindow(win) { try { if (win && win.webContents) trustedWebContents.delete(win.webContents); } catch (_) {} }
 function appOrigin() { return `http://127.0.0.1:${appPort}`; }
 // 仅允许本应用自身 URL（同源、同随机端口）的导航
@@ -715,12 +737,59 @@ function createSplash() {
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashShownAt = Date.now();
       splashWindow.show();
+      // focusable:false 的窗口 show() 不激活也不保证置顶（Electron 34 起会被压到当前前台应用之下），
+      // 显式提升一次 Z 序；moveTop 与 focusable:false 语义一致，不抢焦点
+      try { splashWindow.moveTop(); } catch (_) {}
     }
   });
   splashFallbackTimer = setTimeout(() => {
     console.warn('[糖包] 启动闪屏兜底超时（20s 未收到 boot-done），强制显示主窗口');
     revealMainWindow();
   }, 20000);
+}
+
+// 当前应用版本（设置→帮助 显示用；开发/打包环境都可用）
+safeHandle('app:version', async () => ({ ok: true, version: app.getVersion() }));
+
+// ===== v1.2.0 批次 3：应用内更新（electron-updater 接 GitHub Releases）=====
+// IPC 通道无条件注册——开发态点击「检查更新」要得到可读提示，而不是 No handler registered；
+// electron-updater 本体仅打包环境启用（开发态没有 app-update.yml，checkForUpdates 必报错）。
+// 不自动下载——检查/下载/安装均由用户在 设置→帮助 中显式触发。
+let updaterStarted = false;
+function setupUpdater() {
+  if (updaterStarted) return;
+  updaterStarted = true;
+  let autoUpdater = null;
+  if (app.isPackaged) {
+    try { ({ autoUpdater } = require('electron-updater')); } catch (e) {
+      console.warn('[糖包] electron-updater 加载失败，应用内更新不可用：' + (e && e.message ? e.message : e));
+      autoUpdater = null;
+    }
+  }
+  if (autoUpdater) {
+    autoUpdater.autoDownload = false; // 用户确认后再下载
+    autoUpdater.autoInstallOnAppQuit = true; // 下载完成后退出时自动装上
+    const send = (type, payload) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.webContents.send('updater:event', Object.assign({ type }, payload)); } catch (_) {}
+      }
+    };
+    autoUpdater.on('checking-for-update', () => send('checking'));
+    autoUpdater.on('update-available', (info) => send('available', { version: info && info.version }));
+    autoUpdater.on('update-not-available', () => send('none'));
+    autoUpdater.on('download-progress', (p) => send('progress', { percent: Math.round((p && p.percent) || 0) }));
+    autoUpdater.on('update-downloaded', (info) => send('downloaded', { version: info && info.version }));
+    autoUpdater.on('error', (e) => send('error', { message: e && e.message ? String(e.message).slice(0, 200) : 'unknown' }));
+  }
+  // 统一出口：不可用/失败都 resolve 成 { ok:false, code }，渲染层按 code 给可读文案
+  const gate = async (run) => {
+    if (!autoUpdater) return { ok: false, code: app.isPackaged ? 'updater-unavailable' : 'dev-mode' };
+    try { await run(autoUpdater); return { ok: true }; }
+    catch (e) { return { ok: false, code: 'updater-error', error: e && e.message ? String(e.message).slice(0, 200) : String(e) }; }
+  };
+  safeHandle('updater:check', () => gate((au) => au.checkForUpdates()));
+  safeHandle('updater:download', () => gate((au) => au.downloadUpdate()));
+  safeHandle('updater:install', () => gate((au) => au.quitAndInstall()));
 }
 
 function createWindow() {
@@ -1073,6 +1142,15 @@ safeHandle('model:metrics', async (_e, input) => {
   } catch (error) { return { ok: false, reason: 'model-metrics-error', items: [], error: error && error.message ? error.message : String(error) }; }
 });
 
+// v1.2.0 批次 5：用量成本仪表盘聚合（按 provider+model 汇总 + 按日序列）
+safeHandle('metrics:summary', async (_e, input) => {
+  try {
+    const svc = getStorageService();
+    if (!svc || typeof svc.listModelCallMetricsSummary !== 'function') return { ok: false, reason: 'no-sqlite', items: [], daily: [], total: {} };
+    return svc.listModelCallMetricsSummary(input && typeof input === 'object' ? input : {});
+  } catch (error) { return { ok: false, error: error && error.message ? error.message : String(error), items: [], daily: [], total: {} }; }
+});
+
 safeHandle('search:query', async (_e, input) => {
   try {
     const svc = getStorageService();
@@ -1339,23 +1417,20 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, error: '子窗口仅支持 http/https 链接' };
     if (rawUrl.length > 2048 || /[\u0000-\u001F\u007F]/.test(rawUrl)) return { ok: false, error: 'URL 过长或含非法字符' };
 
-    let win = moduleWindows.get(id);
-    if (win && !win.isDestroyed()) {
-      // 窗口已存在且未关闭：聚焦该窗口
-      if (win.isMinimized()) win.restore();
-      win.focus();
-      return { ok: true };
-    }
-
+    // v1.2.0：支持多开——每次点击新开窗口（此前同 id 单例聚焦）；moduleWindows 仅用于退出/清理登记。
+    // partition 仍按模块 id：同模块多窗共享登录 cookie，符合预期。
     // 关键顺序：session 必须在 BrowserWindow 创建前配好（setUserAgent 不影响已存在的 WebContents）
     const partition = modulePartition(id);
     setupModuleSession(partition);
 
-    win = new BrowserWindow({
+    // v1.2.0：去掉 parent——Windows 上 owned 窗口最小化会缩成屏幕左下角小标题条、不进任务栏，且最大化受限
+    //（2026-08-26 用户反馈三连：不能多开/不能最大化/最小化后左下角丑面板，共同根因）
+    const win = new BrowserWindow({
       width: 1100,
       height: 750,
+      minWidth: 480,
+      minHeight: 360,
       title: label || '糖包 · 外部站点',
-      parent: mainWindow,
       backgroundMaterial: 'mica',         // Windows 11 液态玻璃效果（Mica 材质，系统标题栏自动适配）
       backgroundColor: '#1e1e2e',         // Mica 不可用时的回退色（深色）
       autoHideMenuBar: true,               // 隐藏 File/Edit/View/Help 菜单栏
@@ -1368,9 +1443,14 @@ safeHandle('custom:openChildWindow', async (e, {id, url, label}) => {
         // nativeWindowOpen 已删除：Electron 31 的 WebPreferences 无此键（15+ 起恒为 true），弹窗由下方 setWindowOpenHandler 接管
       },
     });
-    // 先登记再加载：loadURL 失败会 reject，避免窗口成为无法复用的孤儿
-    moduleWindows.set(id, win);
-    win.on('closed', () => moduleWindows.delete(id));
+    // 登记用于统一清理；closed 时移除，Map 值为窗口数组以支持同模块多开
+    const registered = moduleWindows.get(id) || [];
+    registered.push(win);
+    moduleWindows.set(id, registered);
+    win.on('closed', () => {
+      const list = (moduleWindows.get(id) || []).filter((w) => w !== win && !w.isDestroyed());
+      if (list.length) moduleWindows.set(id, list); else moduleWindows.delete(id);
+    });
 
     // webContents 级兜底（防止 session UA 因时序未生效）
     try { win.webContents.setUserAgent(CHILD_UA); } catch (_) {}
@@ -1509,8 +1589,9 @@ if (!gotLock) {
       allowOrigin: `http://127.0.0.1:${appPort}`,
     });
     createWindow();
-    // 若上次退出时浮窗是开着的，自动恢复浮窗（main-float.js 工厂返回）
-    try { restoreFloatWindowIfOpen(); } catch (_) {}
+    setupUpdater(); // v1.2.0 批次 3：打包环境下启用应用内更新（设置→帮助）
+    // 浮窗每次启动默认关闭：清掉上次退出遗留的 open 标记、不自动重建（托盘/主窗入口仍可随时打开）
+    try { resetFloatWindowOnBoot(); } catch (_) {}
     // 托盘图标（复用 app-icon.ico）：右键菜单切换浮窗 / 退出；点击托盘切换浮窗
     try {
       const trayIcon = path.join(__dirname, '..', '..', 'assets', 'app-icon.ico');
@@ -1523,12 +1604,23 @@ if (!gotLock) {
       ]);
       tray.setContextMenu(trayMenu);
       tray.on('click', () => { toggleFloatWindow(); });
-    } catch (_) {}
-    // 全局快捷键 Ctrl/Cmd+Shift+F 切换浮窗显隐（注册失败静默忽略：被占用或缺少权限）
-    try {
-      const ok = globalShortcut.register('CommandOrControl+Shift+F', () => { toggleFloatWindow(); });
-      if (!ok) { /* 注册失败，静默忽略 */ }
-    } catch (_) {}
+    } catch (e) {
+      // v1.2.0 批次 1：失败不再静默——托盘是浮窗常驻入口，至少让控制台知道不可用与原因
+      console.warn('[糖包] 托盘创建失败，托盘入口不可用：' + (e && e.message ? e.message : e));
+    }
+    // v1.2.0 批次 6c：macOS Dock 菜单（仅 darwin 构建路径；Windows 本机无法运行验证）
+    if (process.platform === 'darwin') {
+      try {
+        const dockMenu = Menu.buildFromTemplate([
+          { label: '显示/隐藏浮窗', click: () => { toggleFloatWindow(); } },
+          { type: 'separator' },
+          { label: '退出糖包', click: () => { app.quit(); } },
+        ]);
+        if (app.dock) app.dock.setMenu(dockMenu);
+      } catch (e) { console.warn('[糖包] Dock 菜单设置失败：' + (e && e.message ? e.message : e)); }
+    }
+    // 全局快捷键（v1.2.0 批次 6a）：设置驱动的注册器统一接管（浮窗/主窗显隐），失败原因可见
+    try { _mainShortcuts.applyAll(); } catch (e) { console.warn('[糖包] 全局快捷键注册异常：' + (e && e.message ? e.message : e)); }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1579,6 +1671,10 @@ readActiveStateObject = _mainStorageInit.readActiveStateObject;
 getStorageFileRepo = _mainStorageInit.getStorageFileRepo;
 
 // v1.1.8（批次 F）：糖馆域拆分模块（角色卡/世界书/记忆检索/索引/草稿 IPC）
+// v1.2.0 批次 5：MCP 连接管理器（设置→提示词 的 MCP servers JSON；will-quit 时 closeAll 由退出钩子调用）
+const _mainMcp = createMainMcp({ safeHandle, getSettings: () => readActiveStateObject() });
+app.on('will-quit', () => { try { Promise.resolve(_mainMcp.closeAll()).catch(() => {}); } catch (_) {} });
+
 createMainTavern({
   safeHandle,
   app,
@@ -1614,8 +1710,25 @@ const _mainFloatInit = createMainFloat({
   getAppPort: () => appPort,
 });
 toggleFloatWindow = _mainFloatInit.toggleFloatWindow;
-restoreFloatWindowIfOpen = _mainFloatInit.restoreFloatWindowIfOpen;
+resetFloatWindowOnBoot = _mainFloatInit.resetFloatWindowOnBoot;
 closeAllFloatWindows = _mainFloatInit.closeAllFloatWindows;
+
+// v1.2.0 批次 6a：全局快捷键注册器（设置→帮助→快捷键 可配置；whenReady 时 applyAll 首次注册）。
+// 置于 createMainFloat 之后：floatToggle 动作引用 toggleFloatWindow（调用时机在按键触发，届时必已赋值）
+const _mainShortcuts = createMainShortcuts({
+  safeHandle,
+  getSettings: () => readActiveStateObject(),
+  actions: {
+    floatToggle: () => toggleFloatWindow(),
+    mainToggle: () => {
+      try {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isVisible() && mainWindow.isFocused()) mainWindow.hide();
+        else { mainWindow.show(); mainWindow.focus(); }
+      } catch (_) {}
+    },
+  },
+});
 
 // v1.1.7（批次 E）：技能面板 IPC 拆分模块（renderer 无文件写权限，经主进程执行）
 // 纯工厂模式：createMainSkills 注册所有技能 IPC handler 并返回主进程需要的 helper

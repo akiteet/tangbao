@@ -54,14 +54,6 @@
   --code-head: #ececec;
   /* 遮罩：纯色半透明（简洁风无玻璃模糊） */
   --mask-bg: rgba(23, 23, 23, .40);
-  /* 玻璃系令牌退役：保留名称重映射为扁平等价物（引用处零破坏，模块迁移逐步改用新语义名） */
-  --glass: var(--panel-bg);
-  --glass-strong: var(--panel-bg);
-  --modal-bg: var(--panel-bg);
-  --glass-border: var(--border);
-  --glass-hi: none;
-  --glass-shadow: 0 8px 28px rgba(31, 30, 26, .14);
-  --blur: 0px;
   --radius: 10px;
   --radius-xs: 4px;    /* v1.1.5：微元件（标签/芯片）；圆角滑杆联动 r-8（下限 4） */
   --radius-md: 6px;    /* v1.1.5：输入框/小按钮；滑杆联动 r-6（下限 6） */
@@ -153,14 +145,6 @@
   --code-bg: #1f1f1f;
   --code-head: #2a2a2a;
   --mask-bg: rgba(0, 0, 0, .55);
-  /* 玻璃系退役重映射（同亮色） */
-  --glass: var(--panel-bg);
-  --glass-strong: var(--panel-bg);
-  --modal-bg: var(--panel-bg);
-  --glass-border: var(--border);
-  --glass-hi: none;
-  --glass-shadow: 0 8px 28px rgba(0, 0, 0, .45);
-  --blur: 0px;
   /* v1.1.8 暗色令牌同步 */
   --primary-rgb: 91, 135, 255;
   --primary-hover-rgb: 111, 151, 255;
@@ -211,7 +195,7 @@ body {
 [data-theme="dark"] body {
   background: var(--bg);
 }
-[data-theme="dark"] .modal { background: var(--modal-bg); }
+[data-theme="dark"] .modal { background: var(--panel-bg); }
 button, input, textarea, select { font-family: inherit; }
 button { cursor: pointer; }
 /* v1.1.8 尺寸统一基线：全部文本类控件默认标准高/内距/边框/焦点环（docs/UI-SYSTEM.md §3）。
@@ -471,6 +455,13 @@ img { max-width: 100%; }
 }
 .msg-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .msg-avatar.user { background: var(--text-tertiary); }
+/* 群聊：角色首字母头像（色相随角色 id）与发送者名行 */
+.msg-avatar.msg-avatar-initial { background: hsl(var(--sender-hue, 210) 45% 52%); font-weight: 600; font-size: var(--fs-md); }
+.msg-sender { font-size: var(--fs-small, 12px); font-weight: 600; color: hsl(var(--sender-hue, 210) 45% 45%); margin: 0 0 2px 2px; }
+[data-theme="dark"] .msg-sender { color: hsl(var(--sender-hue, 210) 55% 68%); }
+/* 群聊沉默提示行：居中灰字，无气泡 */
+.msg.system-note-row { justify-content: center; }
+.msg-system-note { font-size: var(--fs-small, 12px); color: var(--text-tertiary); background: color-mix(in srgb, var(--text-tertiary) 8%, transparent); border-radius: 999px; padding: 3px 12px; }
 .msg-body { min-width: 0; flex: 1; }
 
 /* 用户消息：右对齐浅蓝底（深字） */
@@ -676,10 +667,6 @@ body.float-mode .main::after {
 }
 .think-select:hover { border-color: var(--primary); color: var(--text); }
 .think-select:focus { border-color: var(--primary); color: var(--primary); }
-.tool.listening { background: var(--danger-badge-bg); color: var(--danger); }
-[data-theme="dark"] .tool.listening { background: var(--danger-badge-bg); color: var(--danger); }
-.tool.listening svg { animation: micpulse 1.1s infinite ease-in-out; }
-@keyframes micpulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .send-btn {
   margin-left: auto; background: var(--primary); color: #fff; border: none;
   min-width: var(--ctl-h-md); height: var(--ctl-h-md); padding: 0 var(--sp-3); border-radius: var(--radius-md);
@@ -1253,7 +1240,7 @@ body.float-mode .main::after {
 .skill-more summary::-webkit-details-marker { display: none; }
 .skill-more summary:hover { border-color: var(--primary); color: var(--primary); }
 .skill-more[open] summary { border-color: var(--primary); color: var(--primary); }
-.skill-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 168px; display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--glass-strong); box-shadow: var(--elevation-2); }
+.skill-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 168px; display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-bg); box-shadow: var(--elevation-2); }
 .skill-more-menu .mini { justify-content: flex-start; text-align: left; width: 100%; }
 .skill-more-menu .mini.danger { color: var(--danger); }
 .skill-filter { height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-bg); color: var(--text); font-size: var(--fs-sm); outline: none; flex: 0 0 auto; }
@@ -1375,7 +1362,7 @@ body.float-mode .main::after {
 .command-empty { padding: 18px; text-align: center; color: var(--text-tertiary); font-size: var(--fs-base); }
 .modal {
   width: 480px; max-width: 92vw; max-height: 86vh; position: relative;
-  background: var(--modal-bg);
+  background: var(--panel-bg);
   border-radius: var(--radius-lg); box-shadow: var(--elevation-3), var(--inner-highlight);
   border: var(--glow-border); overflow: hidden;
   display: flex; flex-direction: column;
@@ -2620,8 +2607,8 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .agent-mem-card {
   position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%);
   z-index: 300; width: fit-content; min-width: 360px; max-width: min(620px, calc(100vw - 48px));
-  background: var(--glass-strong);
-  border: 1px solid var(--glass-border); border-radius: var(--radius-lg);
+  background: var(--panel-bg);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
   box-shadow: var(--elevation-2);
   padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
 }
@@ -2838,6 +2825,12 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tavernView .tg-header-avatar img,
 #tavernView .tg-welcome-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
 #tavernView .tg-chat-surface { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+/* 群聊专属背景：accent 双向柔和渐变，主题令牌自适应明暗；单聊保持透明底 */
+#tavernView .tg-chat-surface.is-group {
+  background:
+    linear-gradient(165deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 42%),
+    linear-gradient(-20deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 38%);
+}
 #tavernView .tg-chat-surface > .tg-chat-scroll { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 #tavernView .tg-chat-message-slot { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
 #tavernView .tg-chat-surface .welcome { flex: 1 0 auto; min-height: 280px; padding: var(--sp-6) var(--sp-4) var(--sp-5); }
@@ -2846,7 +2839,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tavernView .tg-chat-surface .disclaimer { margin-top: 4px; }
 #tavernView .tg-library-head { justify-content: space-between; gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-3); }
 #tavernView .tg-library-head b { font-size: var(--fs-md); }
-#tavernView .tg-library-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: var(--radius-sm); background: var(--hover-bg); }
+#tavernView .tg-library-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; border-radius: var(--radius-sm); background: var(--hover-bg); }
 #tavernView .tg-library-tabs button,
 #tavernView .tg-library-filters button { min-width: 0; padding: 5px 6px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-tertiary); font-size: var(--fs-xs); white-space: nowrap;  transition: background var(--dur-press) var(--ease-smooth); }
 #tavernView .tg-library-tabs button:hover, #tavernView .tg-library-filters button:hover { background: var(--hover-bg); }
@@ -2890,6 +2883,40 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tavernView .tg-library-footer { display: flex; gap: 6px; padding-top: 10px; }
 #tavernView .tg-library-footer button { flex: 1 1 0; min-width: 0; padding: 7px 4px; font-size: var(--fs-xs); white-space: nowrap; }
 #tavernView .tg-library-scroll { min-height: 0; overflow-y: auto; }
+/* v1.2.0：会话/群聊 tab 的滚动区也撑满剩余高度，footer 与角色 tab 一样贴底（2026-08-26 用户反馈） */
+#tavernView .tg-library > .tg-library-scroll { flex: 1 1 auto; }
+#tavernView .tg-header-avatar-stack { display: flex; }
+#tavernView .tg-header-avatar-stack .tg-header-avatar { margin-left: -8px; box-shadow: 0 0 0 2px var(--panel-bg); }
+#tavernView .tg-header-avatar-stack .tg-header-avatar:first-child { margin-left: 0; }
+/* v1.2.0：主区模式指示徽章（个人会话/群聊），一眼可辨当前对话模式（2026-08-26） */
+#tavernView .tg-mode-badge { display: inline-block; font-size: var(--fs-xs, 11px); line-height: 1.6; color: var(--text-secondary); background: var(--hover-bg); border-radius: 999px; padding: 1px 10px; margin-bottom: 4px; }
+#tavernView .tg-mode-group { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* v1.2.0：当前会话行高亮（会话/群聊 tab），accent 左条不引起布局位移（2026-08-26） */
+#tavernView .tg-session-row.active { box-shadow: inset 2px 0 0 var(--accent); }
+#tavernView .tg-session-row.active .tg-session-open b { color: var(--accent); }
+/* v1.2.0：设置卡片标题旁的版本徽章（应用更新卡片），与模式徽章同视觉语言（2026-08-26） */
+.ver-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 9px; border-radius: 999px;
+  font-size: var(--fs-xs, 11px); font-family: var(--font-mono); color: var(--text-secondary);
+  background: var(--hover-bg); vertical-align: 1px;
+}
+/* v1.2.0：composer 工具按钮三态统一——active 按压反馈 + 禁用降透明（2026-08-26） */
+.tool:active { background: var(--hover-bg); color: var(--text); transform: scale(0.96); }
+.tool:disabled { opacity: 0.45; cursor: not-allowed; }
+.tool:disabled:hover { background: transparent; color: var(--text-secondary); }
+/* v1.2.0：浮窗可配置装配——默认极简（顶栏窗口控制+消息+输入发送），settings.floatKit 勾选后经 fk-show-* 放开；
+   #agentRunPill 在浮窗恒隐（点击会跳糖码视图且无侧栏可返回，卡死隐患，2026-08-26） */
+body.float-mode:not(.fk-show-welcome) #welcome,
+body.float-mode:not(.fk-show-think) #thinkSelect,
+body.float-mode:not(.fk-show-web) #webBtn,
+body.float-mode:not(.fk-show-modelSelect) #modelSelectBtn,
+body.float-mode:not(.fk-show-images) #imgBtn,
+body.float-mode:not(.fk-show-attachments) #attachBtn,
+body.float-mode:not(.fk-show-menu) #chatMenuBtn,
+body.float-mode:not(.fk-show-ctxBar) #chatCtxBar,
+body.float-mode:not(.fk-show-msgActions) .msg-actions,
+body.float-mode:not(.fk-show-disclaimer) .disclaimer,
+body.float-mode #agentRunPill { display: none !important; }
 #tavernView .tg-sessions { padding: 12px 0 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 #tavernView .tg-session-list { margin-top: 8px; }
 #tavernView .tg-session-row, #createView .create-session-row.tg-session-row { flex-direction: column; gap: 5px; padding: 8px; }
@@ -2921,6 +2948,11 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 #tavernView .tg-group-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 0; border: 0; background: transparent; color: var(--text); text-align: left; font-size: var(--fs-base); font-weight: 600;  transition: background var(--dur-press) var(--ease-smooth); }
 .tg-group-toggle:hover { background: var(--hover-bg); }
 #tavernView .tg-group-body { padding: 0 0 14px; }
+/* 编辑器头像块：预览 + 更换/移除（上传经 canvas 压缩至 128px，保存角色时随卡入库） */
+#tavernView .tg-avatar-editor { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+#tavernView .tg-avatar-editor .tg-avatar-editor-preview { width: 56px; height: 56px; flex: 0 0 56px; font-size: var(--fs-lg); border-radius: var(--radius-md); }
+#tavernView .tg-avatar-editor-actions { display: flex; flex-direction: column; gap: var(--sp-1); }
+#tavernView .tg-avatar-editor-actions small { color: var(--text-tertiary); font-size: var(--fs-xs); }
 #tavernView .tg-form-grid { grid-template-columns: 1fr; gap: 9px; margin-top: 0; }
 #tavernView .tg-field:nth-child(n + 3) { grid-column: auto; }
 #tavernView .tg-field input, #tavernView .tg-field textarea { font-size: var(--fs-sm); }
@@ -3885,3 +3917,26 @@ button.chip:hover, button.pill-chip:hover { background: var(--active-bg); border
 /* v1.1.8 T4：糖读预览抽屉遮罩（复用糖馆模式） */
 .doc-drawer-mask { position: fixed; inset: 0; z-index: 190; background: var(--mask-bg); }
 .doc-drawer-mask[hidden] { display: none; }
+
+/* ===== v1.2.0 批次 5：用量统计表（设置→数据） ===== */
+.usage-table { width: 100%; margin-top: var(--sp-2); border-collapse: collapse; font-size: var(--fs-sm); }
+.usage-table th, .usage-table td { padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.usage-table th { color: var(--text-3, #737373); font-weight: 600; }
+/* v1.2.0：角色卡拖拽排序把手与拖拽态（2026-08-26） */
+#tavernView .tg-character-card .drag-handle { cursor: grab; color: var(--text-tertiary); padding: 0 2px 0 0; font-size: var(--fs-sm); user-select: none; opacity: .55; }
+#tavernView .tg-character-card .drag-handle:active { cursor: grabbing; opacity: 1; }
+#tavernView .tg-character-card.dragging { opacity: .5; }
+/* v1.2.0：自定义模块视图工具行（独立小窗打开入口，2026-08-26） */
+.cv-toolbar { display: flex; justify-content: flex-end; padding: 4px 8px; gap: 6px; }
+/* v1.2.0：浮窗装配面板——横排胶囊词条，5 个/行固定两行对齐；选中=accent 胶囊（2026-08-26） */
+.fk-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px 10px; max-width: 640px; }
+.fk-chip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--hover-bg); color: var(--text-secondary);
+  font-size: var(--fs-sm, 12.5px); cursor: pointer; user-select: none;
+  transition: all var(--dur-press) var(--ease-smooth); white-space: nowrap;
+}
+.fk-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.fk-chip:hover { border-color: var(--accent); color: var(--text); }
+.fk-chip:has(input:checked) { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); color: var(--accent); font-weight: 600; }

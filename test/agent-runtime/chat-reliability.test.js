@@ -56,7 +56,7 @@ test('未配置账户也会保留可恢复的失败助手消息，流尾会刷�
   assert.ok(src.includes('if (!conv.messages.includes(liveMessage)) conv.messages.push(liveMessage);'), '先写入助手占位消息');
   assert.ok(src.includes("code: 'provider_not_configured'"), '未配置账户使用稳定错误码');
   assert.ok(src.includes('buf += decoder.decode();'), '流尾刷新 TextDecoder');
-  assert.ok(src.includes("cachedMarkdown(acc, liveMessage.id + ':stream-final')"), '流尾只做一次完整 Markdown 渲染');
+  assert.ok(src.includes("cachedMarkdown(streamBuffer.getAcc(), liveMessage.id + ':stream-final')"), '流尾只做一次完整 Markdown 渲染（累积器所有权已迁至 stream-accumulator）');
   assert.ok(src.includes('appendStreamText'), '流式阶段使用增量文本更新');
 });
 

@@ -65,7 +65,8 @@ test('Tavern keeps stream output across surface changes and hides web indicators
   assert.match(chat, /bindStreamUi\(ui, node\)/);
   assert.match(chat, /streamUi\.messageId = liveMessage\.id/);
   assert.match(chat, /if \(m\.id\) wrap\.dataset\.messageId = m\.id/);
-  assert.match(chat, /const tavern = isTavernConv\(App\.chat\.activeConv\(\)\) \|\| isTavernConversation\(App\.state\.activeId\)/);
+  // v1.2.0 群聊增强：activeConv 提取为复用变量（群聊头像/名字行同用），web 指示符逻辑不变
+  assert.match(chat, /const activeConv = App\.chat\.activeConv\(\);\r?\n\s*const tavern = isTavernConv\(activeConv\) \|\| isTavernConversation\(App\.state\.activeId\)/);
   assert.match(chat, /const webHtml = !tavern &&/);
   assert.match(chat, /if \(isTavernConv\(conv\) && webIndicator\) webIndicator\.remove\(\)/);
   assert.match(view, /function switchDrawer\(kind\)/);
@@ -367,7 +368,8 @@ test('Tavern worldbook mutations invalidate detail cache before rerender', () =>
 test('Tavern character replacement is guarded while the editor is dirty', () => {
   const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
   assert.match(view, /function runWithEditorGuard\(action\)/);
-  assert.match(view, /runWithEditorGuard\(async \(\) => \{[\s\S]{0,180}loadCharacters\(select\.dataset\.tgSelect\)/);
+  // 角色卡点击带 personalOnly：进入个人会话，绝不被指针带进群聊（2026-08-26 用户反馈）
+  assert.match(view, /runWithEditorGuard\(async \(\) => \{[\s\S]{0,300}loadCharacters\(select\.dataset\.tgSelect, \{ personalOnly: true \}\)/);
   assert.match(view, /runWithEditorGuard\(\(\) => \{[\s\S]{0,180}activeDrawer = 'editor'/);
 });
 
@@ -418,8 +420,12 @@ test('Tavern library cards stay compact and ignore malformed sessions', () => {
   assert.match(cardSource, /data-tg-recent/);
   assert.match(view, /function isValidSession\(item, characterId\)/);
   assert.match(view, /\.filter\(\(item\) => isValidSession\(item, characterId\)\)/);
-  assert.match(view, /isValidSession\(item, selected && selected\.id\)/);
+  // v1.2.0：findSession 改为按 id 全量查找个人会话，不再绑定当前选中角色——跨角色可进、孤儿会话可删（2026-08-26）
+  assert.doesNotMatch(view.slice(view.indexOf('function findSession'), view.indexOf('function findSession') + 600), /isValidSession\(item, selected/);
   assert.match(view, /message\.role === 'user' \|\| message\.role === 'assistant'/);
-  assert.match(view, /function sessionHtml\(\) \{[\s\S]{0,160}const sessions = characterSessions\(selected\.id\)/);
-  assert.match(view, /if \(!isValidSession\(active, selected\.id\)\) restoreConversation\(selected\.id\)/);
+  // v1.2.0：会话 tab 聚合全部角色的个人会话，逐行标注所属角色（2026-08-26 用户反馈）
+  assert.match(view, /function sessionHtml\(\) \{[\s\S]{0,600}filter\(\(item\) => !isGroupConv\(item\)\)/);
+  assert.match(view, /与「\$\{esc\(nameOf\(item\.tavernCharacterId\)\)\}」的会话/);
+  // v1.2.0 群聊独立：指针校正改用归属判定（单角色 + 群聊归首位角色），isValidSession 只做单角色展示过滤
+  assert.match(view, /if \(!belongsToCharacter\(active, selected\.id\)\) restoreConversation\(selected\.id\)/);
 });

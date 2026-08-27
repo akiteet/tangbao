@@ -48,6 +48,12 @@
       delete item.tangguanCharacterId;
     }
     if (item.originModule === 'tangguan') item.originModule = 'tavern';
+    // v1.2.0：从存储加载的会话不可能存在进行中的流——残留 streaming 占位复位为 failed（僵尸空气泡来源之一）
+    if (Array.isArray(item.messages)) {
+      for (const m of item.messages) {
+        if (m && m.streamStatus === 'streaming') m.streamStatus = 'failed';
+      }
+    }
     return item;
   }
   function normalizeModuleConversationList(list) {
@@ -174,6 +180,13 @@
     return order.map((id) => byId.get(id)).filter(Boolean);
   }
 
+  // v1.2.0：浮窗装配（settings.floatKit）→ body 修饰类；默认极简，勾选的块经 fk-show-* 放开
+  const FLOAT_KIT_KEYS = ['welcome', 'think', 'web', 'modelSelect', 'images', 'attachments', 'menu', 'ctxBar', 'msgActions', 'disclaimer'];
+  function applyFloatKit() {
+    const kit = (App.state.settings && App.state.settings.floatKit) || {};
+    for (const key of FLOAT_KIT_KEYS) document.body.classList.toggle('fk-show-' + key, kit[key] === true);
+  }
+
   function applyFloatStateSnapshot(payload) {
     const state = payload && payload.state && typeof payload.state === 'object' ? payload.state : payload;
     if (!state || typeof state !== 'object') return false;
@@ -183,6 +196,7 @@
     try {
       const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(state), { persist: false }) : { ok: false };
       if (!result || !result.ok) return false;
+      applyFloatKit();
       if (App.chat && App.chat.onShow) App.chat.onShow();
       if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
       return true;
@@ -206,6 +220,7 @@
         document.body.classList.add('float-mode');
         App.__floatMode = true;
         App.__floatReady = false;
+        applyFloatKit(); // v1.2.0：按 floatKit 装配浮窗（默认极简）
         // 浮窗透明度开关：默认不透明（可读性优先），悬停时强制不透明，点击在 1.0/0.6 间切换
         function setupFloatOpacity() {
           const btn = document.getElementById('floatOpacity');

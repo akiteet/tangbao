@@ -18,6 +18,9 @@ const electronBinary = require('electron'); // 在纯 Node 上下文中解析为
 const TESTS = [
   'test/agent-runtime/storage-search-metrics.test.js',
   'test/agent-runtime/image-partition-persistence.test.js',
+  'test/agent-runtime/schema-migration-real.test.js', // v1.2.0 批次 2：迁移真 SQLite 幂等
+  'test/agent-runtime/fulltext-search.test.js', // v1.2.0 批次 4b：消息正文全文检索 + 片段窗口化
+  'test/agent-runtime/usage-metrics-summary.test.js', // v1.2.0 批次 5：用量成本仪表盘聚合
 ];
 
 function main() {

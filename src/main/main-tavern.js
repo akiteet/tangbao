@@ -67,6 +67,12 @@ safeHandle('tavern:toggleFavorite', (_e, input) => {
     return getTavernStore().toggleFavorite(opts.id, opts.favorite, opts.expectedRevision);
   } catch (error) { return { ok: false, code: 'tavern_favorite_failed', error: error.message || String(error) }; }
 });
+safeHandle('tavern:reorderCharacters', (_e, input) => {
+  try {
+    const opts = input && typeof input === 'object' ? input : {};
+    return getTavernStore().reorderCharacters(opts.orderedIds, opts.expectedRevision);
+  } catch (error) { return { ok: false, code: 'tavern_reorder_failed', error: error.message || String(error) }; }
+});
 safeHandle('tavern:touchCharacter', (_e, input) => {
   try {
     const opts = input && typeof input === 'object' ? input : {};

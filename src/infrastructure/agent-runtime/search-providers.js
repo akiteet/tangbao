@@ -7,9 +7,23 @@
 const SEARCH_TIMEOUT = 8000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
-// 带超时的 fetch（Node 18+ 内置 fetch 支持 AbortSignal.timeout）
+// 出网通道（2026-08-26 联网修复）：主进程语境用 Electron net.fetch（Chromium 网络栈，
+// 自动走系统代理——此前 Node fetch 直连导致 Tavily 超时/DDG 被墙/Bing 反爬三条路全断）；
+// 非 Electron 语境（独立 CLI / 测试）回退全局 fetch。
+let _net = null;
+let _netProbed = false;
+function outboundFetch(url, opts) {
+  if (!_netProbed) {
+    _netProbed = true;
+    try { _net = require('electron') && require('electron').net ? require('electron').net : null; } catch (e) { _net = null; }
+  }
+  if (_net && typeof _net.fetch === 'function') return _net.fetch(url, opts);
+  return fetch(url, opts);
+}
+
+// 带超时的出网 fetch
 async function fetchWithTimeout(url, opts, ms) {
-  return fetch(url, Object.assign({ signal: AbortSignal.timeout(ms) }, opts));
+  return outboundFetch(url, Object.assign({ signal: AbortSignal.timeout(ms) }, opts));
 }
 
 function decodeEntities(s) {

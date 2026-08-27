@@ -26,7 +26,8 @@ function init(rootDir) {
 function _resolve(category, id) {
   if (!CATEGORIES.includes(category)) throw new Error('未知文件仓分类: ' + category);
   const sid = String(id == null ? '' : id);
-  if (!/^[\w.\-]+$/.test(sid)) throw new Error('非法文件 id: ' + sid);
+  // v1.2.0 批次 2 修复：原正则放行纯点号 id（'..' 经 path.join 可目录穿越）
+  if (!/^[\w][\w.\-]*$/.test(sid) || sid.includes('..')) throw new Error('非法文件 id: ' + sid);
   return path.join(base, category, sid);
 }
 

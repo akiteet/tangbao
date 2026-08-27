@@ -38,8 +38,16 @@
   App.context.msgTokens = msgTokens;
   App.context.messagesTokens = function (msgs) { return (msgs || []).reduce((n, m) => n + msgTokens(m), 0); };
 
-  // 摘要长度上限（token），避免摘要无限膨胀占用上下文。截断时会找自然边界。
-  App.context.SUMMARY_MAX_TOKENS = 4000;
+  // v1.2.0 批次 4：三个可调参数改为 getter——每次读取都从 settings.context 取当前值
+  //（设置→提示词 可调；缺失/非法时回退默认）。用法点无需改动，仍读 App.context.XXX。
+  function ctxSetting(key, dflt) {
+    try {
+      const c = window.App.state.settings.context;
+      const n = Number(c && c[key]);
+      return Number.isFinite(n) && n > 0 ? n : dflt;
+    } catch (_) { return dflt; }
+  }
+  Object.defineProperty(App.context, 'SUMMARY_MAX_TOKENS', { get() { return Math.round(ctxSetting('summaryMaxTokens', 4000)); } });
 
   const COMPACT_SYS = '你是一个对话上下文压缩器。请将下面的多轮对话压缩为一份结构化中文摘要：'
     + '1) 保留用户的关键需求、偏好、已做的技术决策与重要结论（含理由）；'
@@ -113,10 +121,10 @@
   };
 
   // 保留条数：始终原样保留的最近消息数（与模型窗口无关）
-  App.context.RECENT_KEEP_CHAT = 16;
+  Object.defineProperty(App.context, 'RECENT_KEEP_CHAT', { get() { return Math.round(ctxSetting('recentKeep', 16)); } });
   App.context.RECENT_KEEP_AGENT = 20;
   // 压缩触发利用率：上下文用到窗口的该比例即自动压缩（agent 留更多余量给工具输出）
-  App.context.COMPACT_UTIL_CHAT = 0.85;
+  Object.defineProperty(App.context, 'COMPACT_UTIL_CHAT', { get() { return Math.min(0.95, Math.max(0.05, ctxSetting('compactUtil', 0.85))); } });
   // v2（P1-10 §8.3）：六区 Token 预算（比例合计 1.0，按模型能力动态调整而非硬编码一致）
   //   最终回答预留 8% / 工具输出预留 20% / 安全余量 8% / 稳定指令与状态 15% / 检索代码证据 25% / 最近轨迹和历史 24%
   App.context.AGENT_ZONE_BUDGET = {

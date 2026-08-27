@@ -1060,6 +1060,58 @@ function listModelCallMetricsFiltered(options) {
   return page.items;
 }
 
+// v1.2.0 批次 4b：命中片段窗口化——以（大小写不敏感的）首个命中位置为中心截取约 ±40 字符，
+// 前后补省略号；未命中（如标题命中）或短文本原样返回。纯函数，供 searchLocal 与测试复用。
+function searchExcerpt(content, needle) {
+  const s = String(content || '');
+  const q = String(needle || '').trim();
+  if (!q || s.length <= 110) return s;
+  const i = s.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return s.slice(0, 110);
+  const start = Math.max(0, i - 36);
+  const end = Math.min(s.length, i + q.length + 60);
+  return (start > 0 ? '…' : '') + s.slice(start, end) + (end < s.length ? '…' : '');
+}
+
+// v1.2.0 批次 5：用量统计仪表盘聚合——按 model 汇总调用数/成功数/token/平均延迟，附按日序列（最多 60 天）。
+// days=0 表示不限时间。2026-08-26：provider 实为接口适配器名而非真实供应商、cost_usd 因本地价格表覆盖有限几乎恒空，
+// 两者已从仪表盘移除，聚合不再输出（库表字段保留，写入链路不变）。
+function listModelCallMetricsSummary(options) {
+  if (!db) return { ok: false, items: [], daily: [], total: {} };
+  const opts = options && typeof options === 'object' ? options : {};
+  const days = Math.max(0, Number(opts.days) || 0);
+  const since = days > 0 ? Date.now() - days * 86400000 : 0;
+  try {
+    const where = since > 0 ? 'WHERE started_at >= ' + Number(since) : '';
+    const items = db.prepare(`
+      SELECT COALESCE(NULLIF(model_id,''),'unknown') AS model,
+             COUNT(*) AS calls,
+             SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS okCalls,
+             SUM(COALESCE(input_tokens,0)) AS inTokens,
+             SUM(COALESCE(output_tokens,0)) AS outTokens,
+             SUM(COALESCE(reasoning_tokens,0)) AS thinkTokens,
+             CAST(AVG(COALESCE(latency_ms,0)) AS INTEGER) AS avgMs
+      FROM model_call_metrics ${where}
+      GROUP BY model_id
+      ORDER BY calls DESC, model ASC LIMIT 100`).all();
+    const daily = db.prepare(`
+      SELECT date(started_at/1000,'unixepoch','localtime') AS day,
+             COUNT(*) AS calls,
+             SUM(COALESCE(input_tokens,0)) AS inTokens,
+             SUM(COALESCE(output_tokens,0)) AS outTokens
+      FROM model_call_metrics ${where}
+      GROUP BY day ORDER BY day DESC LIMIT 60`).all();
+    const total = items.reduce((acc, r) => {
+      acc.calls += r.calls; acc.okCalls += r.okCalls;
+      acc.inTokens += r.inTokens; acc.outTokens += r.outTokens; acc.thinkTokens += r.thinkTokens;
+      return acc;
+    }, { calls: 0, okCalls: 0, inTokens: 0, outTokens: 0, thinkTokens: 0 });
+    return { ok: true, items, daily, total };
+  } catch (error) {
+    return { ok: false, items: [], daily: [], total: {}, error: error && error.message ? error.message : String(error) };
+  }
+}
+
 function searchLocal(query, options) {
   if (!db) return { ok: false, items: [], nextCursor: null, total: 0 };
   const text = String(query || '').trim().slice(0, 160);
@@ -1111,7 +1163,8 @@ function searchLocal(query, options) {
     const rows = db.prepare('SELECT * FROM (' + union + ') ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?').all(...params, limit, offset);
       const items = rows.map((row) => ({
         scope: String(row.scope || ''), id: String(row.id || ''), title: redact(row.title || row.name || ''),
-        snippet: redact(String(row.snippet || '').slice(0, 240)), updatedAt: Number(row.updated_at || 0),
+        // v1.2.0 批次 4b：命中片段窗口化——以关键词位置为中心截取，替代整段原文
+        snippet: redact(searchExcerpt(String(row.snippet || ''), text)), updatedAt: Number(row.updated_at || 0),
         threadId: row.thread_id == null ? '' : String(row.thread_id),
         projectId: row.project_id == null ? '' : String(row.project_id),
       }));
@@ -1284,10 +1337,11 @@ const StorageService = {
   createAgentRun, updateAgentRun, listAgentRuns, getAgentRun, listAgentRunTree,
    appendAgentEvent, listAgentEvents, listAgentEventsPage, listAgentTracePage,
   upsertAgentRunMetrics, getAgentRunMetrics, aggregateAgentRunMetrics, recordModelCallMetric, listModelCallMetrics, listModelCallMetricsByRoot, listModelCallMetricsPage, listModelCallMetricsFiltered, searchLocal, exportAgentTrace,
+  listModelCallMetricsSummary,
   upsertWorkingState, getWorkingState,
   saveAgentCheckpoint, getCheckpoint, listCheckpoints, exportAgentRun, saveContextSummary, getLatestContextSummary,
   // v1.1.0（M3）：ChangeSet
   saveChangeset, listChangesets,
 };
 
-module.exports = { init, StorageService, ready, close, checkIntegrity, _imageHelpers: { stripDataUrl, sniffImageExt } };
+module.exports = { init, StorageService, ready, close, checkIntegrity, _imageHelpers: { stripDataUrl, sniffImageExt }, _searchHelpers: { searchExcerpt }, listModelCallMetricsSummary };

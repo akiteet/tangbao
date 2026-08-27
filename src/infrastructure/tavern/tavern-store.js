@@ -71,6 +71,11 @@ function createStore(options) {
     return value;
   }
 
+  // v1.2.0：新增卡片的默认自定义序 = 现有最大值 + 1（避免 sortOrder 0 插队到已排序列表最前）
+  function nextSortOrder(characters) {
+    return characters.reduce((m, c) => Math.max(m, Number(c && c.sortOrder) || 0), 0) + 1;
+  }
+
   function mutate(mutator, expectedRevision) {
     const current = load();
     if (expectedRevision != null && Number(expectedRevision) !== Number(current.revision)) {
@@ -96,6 +101,7 @@ function createStore(options) {
         const hay = [item.name, item.description, ...(item.tags || [])].join(' ').toLowerCase();
         return (!q || hay.includes(q)) && (!tag || (item.tags || []).some((value) => value.toLowerCase() === tag));
       }).sort((a, b) => Number(b.favorite) - Number(a.favorite)
+        || Number(a.sortOrder || 0) - Number(b.sortOrder || 0) // v1.2.0：收藏组内/非收藏组内按用户拖动自定义序
         || Number(b.lastUsedAt || 0) - Number(a.lastUsedAt || 0)
         || Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
       const cursor = Math.max(0, Number(opts.cursor) || 0);
@@ -108,6 +114,7 @@ function createStore(options) {
          avatar: item.avatar,
          tags: item.tags,
          favorite: item.favorite === true,
+         sortOrder: item.sortOrder || 0,
          archived: item.archived === true,
          usageCount: item.usageCount || 0,
          lastUsedAt: item.lastUsedAt || 0,
@@ -134,7 +141,26 @@ function createStore(options) {
         normalized.createdAt = index >= 0 ? next.characters[index].createdAt : normalized.createdAt;
         normalized.updatedAt = Date.now();
         if (index >= 0) next.characters[index] = normalized;
-        else next.characters.unshift(normalized);
+        else { normalized.sortOrder = nextSortOrder(next.characters); next.characters.unshift(normalized); }
+      }, expectedRevision);
+    },
+    // v1.2.0：角色卡用户自定义排序——orderedIds 为完整期望顺序（收藏组在前），逐卡写 sortOrder；
+    // 展示排序 = favorite desc → sortOrder asc → lastUsedAt desc 兜底（2026-08-26 用户反馈）
+    reorderCharacters(orderedIds, expectedRevision) {
+      const ids = (Array.isArray(orderedIds) ? orderedIds : []).map((v) => String(v || '')).filter(Boolean);
+      if (!ids.length) return { ok: false, code: 'tavern_reorder_empty' };
+      const unique = new Set(ids);
+      if (unique.size !== ids.length) return { ok: false, code: 'tavern_reorder_duplicate' };
+      return mutate((next) => {
+        const byId = new Map(next.characters.map((c) => [c.id, c]));
+        let order = 0;
+        for (const id of ids) {
+          const c = byId.get(id);
+          if (c) { order += 1; c.sortOrder = order; }
+        }
+        for (const c of next.characters) {
+          if (!unique.has(c.id)) { order += 1; c.sortOrder = order; }
+        }
       }, expectedRevision);
     },
     toggleFavorite(id, favorite, expectedRevision) {
@@ -192,6 +218,7 @@ function createStore(options) {
         return { ok: false, code: 'tavern_card_too_large', maxBytes: Core.MAX_CARD_BYTES };
       }
       const result = mutate((next) => {
+        character.sortOrder = nextSortOrder(next.characters);
         next.characters.unshift(character);
         next.memories.unshift(...memories);
       }, expectedRevision);
@@ -214,6 +241,7 @@ function createStore(options) {
       imported.character.id = Core.id('char');
       imported.character.createdAt = Date.now();
       imported.character.updatedAt = imported.character.createdAt;
+      imported.character.sortOrder = nextSortOrder(load().characters);
       imported.memories = imported.memories.map((item) => Object.assign({}, item, {
         id: Core.id('memory'), characterId: imported.character.id,
       }));

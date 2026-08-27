@@ -118,11 +118,22 @@ test('autoTrigger:false 的 Skill 不进入关键词自动注入，但仍可显�
   assert.ok(found.skill);
 });
 
-test('隔离执行器不会继承宿主任意环境变量并返回真实隔离等级', async () => {
+test('隔离执行器不会继承宿主任意环境变量，网络默认强制拒绝出网', async () => {
   const Runner = require('../../src/infrastructure/agent-runtime/skill-runner');
   process.env.TANGBAO_TEST_SECRET = 'x';
   const env = Runner.minimalEnv();
   assert.equal(env.TANGBAO_TEST_SECRET, undefined);
   assert.equal(env.TANGBAO_SKILL_SANDBOX, '1');
-  assert.equal(Runner.isolationLevel({}).network, 'not-enforced');
+  // v1.2.0 批次 1：默认阻断——代理变量指向失效端点，NO_PROXY 清空防绕过
+  assert.equal(Runner.isolationLevel({}).network, 'blocked-proxy-env');
+  const blocked = Runner.applyNetworkPolicy(env, false);
+  assert.equal(blocked.mode, 'blocked-proxy-env');
+  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY']) {
+    assert.equal(env[key], 'http://127.0.0.1:9');
+  }
+  assert.equal(env.NO_PROXY, '');
+  // 显式放行时不注入任何阻断变量
+  const envAllowed = Runner.minimalEnv();
+  assert.equal(Runner.applyNetworkPolicy(envAllowed, true).mode, 'declared-allowed');
+  assert.equal(envAllowed.HTTP_PROXY, undefined);
 });

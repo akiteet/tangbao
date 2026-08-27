@@ -395,5 +395,50 @@
         if (result && result.ok === false) App.ui.toast(result.error || '打开数据目录失败');
       }
     },
+
+    // v1.2.0：用量统计仪表盘（2026-08-26 修复「卡片是死的」——渲染绑定此前整体缺失，写入/聚合/IPC 链路本就健康）。
+    // 供应商/成本两列已移除：provider 实为接口适配器名而非真实供应商，cost 因本地价格表覆盖有限几乎恒为 0。
+    async refreshUsageSummary() {
+      const rangeEl = $('usageRange'), totalsEl = $('usageTotals'), tableEl = $('usageTable'), emptyEl = $('usageEmpty');
+      if (!totalsEl || !tableEl || !emptyEl) return;
+      const days = rangeEl ? (Number(rangeEl.value) || 0) : 30;
+      let res = null;
+      try {
+        res = window.electron && window.electron.metricsSummary ? await window.electron.metricsSummary({ days }) : { ok: false, error: '通道不可用' };
+      } catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+      const fmtInt = (v) => Number(v || 0).toLocaleString('zh-CN');
+      const fmtMs = (v) => (Number(v) || 0) >= 1 ? fmtInt(Math.round(v)) + ' ms' : '—';
+      if (!res || !res.ok) {
+        totalsEl.textContent = '用量统计不可用：' + ((res && (res.error || res.reason)) || '未知原因') + '（需使用 SQLite 存储模式）';
+        tableEl.hidden = true;
+        emptyEl.hidden = true;
+        return;
+      }
+      const items = Array.isArray(res.items) ? res.items : [];
+      const total = res.total || {};
+      totalsEl.textContent = '合计：调用 ' + fmtInt(total.calls) + ' · 成功 ' + fmtInt(total.okCalls)
+        + ' · Token 输入/输出/思考 ' + fmtInt(total.inTokens) + '/' + fmtInt(total.outTokens) + '/' + fmtInt(total.thinkTokens)
+        + ' · 均延迟 ' + fmtMs(total.avgMs);
+      if (!items.length) {
+        tableEl.hidden = true;
+        emptyEl.hidden = false;
+        return;
+      }
+      emptyEl.hidden = true;
+      const body = tableEl.querySelector('tbody');
+      if (body) {
+        body.innerHTML = items.map((it) => '<tr>' + [
+          it.model || 'unknown', fmtInt(it.calls), fmtInt(it.okCalls),
+          fmtInt(it.inTokens), fmtInt(it.outTokens), fmtInt(it.thinkTokens), fmtMs(it.avgMs),
+        ].map((v) => '<td>' + App.escapeHtml(String(v)) + '</td>').join('') + '</tr>').join('');
+      }
+      tableEl.hidden = false;
+    },
   });
+
+  // v1.2.0：用量统计入口绑定（刷新按钮 / 范围切换）；面板激活入口在 ui.js selectSettingsPanel('data')
+  const usageRefreshBtn = $('usageRefresh');
+  if (usageRefreshBtn) usageRefreshBtn.addEventListener('click', () => { App.ui.refreshUsageSummary(); });
+  const usageRangeEl = $('usageRange');
+  if (usageRangeEl) usageRangeEl.addEventListener('change', () => { App.ui.refreshUsageSummary(); });
 })();

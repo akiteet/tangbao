@@ -1,7 +1,7 @@
 'use strict';
 /* 自 main.js 拆分（v1.1.8 批次 F）：系统级浮窗域——独立置顶小窗的生命周期/位置记忆/开关状态/
  * 双向同步 IPC。纯工厂模式（同 createMainSkills 先例）：createMainFloat(deps) 注册全部 float:* IPC，
- * 并返回主进程启动恢复/托盘/快捷键/主窗关闭钩子需要的函数。
+ * 并返回主进程启动重置/托盘/快捷键/主窗关闭钩子需要的函数。
  * Electron 模块（app/BrowserWindow/screen/shell）直接 require；主进程作用域的信任登记、来源校验、
  * 端口 getter 经 deps 注入：safeHandle / safeOn / getMainWindow / trustWindow / untrustWindow /
  * isAppUrl / isAllowedExternalUrl / getAppPort。 */
@@ -112,12 +112,10 @@ function toggleFloatWindow() {
   return true;
 }
 
-// 启动恢复：若上次退出时浮窗是开着的，自动重建
-function restoreFloatWindowIfOpen() {
-  if (readFloatState().open) {
-    const w = createFloatingWindow();
-    floatWindows.set('chat', w);
-  }
+// v1.2.0：浮窗每次启动一律默认关闭——清掉上次退出遗留的 open 标记、不自动重建（用户裁决 2026-08-26；
+// 托盘/主窗入口仍可随时手动打开）。位置/透明度/置顶记忆不受影响。
+function resetFloatWindowOnBoot() {
+  writeFloatState({ open: false });
 }
 
 // 主窗关闭时一并关闭所有浮窗，避免孤儿窗口（浮窗依赖主窗落盘 float:sync）
@@ -269,7 +267,7 @@ safeHandle('float:getOpacity', async () => {
   return readFloatState().opacity;
 });
 
-  return { toggleFloatWindow, restoreFloatWindowIfOpen, closeAllFloatWindows, readFloatState };
+  return { toggleFloatWindow, resetFloatWindowOnBoot, closeAllFloatWindows, readFloatState };
 }
 
 module.exports = { createMainFloat };

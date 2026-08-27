@@ -51,9 +51,3 @@ test('B5：regen 在流式进行中禁止并发', () => {
   assert.match(seg, /if \(streaming\)/, 'regen 应检查 streaming');
   assert.match(seg, /请稍候再重新生成/, '应有忙碌提示');
 });
-
-test('B5：语音听写用最终基线替换，不重复累加 interim', () => {
-  assert.match(chatSrc, /let voiceBase = ''/, '应有语音基线变量');
-  assert.match(chatSrc, /isFinal\) finalText \+= t; else interimText \+= t;/, '应区分最终/临时结果');
-  assert.match(chatSrc, /voiceBase = \$\('input'\)\.value; \/\/ B5（P2）：结束固化基线/, 'onend 应固化基线');
-});

@@ -345,7 +345,10 @@
       document.querySelectorAll('.settings-panel').forEach((item) => item.classList.toggle('active', item.dataset.panel === target));
       const modal = $('settingsModal');
       if (modal) modal.dataset.activePanel = target;
-      if (target === 'data') App.ui.refreshStorageLocation();
+      if (target === 'data') {
+        App.ui.refreshStorageLocation();
+        if (App.ui.refreshUsageSummary) App.ui.refreshUsageSummary(); // v1.2.0：切到数据面板自动刷新用量统计
+      }
     },
 
 
@@ -486,11 +489,8 @@
     },
 
     _convToMarkdown(conv) {
-      let md = `# ${conv.title || '新对话'}\n\n`;
-      for (const m of conv.messages) {
-        md += m.role === 'user' ? `**User:**\n${m.content}\n\n` : `**Assistant:**\n${m.content}\n\n`;
-      }
-      return md;
+      // v1.2.0 批次 7 第一刀：构建逻辑抽至 core 纯模块（可独立测试）
+      return App.chatMarkdown.buildConversationMarkdown(conv);
     },
 
     exportMarkdown() {
@@ -582,6 +582,21 @@
         $('globalPermRules').value = rs.map((r) => [r.tool || '*', r.pattern || '', r.allow === false ? '拒绝' : '允许', r.sandbox ? 'sandbox' : ''].join(' ').trim()).join('\n');
       }
       if ($('contextWindow')) $('contextWindow').value = (App.state.settings.contextWindow || 128000);
+      // v1.2.0 批次 4：上下文压缩参数与世界书检索预算回填
+      {
+        const c = App.state.settings.context || {};
+        const tu = App.state.settings.tavernUi || {};
+        if ($('ctxCompactUtil')) $('ctxCompactUtil').value = (c.compactUtil != null ? c.compactUtil : 0.85);
+        if ($('ctxRecentKeep')) $('ctxRecentKeep').value = (c.recentKeep != null ? c.recentKeep : 16);
+        if ($('ctxSummaryMax')) $('ctxSummaryMax').value = (c.summaryMaxTokens != null ? c.summaryMaxTokens : 4000);
+        if ($('ragTokenBudget')) $('ragTokenBudget').value = (tu.ragTokenBudget != null ? tu.ragTokenBudget : 1000);
+        if ($('ragLimit')) $('ragLimit').value = (tu.ragLimit != null ? tu.ragLimit : 8);
+      }
+      // v1.2.0 第九轮：MCP servers JSON 编辑器回填（此前 textarea 零绑定，HANDOFF 曾误记已做——同用量统计事故）
+      if ($('mcpServersJson')) {
+        const list = ((App.state.settings.mcp || {}).servers) || [];
+        $('mcpServersJson').value = Array.isArray(list) && list.length ? JSON.stringify(list, null, 2) : '';
+      }
       {
         const list = $('visionChipList');
         const inp = $('visionInput');
@@ -596,6 +611,12 @@
       if ($('accentReset')) $('accentReset').checked = !ap.accent;
       if ($('radiusRange')) $('radiusRange').value = ap.radius ? parseInt(ap.radius, 10) : 14;
       if ($('radiusVal')) $('radiusVal').textContent = (ap.radius ? ap.radius : 14) + 'px';
+      // v1.2.0：浮窗装配勾选态回显
+      {
+        const kit = App.state.settings.floatKit || {};
+        const kitIds = [['fkWelcome', 'welcome'], ['fkThink', 'think'], ['fkWeb', 'web'], ['fkModelSelect', 'modelSelect'], ['fkImages', 'images'], ['fkAttachments', 'attachments'], ['fkMenu', 'menu'], ['fkCtxBar', 'ctxBar'], ['fkMsgActions', 'msgActions'], ['fkDisclaimer', 'disclaimer']];
+        for (const [id, key] of kitIds) { const el = $(id); if (el) el.checked = kit[key] === true; }
+      }
       App.ui.markThemeSeg();
       // 保留命令面板或用户刚刚选择的设置子面板。
       const activePanel = ($('settingsModal') && $('settingsModal').dataset.activePanel) || 'api';
@@ -757,7 +778,10 @@
       const av = $('userAvatar'); const nm = $('userName');
       if (nm) nm.textContent = name;
       if (av) {
-        const safeAvatar = (typeof App.safeUrl === 'function') ? App.safeUrl(avatar) : null;
+        // 本地受信 dataURL 不走 safeUrl 的 2048 长度闸——128px 头像的 base64 普遍 3~15K，
+        // 此前被拒导致「保存成功但永远显示首字母」（2026-08-26 用户反馈修复）
+        const isLocalData = typeof avatar === 'string' && /^data:image\//i.test(avatar);
+        const safeAvatar = isLocalData ? avatar : ((typeof App.safeUrl === 'function') ? App.safeUrl(avatar) : null);
         if (safeAvatar) {
           av.classList.remove('user-initial');
           av.textContent = '';
@@ -900,6 +924,7 @@
             <span class="mod-label">${App.escapeHtml(m.label)}${m.forceEmbed ? '<span class="mod-force-tag">强制</span>' : ''}</span>
             <span class="mod-url">${App.escapeHtml(m.url)}</span>
             <button class="mini" data-open="${m.id}" title="在系统浏览器中打开（绕过防嵌入限制）">↗ 浏览器</button>
+            <button class="mini" data-win="${m.id}" title="在独立小窗中打开">⧉ 小窗</button>
             <button class="mini" data-edit="${m.id}">编辑</button>
             <button class="mini danger" data-del="${m.id}">删除</button>
           </div>`).join('') : '<div class="history-empty">还没有自定义模块</div>';
@@ -986,6 +1011,61 @@
         App.state.settings.permissionRules = rules;
       });
       bindPrompt('contextWindow', v => { const n = parseInt(v, 10); App.state.settings.contextWindow = (n > 0) ? n : 128000; });
+      // v1.2.0 批次 4：上下文压缩参数与世界书检索预算（越界输入不写入，保留原值）
+      const ensureCtx = () => { App.state.settings.context = App.state.settings.context || {}; return App.state.settings.context; };
+      const ensureTavernUi = () => { App.state.settings.tavernUi = App.state.settings.tavernUi || {}; return App.state.settings.tavernUi; };
+      bindPrompt('ctxCompactUtil', v => { const n = parseFloat(v); if (n >= 0.05 && n <= 0.95) ensureCtx().compactUtil = n; });
+      bindPrompt('ctxRecentKeep', v => { const n = parseInt(v, 10); if (n >= 4 && n <= 200) ensureCtx().recentKeep = n; });
+      bindPrompt('ctxSummaryMax', v => { const n = parseInt(v, 10); if (n >= 200 && n <= 16000) ensureCtx().summaryMaxTokens = n; });
+      bindPrompt('ragTokenBudget', v => { const n = parseInt(v, 10); if (n >= 128 && n <= 8000) ensureTavernUi().ragTokenBudget = n; });
+      bindPrompt('ragLimit', v => { const n = parseInt(v, 10); if (n >= 1 && n <= 20) ensureTavernUi().ragLimit = n; });
+
+      // v1.2.0 第九轮：MCP servers JSON 编辑（change 提交——JSON 打字中途必然解析失败，不能像逐行字段那样用 input 事件）。
+      // 校验与 state.js 归一化同规则：缺 id 或 command|url 的条目丢弃；保存后主进程按 settings.mcp.servers 动态连接。
+      {
+        const mcpTa = $('mcpServersJson');
+        if (mcpTa) mcpTa.addEventListener('change', () => {
+          let parsed;
+          try { parsed = JSON.parse(mcpTa.value || '[]'); } catch (e) { App.ui.toast('MCP 配置解析失败：' + ((e && e.message) || e)); return; }
+          if (!Array.isArray(parsed)) { App.ui.toast('MCP 配置需为 server 数组'); return; }
+          const servers = parsed.map((sv) => {
+            const item = sv && typeof sv === 'object' ? sv : {};
+            return {
+              id: String(item.id || '').trim().slice(0, 64),
+              name: String(item.name || '').slice(0, 80),
+              transport: item.transport === 'http' ? 'http' : 'stdio',
+              command: typeof item.command === 'string' ? item.command.trim().slice(0, 500) : '',
+              args: Array.isArray(item.args) ? item.args.map(String).slice(0, 32) : [],
+              url: typeof item.url === 'string' ? item.url.trim().slice(0, 500) : '',
+              enabled: item.enabled !== false,
+            };
+          }).filter((sv) => sv.id && (sv.transport === 'http' ? /^https?:\/\//.test(sv.url) : sv.command));
+          const dropped = parsed.length - servers.length;
+          App.state.settings.mcp = { servers };
+          App.persist();
+          App.ui.toast('MCP 服务器配置已保存（' + servers.length + ' 个）' + (dropped > 0 ? '，丢弃无效条目 ' + dropped + ' 个' : ''));
+        });
+        const mcpTestBtn = $('mcpTestBtn');
+        if (mcpTestBtn) mcpTestBtn.addEventListener('click', async () => {
+          const out = $('mcpStatusOut');
+          if (!out) return;
+          const servers = (((App.state.settings.mcp || {}).servers) || []).filter((s) => s.enabled !== false);
+          out.hidden = false;
+          if (!servers.length) { out.textContent = '没有已启用的 MCP server，请先在上方填写 JSON 并点击空白处保存。'; return; }
+          mcpTestBtn.disabled = true;
+          out.textContent = '正在连接…';
+          const lines = [];
+          for (const s of servers) {
+            try {
+              const res = window.electron && window.electron.mcpListTools ? await window.electron.mcpListTools({ serverId: s.id }) : { ok: false, error: '通道不可用' };
+              lines.push((res && res.ok) ? ('✓ ' + s.id + '：已连接 · ' + res.tools.length + ' 个工具') : ('✗ ' + s.id + '：失败 — ' + ((res && res.error) || '未知原因')));
+            } catch (e) { lines.push('✗ ' + s.id + '：失败 — ' + String((e && e.message) || e)); }
+          }
+          out.style.whiteSpace = 'pre-line';
+          out.textContent = lines.join('\n');
+          mcpTestBtn.disabled = false;
+        });
+      }
 
       // 提示词"恢复默认"按钮：清空对应字段（=回退内置默认）
       const promptMap = { 'chat': 'pChat', 'agent': 'pAgent',
@@ -1054,6 +1134,19 @@
         if ($('radiusVal')) $('radiusVal').textContent = e.target.value + 'px';
         App.ui.applyAppearance(); App.persist();
       });
+      // v1.2.0：浮窗装配勾选 → settings.floatKit（即时持久化，pushState 自动同步已打开的悬浮窗）
+      {
+        const kitIds = [['fkWelcome', 'welcome'], ['fkThink', 'think'], ['fkWeb', 'web'], ['fkModelSelect', 'modelSelect'], ['fkImages', 'images'], ['fkAttachments', 'attachments'], ['fkMenu', 'menu'], ['fkCtxBar', 'ctxBar'], ['fkMsgActions', 'msgActions'], ['fkDisclaimer', 'disclaimer']];
+        for (const [id, key] of kitIds) {
+          const el = $(id);
+          if (!el) continue;
+          el.addEventListener('change', () => {
+            const kit = App.state.settings.floatKit || (App.state.settings.floatKit = {});
+            kit[key] = el.checked;
+            App.persist(); // pushState 会把 floatKit 同步到已打开的悬浮窗并重挂 fk-show-* 类
+          });
+        }
+      }
 
       const exp = $('exportConfig'); if (exp) exp.addEventListener('click', () => App.config.export());
       const imp = $('importConfig'); if (imp) imp.addEventListener('click', () => { const f = $('importFile'); if (f) f.click(); });
@@ -1180,6 +1273,18 @@
             const m = (App.state.settings.customModules || []).find(x => x.id === open.dataset.open);
             if (m && m.url) {
               const r = App.ui.openModuleExternal(m.url);
+              if (r && r.then) r.then(res => { if (!res || !res.ok) App.ui.toast((res && res.error) ? ('打开失败：' + res.error) : '打开失败'); });
+            } else {
+              App.ui.toast('打开失败');
+            }
+            return;
+          }
+          // v1.2.0：自定义模块独立小窗打开（复用 forceEmbed 同款子窗口，按 id 单例聚焦）
+          const win = e.target.closest('[data-win]');
+          if (win) {
+            const m = (App.state.settings.customModules || []).find(x => x.id === win.dataset.win);
+            if (m && m.url) {
+              const r = App.services.shell.openChildWindow({ id: m.id, url: m.url, label: m.label });
               if (r && r.then) r.then(res => { if (!res || !res.ok) App.ui.toast((res && res.error) ? ('打开失败：' + res.error) : '打开失败'); });
             } else {
               App.ui.toast('打开失败');
@@ -1351,6 +1456,55 @@
       // settings modal
       $('closeSettings').addEventListener('click', () => App.ui.closeSettings());
       $('saveSettings').addEventListener('click', () => App.ui.saveSettings());
+
+      // v1.2.0 批次 3：应用内更新（设置→帮助）。状态机 idle→checking→available→downloading→downloaded
+      {
+        const stEl = $('updaterStatus'), ckBtn = $('updaterCheckBtn'), inBtn = $('updaterInstallBtn');
+        if (stEl && ckBtn && inBtn && window.electron && window.electron.updaterCheck) {
+          const setStatus = (t) => { stEl.textContent = t; };
+          const setBusy = (b) => { ckBtn.disabled = !!b; };
+          let updPhase = 'idle';
+          let pendingVersion = '';
+          window.electron.getAppVersion().then((r) => {
+            if (r && r.ok && $('updaterCurVersion')) $('updaterCurVersion').textContent = 'v' + r.version;
+            const badge = $('updaterVersionBadge');
+            if (r && r.ok && badge) badge.textContent = 'v' + r.version;
+            const about = $('aboutVersion');
+            if (r && r.ok && about) about.textContent = 'v' + r.version;
+          }).catch(() => {});
+          window.electron.onUpdaterEvent((ev) => {
+            if (!ev || !ev.type) return;
+            if (ev.type === 'checking') setStatus('正在检查更新…');
+            else if (ev.type === 'none') { updPhase = 'idle'; setBusy(false); setStatus('已是最新版本'); }
+            else if (ev.type === 'available') { pendingVersion = ev.version || ''; updPhase = 'available'; setBusy(false); ckBtn.textContent = '下载更新'; setStatus('发现新版本 v' + pendingVersion + '，点击下载'); }
+            else if (ev.type === 'progress') setStatus('下载中 ' + (ev.percent != null ? ev.percent + '%' : '…'));
+            else if (ev.type === 'downloaded') { updPhase = 'idle'; setBusy(false); setStatus('v' + (ev.version || pendingVersion) + ' 已就绪，点击「重启并安装」完成升级'); inBtn.style.display = ''; }
+            else if (ev.type === 'error') { updPhase = 'idle'; setBusy(false); setStatus('更新出错：' + (ev.message || '未知原因')); }
+          });
+          // 主进程统一 resolve { ok, code }：dev-mode=开发环境、updater-unavailable=组件缺失、updater-error=检查/下载失败；
+          // 仅当 invoke 本身异常（通道缺失等意外）才走 catch 兜底文案
+          const gateFailText = (r) => r && r.code === 'dev-mode' ? '开发环境不支持应用内更新（打包版可用）'
+            : r && (r.code === 'updater-unavailable') ? '更新组件不可用'
+              : '无法连接 GitHub（检查网络或代理）';
+          ckBtn.addEventListener('click', async () => {
+            if (updPhase === 'downloading') return;
+            if (updPhase === 'available') {
+              setBusy(true); setStatus('下载中…完成后会提示安装'); updPhase = 'downloading';
+              try {
+                const r = await window.electron.updaterDownload();
+                if (!r || !r.ok) { setStatus('下载失败：' + gateFailText(r)); setBusy(false); updPhase = 'available'; }
+              } catch (e) { setStatus('下载失败：无法连接 GitHub（检查网络或代理）'); setBusy(false); updPhase = 'available'; }
+              return;
+            }
+            setBusy(true); setStatus('正在检查更新…'); updPhase = 'checking';
+            try {
+              const r = await window.electron.updaterCheck();
+              if (!r || !r.ok) { setStatus('检查失败：' + gateFailText(r)); setBusy(false); updPhase = 'idle'; }
+            } catch (e) { setStatus('检查失败：无法连接 GitHub（检查网络或代理）'); setBusy(false); updPhase = 'idle'; }
+          });
+          inBtn.addEventListener('click', () => window.electron.updaterInstall());
+        }
+      }
       // 视觉模型 chips：回车添加，点击 × 删除，打开设置时由 refreshSettingsUI 渲染
       {
         const inp = $('visionInput');

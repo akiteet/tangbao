@@ -83,10 +83,14 @@ const CMD_TIMEOUT = 120000;
 // 与 killTree / killRunJobs / killRunSessions）自 v1.1.5 批次 D4 拆至 run-registry.js；
 // 导出的是单例实例，解构后所有调用点不变。审批语义注释随迁。
 const { approvals, decisionsPending, jobs, approvedFiles, runAuthRegistry, sessions, killTree, killRunJobs, killRunSessions } = require('./run-registry');
+// v1.2.0 批次 7 第二刀：工具结果归一化/格式化抽至独立纯模块（可独立测试）
+const { normalizeResult, formatToolResult } = require('./tool-result-format.js');
+// v1.2.0 批次 7 第四刀：审批/拒绝文案抽至独立纯模块
+const { denialSuggestion, approvalMsg } = require('./approval-messages.js');
 // v2（P1-4）：模块级 run 授权仅作未迁移兼容，正常路径走 runAuthRegistry 按 Run 隔离
 let approvedRun = false;
 
-const TOOL_REGISTRY_VERSION = '1.1.8';
+const TOOL_REGISTRY_VERSION = '1.2.0';
 const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'todo_write', 'propose_memory']);
 const toolRuntime = createToolRuntime({
   version: TOOL_REGISTRY_VERSION,
@@ -102,7 +106,7 @@ const TOOL_NAMES = toolRuntime.toolNames;
 const AgentPrompt = require('../../core/models/agent-prompt');
 const SYSTEM_PROMPT = AgentPrompt.SYSTEM_PROMPT;
 const PROMPT_VERSION = String(AgentPrompt.PROMPT_VERSION || 'legacy/unknown');
-const RUNTIME_VERSION = '1.1.8';
+const RUNTIME_VERSION = '1.2.0';
 
 // ===== 本地访问控制 =====
 // 由主进程在 startAgentServer 时注入：启动令牌 + 唯一允许的来源（静态服务的源）。
@@ -168,49 +172,7 @@ function truncate(s) {
 // v2（P0-4）：跟踪进行中的 agent run，供应用退出前 flush 检查点（避免工作丢失）
 const activeAgentRuns = new Map();
 
-// v1.1.0（M3）：统一结构化 ToolResult——工具内部返回「字符串或带 ok 的对象」，
-// runTool 出口统一包装成 { ok, summary, error?, truncated, nextCursor?, durationMs, exitCode?, artifactRef? }，
-// 模型不再靠解析字符串判断成败/截断/是否修改文件。
-function normalizeResult(inner, meta) {
-  meta = meta || {};
-  const base = { ok: true, summary: '', durationMs: meta.durationMs || 0 };
-  let r;
-  if (inner && typeof inner === 'object' && 'ok' in inner) {
-    r = Object.assign(base, inner);
-    if (r.summary == null && r.error && r.error.message) r.summary = r.error.message;
-  } else {
-    const s = String(inner == null ? '' : inner);
-    // 过渡：旧工具仍返回字符串，按错误前缀轻量判定（后续逐个改对象）
-    // B3（P1）：补「工具执行出错/失败」前缀——外层 catch 的异常文案此前会被误判为成功
-    const bad = /^(失败|拒绝|错误|未找到|无效|为空|越界|已取消|搜索关键词为空|命令为空|模式为空|正则无效|读取失败|路径越界|工具执行出错|工具执行失败)/.test(s);
-    r = Object.assign(base, { ok: !bad, summary: s });
-    if (bad) r.error = { code: 'tool_error', message: s, retryable: false };
-  }
-  if (meta.exitCode != null && r.exitCode == null) r.exitCode = meta.exitCode;
-  if (meta.truncated && !r.truncated) r.truncated = true;
-  if (meta.artifactRef) r.artifactRef = meta.artifactRef;
-  if (meta.changedFiles) r.changedFiles = meta.changedFiles;
-  // v2（补全 2+3）：readFiles / nextCursor 提升到顶层（模型可结构化判断读取范围与续读）
-  if (r.data && Array.isArray(r.data.readFiles) && !r.readFiles) r.readFiles = r.data.readFiles;
-  if (r.nextCursor == null && r.data && r.data.cursor != null && r.data.nextStartLine != null) r.nextCursor = r.data.nextStartLine;
-  else if (r.nextCursor == null && r.data && r.data.cursor != null) r.nextCursor = r.data.cursor;
-  if (r.ok === false && !r.error) r.error = { code: 'tool_error', message: r.summary || '工具执行失败', retryable: false };
-  return r;
-}
 
-// 把结构化 ToolResult 转成模型 messages 里的纯文本（保留截断/退出码提示）
-function formatToolResult(r) {
-  if (!r || typeof r !== 'object') return String(r == null ? '' : r);
-  let s = r.summary || '';
-  if (r.ok === false && r.error && r.error.message) {
-    const code = r.error.code ? '（' + r.error.code + '）' : '';
-    const retry = r.error.retryable === false ? '\n[不可原样重试] 请根据错误调整方案、参数或阶段，不要机械重复同一工具调用。' : '\n[可重试] 先修正触发原因，再重试。';
-    s = r.error.message + code + retry;
-  }
-  if (r.truncated) s += '\n[输出已截断' + (r.nextCursor ? '，可用 read_command_output / cursor 继续读取' : '') + ']';
-  if (r.exitCode != null) s += '\n[退出码 ' + r.exitCode + ']';
-  return s;
-}
 
 // v2（P1-6）：单文件读取逻辑——read_file / read_files 共用；支持 expectedHash 校验与 nextStartLine 续读
 async function readOneFile(fp, rel, args, opts) {
@@ -783,6 +745,36 @@ function skillResourceSummary(skill) {
 
 // ===== v1.1.0（M7）：子 Agent（Explore / Test / Review + 并行） =====
 const roleRegistry = new RoleRegistry();
+// v1.2.0 批次 5-③D：MCP 工具清单缓存（60s TTL），追加到模型工具列表尾部
+let mcpToolsCache = [];
+let mcpToolsLoadedAt = 0;
+let mcpRefreshBusy = 0;
+async function refreshMcpTools(force) {
+  const now = Date.now();
+  if (!force && now - mcpToolsLoadedAt < 60000) return mcpToolsCache;
+  if (now - mcpRefreshBusy < 5000) return mcpToolsCache;
+  mcpRefreshBusy = now;
+  try {
+    const mcpMod = require('../../main/main-mcp.js');
+    const mcp = mcpMod.getActiveMcp ? mcpMod.getActiveMcp() : null;
+    const list = mcp ? await mcp.listAllTools() : [];
+    mcpToolsCache = list.map((t) => ({
+      type: 'function',
+      function: {
+        name: 'mcp__' + t.serverId + '__' + t.name,
+        description: (t.description || 'MCP 工具') + '（来源：MCP server ' + t.serverId + '）',
+        parameters: (t.inputSchema && t.inputSchema.type === 'object') ? t.inputSchema : { type: 'object', properties: {} },
+      },
+    }));
+    mcpToolsLoadedAt = now;
+  } catch (_) { /* 保持旧缓存 */ }
+  return mcpToolsCache;
+}
+function providerToolsWithMcp(base) {
+  base = base || [];
+  return mcpToolsCache.length ? base.concat(mcpToolsCache) : base;
+}
+
 const SUBAGENT_TOOLS = Object.fromEntries(roleRegistry.list().map((role) => [role.name, roleRegistry.protocolToolsFor(role.name, toolRegistry)]));
 const SUBAGENT_MAX_STEPS = { explore: 8, test: 6, review: 8 };
 const subagentManager = SubagentManager.create({ maxDepth: 2, maxConcurrent: 3, maxChildren: 8 });
@@ -1064,24 +1056,6 @@ function waitDecision(id, setPhase, phaseGet) {
   });
 }
 
-// G17（B4）：按被拒操作类别给出替代方向，引导模型调整方案而非原样重试
-function denialSuggestion(action, detail) {
-  const a = String(action || '');
-  const d = String(detail || '').toLowerCase();
-  if (/^git\s/.test(d)) return '请改用只读 git 操作（git status / git diff / git log）获取信息；确需写操作请先征得用户同意。';
-  if (a.includes('命令')) return '请将命令拆分为更安全的只读命令，或改用已被允许的命令；不要原样重复申请。';
-  if (a.includes('写') || a.includes('编辑') || a.includes('patch') || a.includes('文件')) return '请先读取目标文件确认修改点，缩小修改范围后再试；或改用其他文件/路径。';
-  if (a.includes('搜索') || a.includes('web') || a.includes('联网')) return '请改用 read_file / glob / grep 读取本地信息，或关闭联网搜索后继续。';
-  if (a.includes('执行') || a.includes('运行')) return '请用已被允许的验证方式（run_tests / run_lint）代替；不要重复被拒的命令。';
-  return '请调整方案（例如改用其他文件/命令），不要原样重复申请。';
-}
-// v1.1.0（M3+）：把审批结果转成工具返回文案（区分超时/拒绝，避免模型误判为「用户拒绝」而去反复询问；
-// 以「失败」开头确保 normalizeResult 判为失败）
-function approvalMsg(ok, action, detail) {
-  if (ok === 'timeout') return '失败：等待审批超时（90 秒内用户未响应），本次' + action + '未执行。可稍后重新尝试该操作，或改用无需审批的方式。';
-  if (!ok) return '失败：用户拒绝了' + action + '。' + denialSuggestion(action, detail);
-  return null;
-}
 // v2（P1-9）：权限/审批被拒绝时落持久化字段（blockedWork + decisions），跨轮不丢失
 // denyWithRecord：审批被拒（含超时）→ 记录并返回统一 ToolResult；批准时返回 null
 function denyWithRecord(opts, ok, action, detail) {
@@ -1116,38 +1090,15 @@ function execShell(command, cwd, signal) {
   });
 }
 
-// 判断某工具执行是否需要用户审批
-// 1. 命令白名单匹配（仅 run_command / git_command）→ 免审批
-// 2. 工具级强制审批（approveTools，即使 auto=true 也审批）
-// 3. 非 auto 时，命令类工具需审批
-// 4. 其余不审批
-// v2（补全 6）：工具风险分类——风险枚举 + 命令模式细分（auto 模式下 destructive/network_access 强制审批，只增不减）
-const TOOL_RISK = {
-  read_only: ['read_file', 'read_files', 'get_file_outline', 'list_dir', 'glob', 'grep', 'get_repo_map', 'detect_verification', 'skip_verification', 'read_command_output', 'find_symbol', 'find_references', 'report_blocker', 'request_user_decision', 'list_skills', 'use_skill', 'list_skill_resources', 'read_skill_resource'], // v2（P2-5）
-  workspace_write: ['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset'],
-  process_execution: ['run_command', 'run_tests', 'run_lint', 'run_typecheck', 'run_build', 'run_skill_script'],
-  network_access: [],   // 由命令模式细分
-  destructive: [],      // 由命令模式细分
-  git: ['git_command'],
-};
-function classifyRisk(toolName, command) {
-  const cmd = String(command || '').toLowerCase().trim();
-  // 危险命令模式：删除/清库/强推/重置/权限/防火墙等不可逆操作
-  if (/^\s*(rm\s+-[rf]|del\s+\/|rd\s+\/|drop\s+database|format\s+|fdisk|git\s+push\s+.*--force|git\s+reset\s+--hard|git\s+clean\s+-[fd]|chmod\s+777|net\s+user|reg\s+delete|taskkill|shutdown)/.test(cmd)) return 'destructive';
-  if (/^\s*(pip\s+install|npm\s+install|pnpm\s+(install|add)|yarn\s+add|go\s+get|composer\s+install|cargo\s+install|brew\s+install|apt(-get)?\s+install|docker\s+(pull|run|build)|git\s+clone|curl\s+-.*https?:\/\/|wget\s+https?:\/\/|npx\s+)/.test(cmd)) return 'network_access';
-  if (toolName === 'run_command' || toolName === 'run_tests' || toolName === 'run_lint' || toolName === 'run_typecheck' || toolName === 'run_build' || toolName === 'run_skill_script') return 'process_execution';
-  if (toolName === 'git_command') return 'git';
-  if (TOOL_RISK.workspace_write.includes(toolName)) return 'workspace_write';
-  return 'read_only';
-}
-
-// v2（权限大改）：只读命令自动放行（default/acceptEdits 模式免审批（只读命令））
-const SAFE_CMD = [
-  { re: /^(ls|dir|pwd|echo|type|cat|head|tail|where|which|find|grep|node\s+-v|npm\s+-v|python\s+-v|git\s+status|git\s+diff|git\s+log|git\s+branch|git\s+show|git\s+remote|git\s+ls-files|git\s+rev-parse|git\s+tag|git\s+describe|git\s+config)\b/ },
-];
-// 只读 git 结构化工具（任何非 plan 模式免审批，修混乱点⑧）
-const READONLY_GIT_TOOLS = ['git_changed_files', 'git_status', 'git_diff', 'git_log'];
-
+// v1.2.0 批次 7 第六刀：审批决策链抽至独立纯模块 approval-decision.js——风险分类（TOOL_RISK/classifyRisk）、
+// 规则匹配（matchRule/globMatch）、沙箱拦截（sandboxBlocked）、11 步审批决策链（needsApproval），决策逻辑逐字一致。
+// 唯一非纯点：v2 P1-4 未迁移 runAuth 时读模块级兜底授权态，经访问器注入；所有权仍在本模块
+// （approvedRun 重置于 flushActiveAgentRuns、allow_run/allow_file 写入于审批回调，闭包读到的始终是当前值）。
+const { createApprovalDecision } = require('./approval-decision.js');
+const { TOOL_RISK, classifyRisk, SAFE_CMD, READONLY_GIT_TOOLS, matchRule, globMatch, sandboxBlocked, needsApproval } = createApprovalDecision({
+  getFallbackRunApproved: () => approvedRun,
+  getFallbackApprovedFiles: () => approvedFiles,
+});
 // v2（权限大改）：读取项目权限规则（<cwd>/.tangbao/permissions.json，损坏/不存在 → []）
 function readProjectRules(cwd) {
   try {
@@ -1157,40 +1108,6 @@ function readProjectRules(cwd) {
     const j = JSON.parse(raw);
     return Array.isArray(j) ? j.filter(r => r && typeof r === 'object') : [];
   } catch (e) { return []; }
-}
-
-// v2（权限大改）：规则匹配——tool 与 pattern（命令前缀/glob）/ path 都命中才成立。
-// G17（B2）：额外支持时间衰减（expiresAt，epoch ms）与 model 级规则（scope:'model' + model）；count<=0 视为失效。
-function matchRule(rule, toolName, command, filePath, model) {
-  if (!rule) return false;
-  if (rule.expiresAt && Date.now() >= Number(rule.expiresAt)) return false;
-  if (rule.count != null && Number(rule.count) <= 0) return false;
-  if (rule.scope === 'model' && rule.model) {
-    if (!model || String(rule.model) !== String(model)) return false;
-  }
-  const toolMatch = !rule.tool || rule.tool === '*' || rule.tool === toolName;
-  if (!toolMatch) return false;
-  if (rule.path && filePath) {
-    const fp = String(filePath).replace(/\\/g, '/');
-    const p = String(rule.path).replace(/\\/g, '/');
-    if (fp !== p && !(p.endsWith('/') ? fp.startsWith(p) : fp.startsWith(p + '/')) && !globMatch(fp, p)) return false;
-  }
-  if (rule.pattern) {
-    const cmd = String(command || '').toLowerCase().trim();
-    const pat = String(rule.pattern).toLowerCase().trim();
-    if (pat.includes('*')) {
-      if (!globMatch(String(command || ''), String(rule.pattern))) return false;
-    } else if (cmd !== pat && !cmd.startsWith(pat + ' ')) {
-      return false;
-    }
-  }
-  return true;
-}
-function globMatch(input, pattern) {
-  try {
-    const re = new RegExp('^' + String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
-    return re.test(input);
-  } catch (e) { return false; }
 }
 
 // v2（P1-3）：计划内文件判定——affectedFiles（精确/glob/目录前缀，归一化 /）；无声明 → opt-in 不判定
@@ -1221,91 +1138,6 @@ function markUnrelatedWrite(opts, relPath) {
   if (opts.ws._unrelatedSeen.has(key)) return;
   opts.ws._unrelatedSeen.add(key);
   opts.usage.unrelatedFileWrites = (opts.usage.unrelatedFileWrites || 0) + 1;
-}
-
-// v2（P2-6）：sandbox 档命令拦截——网络命令与明显越界路径命令；命中返回原因文案，未命中返回 null。
-// G17（B3）：越界路径是沙箱硬边界（任何例外不可放行）；网络命令可被沙箱例外规则（allow:true && sandbox:true 精确命中）放行。
-function sandboxBlocked(command, permCtx) {
-  const cmd = String(command || '').toLowerCase().trim();
-  // 越界路径：../、绝对路径、盘符路径（盘符需位于行首/空白/引号后，避免误判 https:// 的 s://）
-  if (/(\.\.\/|^\/[^/]|(?:^|[\s"'`])[a-z]:[\\/])/.test(cmd)) return '越界路径命令';
-  if (permCtx) {
-    for (const r of permCtx.projectRules || []) {
-      if (r.allow === true && r.sandbox === true && matchRule(r, 'run_command', command, null, permCtx.model)) return null;
-    }
-  }
-  if (classifyRisk('run_command', cmd) === 'network_access') return '网络命令';
-  return null;
-}
-
-// v2（权限大改）：needsApproval 决策链 11 步（permCtx 缺省 null 回退旧逻辑）
-function needsApproval(toolName, command, auto, approveTools, cmdWhitelist, filePath, permCtx) {
-  // 1. bypass 全放行
-  if (permCtx && permCtx.mode === 'bypass') return false;
-  // 2. plan 只读模式：写类 + 命令类 + 子代理 → 拒绝
-  if (permCtx && permCtx.mode === 'plan') {
-    if (TOOL_RISK.workspace_write.includes(toolName) || TOOL_RISK.process_execution.includes(toolName)
-      || toolName === 'git_command' || toolName === 'run_subagent' || toolName === 'web_search') return true;
-    return false;
-  }
-  // 3. 会话级授权（allow_run / allow_file）优先放行（v2 P1-4：优先读 run 级 runAuth，未迁移时回退模块级）
-  const auth = (permCtx && permCtx.runAuth) ? permCtx.runAuth : null;
-  if (auth ? auth.approvedRun : approvedRun) return false;
-  if (filePath && (auth ? auth.approvedFiles.has(filePath) : approvedFiles.has(filePath))) return false;
-  // 4. reject 规则（项目→全局）命中 → 审批/拒绝（G17 B2：过期/model 级规则由 matchRule 内部判定）
-  if (permCtx) {
-    const allRules = (permCtx.projectRules || []).concat(permCtx.globalRules || []);
-    for (const r of allRules) {
-      if (r.allow === false && matchRule(r, toolName, command, filePath, permCtx.model)) return true;
-    }
-  }
-  // 5. 风险强制（destructive/network_access）——allow 规则 force:true 例外；白名单不再短路（修混乱点④）
-  const risk = classifyRisk(toolName, command);
-  if (risk === 'destructive' || risk === 'network_access') {
-    let forcedAllow = false;
-    if (permCtx) {
-      for (const r of (permCtx.projectRules || []).concat(permCtx.globalRules || [])) {
-        if (r.allow === true && r.force === true && matchRule(r, toolName, command, filePath, permCtx.model)) { forcedAllow = true; break; }
-      }
-    }
-    if (!forcedAllow) return true;
-  }
-  // 6/7. allow 规则（项目 > 全局）
-  if (permCtx) {
-    for (const r of permCtx.projectRules || []) { if (r.allow === true && matchRule(r, toolName, command, filePath, permCtx.model)) return false; }
-    for (const r of permCtx.globalRules || []) { if (r.allow === true && matchRule(r, toolName, command, filePath, permCtx.model)) return false; }
-  }
-  // 旧 cmdWhitelist 兼容（未迁移时的旧字段）
-  if ((toolName === 'run_command' || toolName === 'git_command') && Array.isArray(cmdWhitelist) && cmdWhitelist.length) {
-    const cmdLower = String(command || '').toLowerCase().trim();
-    for (const pattern of cmdWhitelist) {
-      const p = String(pattern).toLowerCase().trim();
-      if (p && (cmdLower === p || cmdLower.startsWith(p + ' '))) return false;
-    }
-  }
-  // 8. 只读命令自动放行（default/acceptEdits）+ 只读 git 工具
-  if (READONLY_GIT_TOOLS.includes(toolName)) return false;
-  if (permCtx && (permCtx.mode === 'default' || permCtx.mode === 'acceptEdits')) {
-    const cmd = String(command || '').toLowerCase().trim();
-    if (SAFE_CMD.some((x) => x.re.test(cmd))) return false;
-  }
-  // 9. 模式默认
-  const mode = permCtx ? permCtx.mode : (auto ? 'auto' : 'default');
-  if (mode === 'acceptEdits') {
-    if (TOOL_RISK.workspace_write.includes(toolName)) return false; // 编辑自动
-    if (toolName === 'run_command' || toolName === 'git_command' || toolName === 'run_tests' || toolName === 'run_lint' || toolName === 'run_typecheck' || toolName === 'run_build' || toolName === 'run_skill_script') return true;
-    return false;
-  }
-  if (mode === 'auto' || mode === 'sandbox') { // v2（P2-6）：sandbox 同 auto——危险命令已由第 5 步拦截；网络/越界由 runTool 硬拒
-    // 风险已被第 5 步拦截；auto/sandbox 默认放行
-  } else if (mode === 'default') {
-    if (TOOL_RISK.workspace_write.includes(toolName) || TOOL_RISK.process_execution.includes(toolName)
-      || toolName === 'git_command' || toolName === 'run_subagent') return true;
-  }
-  // 10. approveTools 兼容（旧字段强制审批）
-  if (Array.isArray(approveTools) && approveTools.includes(toolName)) return true;
-  // 11. 兜底放行
-  return false;
 }
 
 // v1.1.0（M1）：把 WorkingState 增量写回存储（runStore 未注入时静默跳过，独立调试模式可跑）
@@ -1366,6 +1198,37 @@ const PLAN_BLOCKED_TOOLS = ['write_file', 'create_file', 'delete_file', 'move_fi
 async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
   opts = opts || {};
   args = args && typeof args === 'object' ? args : {};
+  // v1.2.0 批次 5-③D：MCP 动态工具（mcp__<serverId>__<tool>）——沿用审批流，Plan 模式禁用
+  if (name.startsWith('mcp__')) {
+    const mcpMod = require('../../main/main-mcp.js');
+    const mcp = mcpMod.getActiveMcp();
+    const rest = name.slice(5);
+    const sepIdx = rest.indexOf('__');
+    const serverId = sepIdx > 0 ? rest.slice(0, sepIdx) : '';
+    const toolName = sepIdx > 0 ? rest.slice(sepIdx + 2) : '';
+    if (!mcp || !serverId || !toolName) {
+      return { ok: false, error: { code: 'mcp_unavailable', message: 'MCP 未启用或工具名格式错误（应为 mcp__<serverId>__<tool>）', retryable: false } };
+    }
+    if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
+    if (opts.planMode && !(opts.permCtx && opts.permCtx.planApproved)) {
+      return { ok: false, error: { code: 'plan_mode_denied', message: 'Plan 模式下禁止调用 MCP 工具', retryable: false } };
+    }
+    // 审批沿用：MCP 调用默认走审批（与 run_command 同一 waitApproval/denyWithRecord 链）
+    const mcpApproveTools = opts.approveTools || [];
+    const mcpCmdWhitelist = opts.cmdWhitelist || [];
+    if (needsApproval('mcp', serverId + '/' + toolName, auto, mcpApproveTools, mcpCmdWhitelist, null, opts.permCtx)) {
+      const okA = await waitApproval(emit, runId, serverId + ' / ' + toolName, { toolName: name }, opts.setPhase, opts.phase, opts.usage);
+      if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
+      const denied = denyWithRecord(opts, okA, '该 MCP 工具', serverId + ' / ' + toolName);
+      if (denied) return denied;
+    }
+    const res = await mcp.callTool({ serverId, name: toolName, arguments: args });
+    if (!res.ok && res.error && res.error.code === 'mcp_tool_error') {
+      return { ok: false, summary: res.error.message, truncated: !!res.truncated, error: { code: 'mcp_tool_error', message: res.error.message, retryable: true } };
+    }
+    if (!res.ok) return { ok: false, summary: '', truncated: !!res.truncated, error: { code: 'mcp_failed', message: res.error || 'MCP 调用失败', retryable: true } };
+    return { ok: true, summary: res.summary, truncated: !!res.truncated };
+  }
   const workspace = opts.workspace || null;
   const allowedRootIds = Array.isArray(opts.allowedRootIds) ? opts.allowedRootIds.map(String) : (workspace ? [workspace.primaryRootId] : []);
   const allowedRoots = workspace ? workspace.roots.filter((root) => WorkspaceRoots.rootAllowed(allowedRootIds, root.rootId)) : [];
@@ -1419,7 +1282,7 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
   try {
     if (name === 'run_command') {
       const command = String(args.command || '').trim();
-      if (!command) return '命令为空';
+      if (!command) return { ok: false, error: { code: 'empty_command', message: '命令为空', retryable: false } };
       // v2（P2-6）：sandbox 档硬拒——网络命令 + 越界路径命令；G17（B3）：沙箱例外规则可放行
       if (opts.permCtx && opts.permCtx.mode === 'sandbox') {
         const sandboxBlock = sandboxBlocked(command, opts.permCtx);
@@ -1427,7 +1290,7 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
       }
       if (needsApproval('run_command', command, auto, approveTools, cmdWhitelist, null, opts.permCtx)) {
         const ok = await waitApproval(emit, runId, command, { toolName: name }, opts.setPhase, opts.phase, opts.usage);
-        if (aborted()) return '已取消（用户离开/中断）';
+        if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
         const denied = denyWithRecord(opts, ok, '该命令', command);
         if (denied) return denied;
       }
@@ -1545,7 +1408,7 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
     }
     if (name === 'git_command') {
       let ga = String(args.args || '').trim();
-      if (!ga) return 'git 参数为空';
+      if (!ga) return { ok: false, error: { code: 'empty_git_args', message: 'git 参数为空', retryable: false } };
       // v2（P2-6）：sandbox 档硬拒网络 git（clone/fetch/pull 外网）；G17（B3）：沙箱例外规则可放行
       if (opts.permCtx && opts.permCtx.mode === 'sandbox') {
         const gb = sandboxBlocked('git ' + ga, opts.permCtx);
@@ -1557,7 +1420,7 @@ async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
       const command = 'git ' + ga;
       if (needsApproval('git_command', command, auto, approveTools, cmdWhitelist, null, opts.permCtx)) {
         const ok = await waitApproval(emit, runId, command, { toolName: name }, opts.setPhase, opts.phase, opts.usage);
-        if (aborted()) return '已取消（用户离开/中断）';
+        if (aborted()) return { ok: false, error: { code: 'cancelled', message: '已取消（用户离开/中断）', retryable: false } };
         const denied = denyWithRecord(opts, ok, '该命令', command);
         if (denied) return denied;
       }
@@ -2327,9 +2190,9 @@ ${map.importantFiles.slice(0, 20).map((f) => f.path + ' (' + f.lines + ' 行)').
       }, 200);
       return files.length ? { ok: true, summary: files.join('\n') } : { ok: false, error: { code: 'no_match', message: '无匹配文件', retryable: true } };
     }
-    return '未知工具：' + name;
+    return { ok: false, error: { code: 'unknown_tool', message: '未知工具：' + name, retryable: false } };
   } catch (e) {
-    return '工具执行出错：' + (e && e.message ? e.message : String(e));
+    return { ok: false, error: { code: 'tool_execution_error', message: '工具执行出错：' + (e && e.message ? e.message : String(e)), retryable: false } };
   }
 }
 
@@ -2443,7 +2306,8 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   const adapter = detectAdapter(model, apiBase);
   const useCaching = promptCaching !== false && cap.promptCachingMode && cap.promptCachingMode(model, apiBase) !== 'off';
   if (adapter !== 'openai') {
-    const req = buildRequest(adapter, { apiBase, apiKey, model, messages, tools: tools || TOOLS, stream: true, promptCaching: useCaching });
+    await refreshMcpTools();
+  const req = buildRequest(adapter, { apiBase, apiKey, model, messages, tools: providerToolsWithMcp(tools || TOOLS), stream: true, promptCaching: useCaching });
     // v1.1.7（修复 LLM 连接）：连接超时 60s + 自动重试 5 次（指数退避 1s/2s/4s/8s）+ 流式空闲超时 120s
     let res, streamController, unlinkAbort;
     ({ res, streamController, unlinkAbort } = await _connectWithRetry(async () => {
@@ -2521,7 +2385,8 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   const base = String(apiBase || '').replace(/\/+$/, '');
   const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
   // v1.1.0（M7）：tools 可选——子 Agent 传入白名单工具，缺省全量（主循环向后兼容）
-  const payload = { model, stream: true, messages, tools: tools || TOOLS, tool_choice: 'auto', stream_options: { include_usage: true } };
+  await refreshMcpTools();
+  const payload = { model, stream: true, messages, tools: providerToolsWithMcp(tools || TOOLS), tool_choice: 'auto', stream_options: { include_usage: true } };
   // 思考类型：优先用前端「每模型配置」解析后透传的 thinkType；未传时由能力表回退正则判断（兜底）。
   //  'openai' → reasoning_effort；'qwen' → enable_thinking；'none'/null → 不注入（原生推理，如 grok/deepseek）；豆包关闭开关按模型名识别（thinking.type=disabled）
   const sup = thinkType || (cap.thinkSupport(model) || 'none');
@@ -3742,7 +3607,7 @@ function startAgentServer(port, opts) {
   });
 }
 
-module.exports = { startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, runAgent, scanSkills, loadSkillGuides, findEnabledSkill, matchRule, needsApproval, sandboxBlocked, approvalMsg, parsePatch, applyPatchToContent, validateExpectedHashes, lineDiff };
+module.exports = { runTool, startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, runAgent, scanSkills, loadSkillGuides, findEnabledSkill, matchRule, needsApproval, sandboxBlocked, approvalMsg, parsePatch, applyPatchToContent, validateExpectedHashes, lineDiff, normalizeResult, formatToolResult };
 
 if (require.main === module) {
   startAgentServer(Number(process.env.PORT) || 3000);

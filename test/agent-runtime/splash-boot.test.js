@@ -22,15 +22,16 @@ test('splash.html 像素字标自包含（手写点阵字形/无logo无进度条
   assert.ok(!/<script[^>]+src=/.test(src), '无外部脚本依赖（file:// 自包含）');
 });
 
-test('对比度与闪烁特效：中性灰玻璃面 + 通宽硬边暗带 + 放大字标 + 主题色只进背景', () => {
+test('对比度与闪烁特效：中性近纯色底 + 内边缘流光 + 放大字标 + 主题色低强度参与', () => {
   const src = read('splash.html');
   assert.ok(!src.includes('115deg'), '斜向光斑已删（大范围柔和渐变显脏）');
-  assert.ok(src.includes('rgba(23, 23, 23, 0.30)'), '均匀轻纱用应用 neutral 令牌 rgba(23,23,23)');
-  assert.ok(src.includes("var(--band-hi, rgba(23, 23, 23, 0.62))") && src.includes('180deg'), '通宽硬边暗带承托字标（默认中性，可被主题色微染）');
-  assert.ok(src.includes("setProperty('--band-hi'") && src.includes("setProperty('--band-lo'"), '暗带掺 30% 主题色温（CSS 变量注入）');
-  assert.ok(src.includes("var(--veil, rgba(23, 23, 23, 0.30)") && src.includes("setProperty('--veil'"), '整页轻纱掺 10% 主题色温（背景承载品牌色）');
+  assert.ok(!src.includes('rgba(23, 23, 23, 0.30)') && !src.includes('--veil'), '整页玻璃轻纱已删（第十三轮定稿）');
+  assert.ok(!src.includes('--band-hi') && !src.includes('--band-lo'), '通宽硬边暗带已删（不再靠暗带承托字标）');
+  assert.ok(src.includes('var(--splash-bg, #171717)'), 'body::before 单层中性底（无主题色时纯色深灰）');
+  assert.ok(src.includes("setProperty('--splash-bg'") && src.includes('135deg'), '有主题色时仅注入 135deg 极弱渐变（几乎不可察觉）');
+  assert.ok(src.includes('conic-gradient') && src.includes('splash-border-flow') && src.includes('-webkit-mask-composite: xor'), '内边缘流光：mask 打孔环线旋转，不遮字标');
+  assert.ok(src.includes("setProperty('--splash-accent'"), '流光颜色经 --splash-accent 注入加亮主题色');
   assert.ok(!src.includes('TWINKLE_COLOR || colColor[cellsX'), '呼吸砖不沾主题色，保持字标同款灰白渐变（用户要求）');
-  assert.ok(src.includes(') 28%') && src.includes(') 72%'), '暗带纵向收窄到 28%/72%（用户要求）');
   assert.ok(!src.includes('rgba(12, 14, 18') && !src.includes('rgba(8, 10, 14') && !src.includes('#111214'), '蓝移调黑清零（与应用中性灰同族）');
   assert.ok(src.includes('accent=([0-9a-fA-F]{6})') && src.includes('function lift('), '主题色解析并向白提亮 22%（仅终端光标用）');
   assert.ok(src.includes('CURSOR_COL') && src.includes('CURSOR_PERIOD'), '尾随终端式方块光标（主题元素）');
@@ -39,9 +40,12 @@ test('对比度与闪烁特效：中性灰玻璃面 + 通宽硬边暗带 + 放�
   assert.ok(!src.includes('TILE_GAP'), '砖缝已消除（直角实心像素字）');
   assert.ok(src.includes('var MAX_W = 540') && src.includes('Math.min(15,'), '字标放大到 15px 砖格（更有气势）');
   assert.ok(src.includes("'#8a8a8a'") && src.includes("'#ffffff'"), '横向灰→白渐变端点（左端提亮保证与背景对比）');
-  assert.ok(src.includes('var TWINKLE_SHARE = 0.24') && src.includes('spawnTwinkler'), '呼吸灯加密到 24%');
-  assert.ok(src.includes('650 + Math.random() * 650'), '呼吸提速（单轮 0.65~1.3s，用户要求）');
-  assert.ok(src.includes('tw.cycles -= 1'), '闪烁砖按轮游走换位');
+  assert.ok(src.includes('var TWINKLE_SHARE = 0.14') && src.includes('spawnTwinkler'), '呼吸灯收敛为低密度动效');
+  assert.ok(src.includes('900 + Math.random() * 720'), '呼吸节奏放缓并保持错峰');
+  assert.ok(src.includes('var SWEEP_WIDTH = 2') && src.includes('var SWEEP_DURATION = 880'), '一次窄亮带扫光');
+  assert.ok(src.includes('var BRAND_WORD = \'TangBao\'') && src.includes("var WORD = 'Tangbao'"), '几何字标 Tangbao（仅 T 大写，用户定稿）+ 品牌回退字样');
+  assert.ok(src.includes('var LETTER_GAP = 1'), '字母间保留规整空列');
+  assert.ok(src.includes('0.72 + 0.28 * a'), '呼吸最低亮度保持稳定可读');
 });
 
 test('闪窗亚克力门控：Win11 走 acrylic，其余回退实色', () => {

@@ -210,6 +210,7 @@ function normalizeCharacter(input) {
   result.archived = data.archived === true;
   result.usageCount = Math.max(0, Number(data.usageCount) || 0);
   result.lastUsedAt = Math.max(0, Number(data.lastUsedAt) || 0);
+  result.sortOrder = Math.max(0, Math.round(Number(data.sortOrder) || 0)); // v1.2.0：用户拖动自定义序（收藏/非收藏组内各自生效）
   result.embeddingEnabled = data.embeddingEnabled === true;
   return result;
 }

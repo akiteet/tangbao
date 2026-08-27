@@ -15,6 +15,8 @@ function readRuntimeSource(root) {
     fs.readFileSync(path.join(runtimeDir, 'agent-server-http.js'), 'utf8'),
     fs.readFileSync(path.join(runtimeDir, 'search-providers.js'), 'utf8'),
     fs.readFileSync(path.join(runtimeDir, 'run-registry.js'), 'utf8'),
+    fs.readFileSync(path.join(runtimeDir, 'tool-result-format.js'), 'utf8'), // v1.2.0 批次 7 第二刀：新纯模块纳入静态断言源
+    fs.readFileSync(path.join(runtimeDir, 'approval-decision.js'), 'utf8'), // v1.2.0 批次 7 第六刀：审批决策链纯模块纳入静态断言源
   ].join('\n');
 }
 

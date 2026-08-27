@@ -16,6 +16,21 @@ function minimalEnv(extra) {
   return env;
 }
 
+// v1.2.0 批次 1：网络隔离从「声明」变「默认强制拒绝」。
+// 未显式 allowNetwork 时，把全部代理变量指向失效端点（端口 9 discard，连接即拒）——
+// curl/pip/npm/requests/undici 等主流 HTTP 客户端都尊重代理环境变量，出网被立即拒绝；
+// 并显式清空 NO_PROXY 防止绕过。诚实边界：这是环境变量级阻断，原始套接字不受限
+// （Windows 无用户态内核隔离；AppContainer 级隔离留待后续硬化）。
+function applyNetworkPolicy(env, allowNetwork) {
+  if (allowNetwork) return { mode: 'declared-allowed' };
+  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
+    env[key] = 'http://127.0.0.1:9';
+  }
+  env.NO_PROXY = '';
+  env.no_proxy = '';
+  return { mode: 'blocked-proxy-env' };
+}
+
 function interpreter(scriptPath, options) {
   const ext = path.extname(scriptPath).toLowerCase(); const opts = options || {};
   if (['.js','.mjs','.cjs'].includes(ext)) return { command: opts.nodePath || process.execPath, args: [scriptPath], electronAsNode: !!process.versions.electron };
@@ -73,7 +88,7 @@ async function run(input) {
   try {
     return await new Promise((resolve) => {
       let settled = false, timedOut = false, abortRequested = false, truncated = false; const chunks = []; let bytes = 0;
-      const env = minimalEnv(opts.env); if (spec.electronAsNode) env.ELECTRON_RUN_AS_NODE = '1';
+      const env = minimalEnv(opts.env); const netPolicy = applyNetworkPolicy(env, opts.allowNetwork); if (spec.electronAsNode) env.ELECTRON_RUN_AS_NODE = '1';
       const child = spawn(spec.command, argv, { cwd: tempDir, env, windowsHide: true, shell: false, detached: process.platform !== 'win32' });
       const finish = (result) => { if (settled) return; settled = true; clearTimeout(timer); if (opts.signal) opts.signal.removeEventListener('abort', onAbort); resolve(result); };
       const capture = (stream, label) => stream.on('data', (chunk) => { if (bytes >= opts.maxOutputBytes) { truncated = true; return; } const allowed = chunk.subarray(0, Math.max(0, opts.maxOutputBytes - bytes)); bytes += allowed.length; chunks.push({ label, data: allowed }); if (allowed.length < chunk.length) truncated = true; });
@@ -99,6 +114,6 @@ async function run(input) {
   } finally { active -= 1; if (cleanup) await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {}); }
 }
 
-function isolationLevel(options) { return { level: 'process', environment: 'minimal', network: options && options.allowNetwork ? 'declared-not-enforced' : 'not-enforced', filesystem: options && options.cwd ? 'workspace-approved' : 'temporary-directory', limits: { timeoutMs: Number(options && options.timeoutMs) || DEFAULTS.timeoutMs, maxOutputBytes: Number(options && options.maxOutputBytes) || DEFAULTS.maxOutputBytes } }; }
+function isolationLevel(options) { return { level: 'process', environment: 'minimal', network: options && options.allowNetwork ? 'declared-allowed' : 'blocked-proxy-env', filesystem: options && options.cwd ? 'workspace-approved' : 'temporary-directory', limits: { timeoutMs: Number(options && options.timeoutMs) || DEFAULTS.timeoutMs, maxOutputBytes: Number(options && options.maxOutputBytes) || DEFAULTS.maxOutputBytes } }; }
 
-module.exports = { DEFAULTS, minimalEnv, interpreter, isolationLevel, run, terminateTree };
+module.exports = { DEFAULTS, minimalEnv, applyNetworkPolicy, interpreter, isolationLevel, run, terminateTree };

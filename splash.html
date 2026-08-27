@@ -6,45 +6,33 @@
        按列横向灰→白渐变（左 #8a8a8a → 右 #ffffff），字母间 1 列空距；
        入场按列从左到右快速点亮，随后一部分砖块快速呼吸闪烁；
        prefers-reduced-motion 直接整幅静态显示 + 光标常亮。
-     - 背景透明，透出主进程的 acrylic 模糊；中部一道通宽硬边暗带承托字标；深灰全部取应用
-       neutral 令牌族（#171717 / rgba(23,23,23,…)），不引入蓝移调黑；
-       不支持 acrylic 的系统经 ?bg=solid 由页面铺实色深灰。
-     - 主题色只进背景与光标、不沾字标：暗带掺 30%、整页轻纱掺 10% 主题色温，尾随的终端式
-       方块光标发主题色半秒明灭，字标呼吸砖保持灰白渐变同款。主题色来自主进程读 state.json
-       的 settings.appearance.accent 经 &accent= 注入（空 = 默认蓝）；读不到则整体回退中性灰。
+     - 背景采用接近纯色的中性弱渐变，不再使用中部通宽暗带；窗口 acrylic 仅作为底层材质，solid 模式保持同一深灰基底。主题色只以极低强度参与背景温度与光标。
      关闭协议：主进程 executeJavaScript 给 body 加 .is-done 触发淡出后销毁。 -->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body {
-      width: 100%;
-      height: 100%;
-      background: transparent;
-      overflow: hidden;
-    }
-    html.solid, html.solid body { background: #171717; }
-    /* 玻璃面：均匀轻纱轻压透出的桌面（玻璃感，不是渐变）；中部一道通宽硬边暗带承托字标——
-       直上直下两道边、贯通左右，像海报色带一样干净利落，任何壁纸下都拉得开对比 */
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background:
-        linear-gradient(180deg,
-          var(--band-lo, rgba(23, 23, 23, 0)) 28%,
-          var(--band-hi, rgba(23, 23, 23, 0.62)) 28%,
-          var(--band-hi, rgba(23, 23, 23, 0.62)) 72%,
-          var(--band-lo, rgba(23, 23, 23, 0)) 72%),
-        var(--veil, rgba(23, 23, 23, 0.30));
-    }
-    /* 玻璃面板内描边：一圈极细亮边勾出面板轮廓 */
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      html.solid, html.solid body { background: #171717; }
+      /* 接近纯色的中性弱渐变：只给深灰增加极轻的空间层次，不建立视觉暗带 */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: var(--splash-bg, #171717);
+      }
+      /* 仅保留极轻的边界线，避免透明材质下窗口边缘消失 */
     body::after {
       content: "";
       position: fixed;
       inset: 0;
-      border: 1px solid rgba(255, 255, 255, 0.16);
+      border: 3px solid rgba(255, 255, 255, 0.16);
       pointer-events: none;
     }
     body {
@@ -59,8 +47,42 @@
       cursor: default;
       position: relative;
     }
-    /* 字标容器只需保持在暗带之上，不做任何可见底板 */
-    body > div { position: relative; }
+    /* 一道贴着内边缘移动的窄流光：只在开屏动画阶段出现，不遮挡字标 */
+    body > div {
+      position: relative;
+      isolation: isolate;
+    }
+    body > div::before {
+      content: "";
+      position: fixed;
+      inset: 2px;
+      padding: 3px;
+      border: 3px solid transparent;
+      background: conic-gradient(from -35deg,
+        transparent 0deg 300deg,
+        color-mix(in srgb, var(--splash-accent, #4c80ff) 18%, transparent) 316deg,
+        var(--splash-accent, #4c80ff) 326deg 336deg,
+        color-mix(in srgb, var(--splash-accent, #4c80ff) 18%, transparent) 352deg,
+        transparent 360deg) border-box;
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 0;
+      transition: opacity 220ms ease-out;
+      animation: splash-border-flow 2.6s linear infinite;
+    }
+    body.ready > div::before { opacity: 0.92; }
+    body.is-done > div::before { opacity: 0; transition: opacity 120ms ease-in; }
+    @keyframes splash-border-flow {
+      to { transform: rotate(360deg); }
+    }
+    canvas, #fallback {
+      position: relative;
+      z-index: 1;
+    }
     body.ready { opacity: 1; }
     body.is-done { opacity: 0; transition: opacity 160ms ease-in; }
     canvas { display: block; }
@@ -69,9 +91,11 @@
       font-size: 56px;
       font-weight: 800;
       letter-spacing: 6px;
+      padding: 0 28px; /* 与主字标一致：左右各约两个空格宽的呼吸边 */
       color: #fafafa;
     }
     @media (prefers-reduced-motion: reduce) {
+      body > div::before { animation: none; opacity: 0; }
       body { opacity: 1; transition: none; }
       body.is-done { transition: none; }
     }
@@ -91,9 +115,11 @@
         document.getElementById('fallback').style.display = 'block';
       }
       function pixelWordmark() {
-        var WORD = 'TangBao';
-        // 手写几何点阵字形（OpenCode 图版风格）：方角、单块笔画、正方环形。
-        // 统一 9 行网格：0-1 行 = 大写/升部，2-6 行 = x 高度，7-8 行 = 降部；top = 字形首行所在行号。
+        var BRAND_WORD = 'TangBao';
+        var WORD = 'Tangbao';
+        document.getElementById('fallback').textContent = BRAND_WORD;
+        // 参考图式几何像素字形：5 列等宽模块，所有转折用填充矩形闭合，不使用斜线或曲线。
+        // 0-1 行为升部，2-6 行为统一中格，7-8 行为降部；中格等高，不强求全字等高。
         var GLYPHS = {
           'T': { top: 0, rows: ['XXXXX',
                                 '..X..',
@@ -102,45 +128,51 @@
                                 '..X..',
                                 '..X..',
                                 '..X..'] },
-          'a': { top: 2, rows: ['.XXX',
-                                '...X',
-                                '.XXX',
-                                'X..X',
-                                '.XXX'] },
-          'n': { top: 2, rows: ['X...',
-                                'XXXX',
-                                'X..X',
-                                'X..X',
-                                'X..X'] },
-          'g': { top: 2, rows: ['XXXX',
-                                'X..X',
-                                'X..X',
-                                'X..X',
-                                'XXXX',
-                                '...X',
-                                'XXXX'] },
-          'B': { top: 0, rows: ['XXXX.',
+          // a 采用闭合矩形骨架与中央横梁，四角均落在填充模块上。
+          'a': { top: 2, rows: ['XXXXX',
+                                'X...X',
+                                'XXXXX',
+                                'X...X',
+                                'X...X'] },
+          // n 只有两条垂直边和一条整齐横梁，两侧不向外突起。
+          'n': { top: 2, rows: ['XXXX.',
                                 'X...X',
                                 'X...X',
-                                'XXXX.',
+                                'X...X',
+                                'X...X'] },
+          // g 由闭合上部矩形与右侧下行字尾组成，避免零散缺口。
+          'g': { top: 2, rows: ['XXXXX',
                                 'X...X',
                                 'X...X',
-                                'XXXX.'] },
-          'o': { top: 2, rows: ['XXXX',
-                                'X..X',
-                                'X..X',
-                                'X..X',
-                                'XXXX'] },
+                                'X...X',
+                                'XXXXX',
+                                '....X',
+                                'XXXXX'] },
+          // b 左侧升部字干，右侧闭合矩形碗形。
+          'b': { top: 0, rows: ['X....',
+                                'X....',
+                                'XXXXX',
+                                'X...X',
+                                'X...X',
+                                'X...X',
+                                'XXXXX'] },
+          // o 四角填实，内部只保留一个矩形镂空。
+          'o': { top: 2, rows: ['XXXXX',
+                                'X...X',
+                                'X...X',
+                                'X...X',
+                                'XXXXX'] },
         };
         var GRID_ROWS = 9;
-        // 字标展示上限：600×340 窗口内尽量撑大
+        // 字标展示上限：保持宽屏气势，同时给窄屏留下稳定的左右呼吸边
         var MAX_W = 540, MAX_H = 180;
-        // 1) 组词：逐字母拼进统一网格，字母间 1 空列
+        // 1) 组词：统一 5 列几何字格，字母间保留完整空列，构图更接近 OpenCode 的宽字标
+        var LETTER_GAP = 1;
         var cols = 0;
         for (var i = 0; i < WORD.length; i++) {
           var head = GLYPHS[WORD.charAt(i)];
           if (!head) throw new Error('missing_glyph:' + WORD.charAt(i));
-          cols += head.rows[0].length + (i ? 1 : 0);
+          cols += head.rows[0].length + (i ? LETTER_GAP : 0);
         }
         var grid = [];
         for (var r0 = 0; r0 < GRID_ROWS; r0++) {
@@ -154,7 +186,7 @@
           for (var j = 0; j < gl.rows.length; j++)
             for (var k = 0; k < gl.rows[j].length; k++)
               if (gl.rows[j].charAt(k) === 'X') grid[gl.top + j][pen + k] = 1;
-          pen += gl.rows[0].length + 1;
+          pen += gl.rows[0].length + LETTER_GAP;
         }
         // 2) 裁掉全空的边缘行列（字形调整后的防呆）
         var rows = GRID_ROWS;
@@ -172,15 +204,16 @@
         //    相邻砖共享边界、无亚像素采样，砖缝彻底为零（不拉伸字形，几何感才锐利）
         var canvas = document.getElementById('word');
         var ctx = canvas.getContext('2d');
-        var CELL = Math.max(3, Math.min(15, Math.floor(Math.min(MAX_W / cols, MAX_H / rows))));
+        var CELL = Math.max(3, Math.min(15, Math.floor(Math.min(MAX_W / (cols + 4), MAX_H / rows))));
         var dpr = window.devicePixelRatio || 1;
         var D = Math.max(1, Math.round(CELL * dpr)); // 砖块的设备像素边长（整数栅格）
-        var CANVAS_COLS = cols + 2;                  // 字标右侧留一空列 + 一列终端式光标
+        var PAD = 2;                                 // 字标左右各留 2 个空列呼吸边（2026-08-26 外观反馈）
+        var CANVAS_COLS = PAD * 2 + cols + 2;        // 左右留白 + 字标 + 一空列 + 一列终端式光标
         canvas.width = CANVAS_COLS * D;
         canvas.height = rows * D;
         canvas.style.width = (CANVAS_COLS * CELL) + 'px';
         canvas.style.height = (rows * CELL) + 'px';
-        var CURSOR_COL = cols + 1; // 光标所在列（与字标隔一个空列）
+        var CURSOR_COL = cols + 1; // 光标所在列（字标系内坐标，绘制时整体平移 PAD 列）
         var CURSOR_ROWS = 7;       // 与大写字母同高
         var CURSOR_PERIOD = 1060;  // 半秒明灭的经典终端节奏
         function tile(gx, gy) {
@@ -191,9 +224,11 @@
         var GRAD_FROM = '#8a8a8a', GRAD_TO = '#ffffff';
         function grayV(hex) { return parseInt(hex.slice(1, 3), 16); } // 灰阶三通道同值，取一路即可
         var colColor = [];
+        var colValue = [];
         for (var c1 = 0; c1 < cols; c1++) {
-          var t = cols > 1 ? c1 / (cols - 1) : 0;
-          var v = Math.round(grayV(GRAD_FROM) + (grayV(GRAD_TO) - grayV(GRAD_FROM)) * t);
+          var colorT = cols > 1 ? c1 / (cols - 1) : 0;
+          var v = Math.round(grayV(GRAD_FROM) + (grayV(GRAD_TO) - grayV(GRAD_FROM)) * colorT);
+          colValue.push(v);
           colColor.push('rgb(' + v + ',' + v + ',' + v + ')');
         }
         var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -203,10 +238,11 @@
           for (var c2 = 0; c2 < cols; c2++)
             if (grid[r2 + top][c2 + left]) { cellsX.push(c2); cellsY.push(r2); }
         if (!cellsX.length) throw new Error('empty_grid');
-        // 砖块闪烁：入场扫完后，一部分方块以随机相位/周期快速呼吸明灭，
-        // 一轮结束随机游走到别的砖——像远处楼宇灯火。
-        var TWINKLE_SHARE = 0.24;
-        // 主题色链路：主进程启动时读 state.json 的 settings.appearance.accent
+        // 砖块闪烁：入场扫完后，少量方块以随机相位/周期低幅呼吸，
+        // 一轮结束随机游走到别的砖，保持静谧而非炫技。
+        var TWINKLE_SHARE = 0.14;
+        var SWEEP_WIDTH = 2;                         // 一道窄亮带，扫过字标一次而不过度抢戏
+        var SWEEP_DURATION = 880;                   // 与入场衔接，保持轻微而完整的亮度巡视
         // （空 = 默认蓝）经 &accent= 注入；读不到则全部回退中性灰白
         var ACCENT_HEX = (function () {
           var m = /[?&]accent=([0-9a-fA-F]{6})/.exec(location.search);
@@ -220,17 +256,17 @@
           return 'rgb(' + f(rgb[0]) + ',' + f(rgb[1]) + ',' + f(rgb[2]) + ')';
         }
         var TWINKLE_COLOR = '';
-        if (ACCENT_HEX) {
+          if (ACCENT_HEX) {
           var accRGB = hexRGB(ACCENT_HEX);
-          TWINKLE_COLOR = lift(accRGB); // 仅终端式光标使用，字标砖块一律不沾主题色
-          // 背景注入：暗带掺 30%、整页轻纱掺 10% 主题色温（CSS 变量注入，默认值见样式表）
+          TWINKLE_COLOR = lift(accRGB); // 仅终端式光标与边缘流光使用
+          var rootStyle = document.documentElement.style;
+          rootStyle.setProperty('--splash-accent', TWINKLE_COLOR);
+          // 背景只保留极弱的主题色温：两端都接近 neutral 深灰，不再形成明显色带。
           var mixTint = function (v, k) { return Math.round(23 + (v - 23) * k); };
           var rootStyle = document.documentElement.style;
-          var bR = mixTint(accRGB[0], 0.30), bG = mixTint(accRGB[1], 0.30), bB = mixTint(accRGB[2], 0.30);
-          rootStyle.setProperty('--band-hi', 'rgba(' + bR + ',' + bG + ',' + bB + ',0.62)');
-          rootStyle.setProperty('--band-lo', 'rgba(' + bR + ',' + bG + ',' + bB + ',0)');
-          var vR = mixTint(accRGB[0], 0.10), vG = mixTint(accRGB[1], 0.10), vB = mixTint(accRGB[2], 0.10);
-          rootStyle.setProperty('--veil', 'rgba(' + vR + ',' + vG + ',' + vB + ',0.30)');
+          var bR = mixTint(accRGB[0], 0.08), bG = mixTint(accRGB[1], 0.08), bB = mixTint(accRGB[2], 0.08);
+          var eR = mixTint(accRGB[0], 0.16), eG = mixTint(accRGB[1], 0.16), eB = mixTint(accRGB[2], 0.16);
+          rootStyle.setProperty('--splash-bg', 'linear-gradient(135deg, rgb(' + bR + ',' + bG + ',' + bB + ') 0%, rgb(' + eR + ',' + eG + ',' + eB + ') 100%)');
         }
         var twinklers = [];
         function initTwinklers(now) {
@@ -241,21 +277,28 @@
         function spawnTwinkler(now) {
           return {
             i: (Math.random() * cellsX.length) | 0,
-            t0: now + Math.random() * 600,             // 错峰启动
-            dur: 650 + Math.random() * 650,            // 单轮呼吸 0.65~1.3s（用户要求更快）
+            t0: now + Math.random() * 720,             // 错峰启动
+            dur: 900 + Math.random() * 720,            // 单轮呼吸 0.9~1.62s
             cycles: 1 + ((Math.random() * 3) | 0),     // 原地闪 1~3 轮后游走到别的砖
           };
         }
         // 基础字标：按列把连续竖段合并成单个矩形填充（每列本就一个渐变色），
         // 同色区域一张矩形画完，物理上不存在砖间边界
-        function drawSolid(maxCol) {
+        function drawSolid(maxCol, now) {
+          var sweepAge = now - t0;
+          var sweepCenter = sweepAge >= 0 && sweepAge <= SWEEP_DURATION
+            ? (sweepAge / SWEEP_DURATION) * (cols + SWEEP_WIDTH * 2) - SWEEP_WIDTH
+            : -Infinity;
           for (var c = 0; c <= maxCol && c < cols; c++) {
             var run = -1;
             for (var r = 0; r <= rows; r++) {
               var on = r < rows && grid[r + top][c + left] === 1;
               if (on && run < 0) run = r;
               else if (!on && run >= 0) {
-                ctx.fillStyle = colColor[c];
+                var distance = Math.abs(c - sweepCenter);
+                var lift = distance <= SWEEP_WIDTH ? (1 - distance / SWEEP_WIDTH) * 0.14 : 0;
+                var sweptValue = Math.min(255, Math.round(colValue[c] + (255 - colValue[c]) * lift));
+                ctx.fillStyle = lift > 0 ? 'rgb(' + sweptValue + ',' + sweptValue + ',' + sweptValue + ')' : colColor[c];
                 ctx.fillRect(c * D, run * D, D, (r - run) * D);
                 run = -1;
               }
@@ -264,8 +307,10 @@
         }
         function drawFrame(now, maxCol) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.save();
+          ctx.translate(PAD * D, 0); // 左侧留白：绘制坐标整体右移（clearRect 在平移外，避免残影）
           ctx.globalAlpha = 1;
-          drawSolid(maxCol);
+          drawSolid(maxCol, now);
           if (maxCol >= cols - 1) { // 入场扫完后：终端式光标半秒明灭（主题色）
             var cursorOn = reduce ? true : ((now - t0) % CURSOR_PERIOD) < (CURSOR_PERIOD / 2);
             if (cursorOn) {
@@ -287,10 +332,11 @@
             var p = el / tw.dur;
             var a = Math.pow(Math.sin(p * Math.PI), 2); // sin²：起止都平缓
             ctx.fillStyle = colColor[cellsX[tw.i]];
-            ctx.globalAlpha = 0.45 + 0.55 * a; // 呼吸但最暗档仍可读，不与背景融色
+            ctx.globalAlpha = 0.72 + 0.28 * a; // 低幅呼吸，始终保持主体字标的稳定可读性
             tile(cellsX[tw.i], cellsY[tw.i]);
           }
           ctx.globalAlpha = 1;
+          ctx.restore();
         }
         var t0 = performance.now();
         if (reduce) {
@@ -298,7 +344,7 @@
           drawFrame(t0, cols - 1);
           return;
         }
-        var DURATION = 480;
+        var DURATION = 620;
         var twinkling = false;
         function frame(now) {
           var p = Math.min(1, (now - t0) / DURATION);

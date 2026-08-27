@@ -24,7 +24,8 @@ function moduleName(value) {
 
 function normalizeMessage(message) {
   if (!message || typeof message !== 'object') return null;
-  if (message.role !== 'user' && message.role !== 'assistant') return null;
+  // v1.2.0：放行 system——糖馆群聊沉默提示行需跨重启保留（出站给模型前由渲染层过滤）
+  if (message.role !== 'user' && message.role !== 'assistant' && message.role !== 'system') return null;
   const next = Object.assign({}, message);
   if (next.content != null && typeof next.content !== 'string') next.content = String(next.content);
   if (next.think != null && typeof next.think !== 'string') next.think = String(next.think);

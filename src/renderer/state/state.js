@@ -142,7 +142,7 @@
   function sanitizeFloatState(value) {
     const source = value || {};
     const settings = source.settings && typeof source.settings === 'object' ? source.settings : {};
-    const sanitizedSettings = { appearance: settings.appearance || {}, view: settings.view || 'chat' };
+    const sanitizedSettings = { appearance: settings.appearance || {}, view: settings.view || 'chat', floatKit: settings.floatKit || {} };
     if (settings.accounts && Array.isArray(settings.accounts)) {
       sanitizedSettings.accounts = settings.accounts.map((account) => {
         const next = Object.assign({}, account);
@@ -511,16 +511,25 @@
         agent: '',               // 糖码（编码助手）系统提示
         doc: { summary: '', points: '', translate: '', outline: '' }, // 糖读分析提示
       },
+      floatKit: { welcome: false, think: false, web: false, modelSelect: false, images: false, attachments: false, menu: false, ctxBar: false, msgActions: false, disclaimer: false }, // v1.2.0：浮窗装配（true=显示该块；默认全关=极简形态）
       appearance: { mode: 'system', accent: '', radius: '' }, // 外观主题：mode=light|dark|system
       enabledModules: ['chat', 'image', 'doc', 'create', 'tavern', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
       search: {},                // 联网搜索配置；Key 存在密钥库的 'search' 引用下，不落 state
       userMemory: '',         // 用户级长期记忆，注入糖码 system prompt
       contextWindow: 128000,  // 模型上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
+      locale: 'zh',               // v1.2.0 批次 6b：界面语言（zh/en，i18n 脚手架）
       visionModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'claude-3', 'claude-3-5', 'claude-3-7', 'gemini-1.5', 'gemini-2.0', 'qwen-vl', 'qwen2-vl', 'yi-vl', 'llava', 'internvl', 'pixtral', 'glm-4v', 'minimax', 'step'], // 视觉模型白名单
       permissionRules: [],       // v2（权限大改）：全局权限规则（所有项目生效，项目规则优先）[{ id, tool, pattern, path, allow, scope:'global', force? }]
       // 糖馆只保存可恢复指针；抽屉、标签和编辑脏状态只存在运行时。
-      tavernUi: { lastCharacterId: '', lastConversationId: '' },
+      // v1.2.0 批次 4：世界书检索预算设置化（ragTokenBudget/ragLimit，preparePrompt 与检索预览共用）
+      tavernUi: { lastCharacterId: '', lastConversationId: '', ragTokenBudget: 1000, ragLimit: 8 },
+      // v1.2.0 批次 4：上下文压缩参数（设置→提示词 可调；消费方为 context.js 的 App.context getter）
+      context: { compactUtil: 0.85, recentKeep: 16, summaryMaxTokens: 4000 },
+      // v1.2.0 批次 5：MCP 服务器（糖码工具扩展）；面板以 JSON 编辑，主进程经官方 SDK 连接
+      mcp: { servers: [] },
+      // v1.2.0 批次 6a：快捷键（app=应用内组合键，global=全局加速键；默认值在 ShortcutsCore，归一化时回填）
+      shortcuts: { app: {}, global: {} },
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
     activeThreadId: null,        // 当前激活的糖码会话线程 id
@@ -697,6 +706,20 @@
       accent: typeof psAp.accent === 'string' ? psAp.accent : '',
       radius: typeof psAp.radius === 'string' ? psAp.radius : '',
     };
+    // v1.2.0：浮窗装配（true=在悬浮窗显示该功能块；默认全关=极简形态）
+    const psKit = (ps.floatKit && typeof ps.floatKit === 'object') ? ps.floatKit : {};
+    ns.settings.floatKit = {
+      welcome: psKit.welcome === true,
+      think: psKit.think === true,
+      web: psKit.web === true,
+      modelSelect: psKit.modelSelect === true,
+      images: psKit.images === true,
+      attachments: psKit.attachments === true,
+      menu: psKit.menu === true,
+      ctxBar: psKit.ctxBar === true,
+      msgActions: psKit.msgActions === true,
+      disclaimer: psKit.disclaimer === true,
+    };
     // 模块开关 / 自定义模块（保留用户自定义顺序，仅过滤非法 id）
     const allBuiltin = ['chat', 'image', 'doc', 'create', 'tavern', 'agent'];
     const validBuiltinIds = new Set(allBuiltin);
@@ -718,6 +741,54 @@
     ns.settings.userMemory = (typeof ps.userMemory === 'string') ? ps.userMemory : '';
     // 上下文窗口（token）：自动压缩阈值与 /context 分母；未知模型时回退
     ns.settings.contextWindow = (typeof ps.contextWindow === 'number' && ps.contextWindow > 0) ? ps.contextWindow : 128000;
+    ns.settings.locale = (typeof ps.locale === 'string' && ['zh','en'].includes(ps.locale)) ? ps.locale : 'zh';
+    // v1.2.0 批次 4：上下文压缩参数归一化（clamp 防呆；缺失回退默认值）
+    {
+      const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
+      const pc = (ps.context && typeof ps.context === 'object') ? ps.context : {};
+      ns.settings.context = {
+        compactUtil: num(pc.compactUtil, 0.85, 0.05, 0.95),
+        recentKeep: Math.round(num(pc.recentKeep, 16, 4, 200)),
+        summaryMaxTokens: Math.round(num(pc.summaryMaxTokens, 4000, 200, 16000)),
+      };
+      // v1.2.0 批次 5：MCP servers 归一化（缺 id/command|url 的条目丢弃；enabled 默认开）
+      const pmcp = (ps.mcp && typeof ps.mcp === 'object') ? ps.mcp : {};
+      ns.settings.mcp = {
+        servers: (Array.isArray(pmcp.servers) ? pmcp.servers : []).map((sv) => {
+          const item = sv && typeof sv === 'object' ? sv : {};
+          const transport = item.transport === 'http' ? 'http' : 'stdio';
+          return {
+            id: String(item.id || '').slice(0, 64),
+            name: String(item.name || '').slice(0, 80),
+            transport,
+            command: typeof item.command === 'string' ? item.command.slice(0, 500) : '',
+            args: Array.isArray(item.args) ? item.args.map(String).slice(0, 32) : [],
+            url: typeof item.url === 'string' ? item.url.slice(0, 500) : '',
+            enabled: item.enabled !== false,
+          };
+        }).filter((sv) => sv.id && (sv.transport === 'http' ? /^https?:\/\//.test(sv.url) : sv.command)),
+      };
+      // v1.2.0 批次 6：快捷键归一化（app=应用内组合键，global=全局加速键；词表校验单一事实源在 ShortcutsCore，
+      // 非法值回退默认、空串保留为「未设置」；白名单式合并，漏加会被剥字段——v1.1.6 教训适用）
+      {
+        const core = App.ShortcutsCore;
+        const psc = (ps.shortcuts && typeof ps.shortcuts === 'object') ? ps.shortcuts : {};
+        const normScope = (rawScope, defaults, actions) => {
+          const raw = (rawScope && typeof rawScope === 'object') ? rawScope : {};
+          const out = {};
+          for (const id of actions) {
+            const hasOwn = Object.prototype.hasOwnProperty.call(raw, id);
+            const norm = core ? core.normalizeStored(hasOwn ? raw[id] : defaults[id]) : String(hasOwn ? raw[id] : defaults[id] || '');
+            out[id] = norm == null ? defaults[id] : norm;
+          }
+          return out;
+        };
+        ns.settings.shortcuts = {
+          app: normScope(psc.app, core ? core.DEFAULT_APP : {}, core ? core.APP_ACTIONS : []),
+          global: normScope(psc.global, core ? core.DEFAULT_GLOBAL : {}, core ? core.GLOBAL_ACTIONS : []),
+        };
+      }
+    }
     // 思考强度迁移：旧版 think:boolean → 新版 thinkLevel: 'off'|'low'|'medium'|'high'
     if (ps.thinkLevel && ['off','low','medium','high'].includes(ps.thinkLevel)) {
       ns.settings.thinkLevel = ps.thinkLevel;
@@ -737,6 +808,9 @@
     ns.settings.tavernUi = {
       lastCharacterId: typeof tgUi.lastCharacterId === 'string' ? tgUi.lastCharacterId : '',
       lastConversationId: typeof tgUi.lastConversationId === 'string' ? tgUi.lastConversationId : '',
+      // v1.2.0 批次 4：世界书检索预算（clamp 防呆）
+      ragTokenBudget: (() => { const n = Number(tgUi.ragTokenBudget); return Number.isFinite(n) ? Math.min(8000, Math.max(128, Math.round(n))) : 1000; })(),
+      ragLimit: (() => { const n = Number(tgUi.ragLimit); return Number.isFinite(n) ? Math.min(20, Math.max(1, Math.round(n))) : 8; })(),
     };
     // 糖码多会话线程：归一化 + 旧版 agentHistory 迁移为首个线程
     const cleanSkills = (arr) => {

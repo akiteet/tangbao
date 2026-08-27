@@ -87,11 +87,12 @@
     return {}; // doubao / none / null → 原生推理，开启即默认，不注入强度参数
   }
 
-  // 判断模型是否原生支持联网搜索：'qwen' | 'openai' | null
+  // 判断模型是否原生支持联网搜索：'qwen' | null
+  // （2026-08-26 移除 openai 系假阳性：chat/completions 中转对 tools:[{type:'web_search'}]
+  //   多数报 400 或静默忽略，造成「显示已开启实际没联」；qwen/doubao 系 enable_search 真实有效）
   function nativeWebModel(model) {
     const m = norm(model);
     if (/qwen|qwq|dashscope|doubao|seed|ark/.test(m)) return 'qwen';
-    if (/openai|gpt|o[0-9]/.test(m)) return 'openai';
     return null;
   }
 
@@ -100,7 +101,6 @@
     if (!enabled) return {};
     const kind = nativeWebModel(model);
     if (kind === 'qwen') return { enable_search: true };
-    if (kind === 'openai') return { tools: [{ type: 'web_search' }] };
     return {};
   }
 

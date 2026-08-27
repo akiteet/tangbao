@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('electron', {
   modelHealth: (input) => ipcRenderer.invoke('model:health', input || {}),
   modelMetrics: (input) => ipcRenderer.invoke('model:metrics', input || {}),
   searchQuery: (input) => ipcRenderer.invoke('search:query', input || {}),
+  // 用量统计仪表盘（v1.2.0 批次 5；2026-08-26 起仅按 模型/日 聚合）：model_call_metrics
+  metricsSummary: (input) => ipcRenderer.invoke('metrics:summary', input || {}),
+  // MCP 设置页「测试连接」：连接指定 server 并返回工具清单（v1.2.0 第九轮接线）
+  mcpListTools: (input) => ipcRenderer.invoke('mcp:listTools', input || {}),
   tavernPresets: () => ipcRenderer.invoke('tavern:presets'),
   tavernGetMatureMode: () => ipcRenderer.invoke('tavern:getMatureMode'),
   tavernSetMatureMode: (input) => ipcRenderer.invoke('tavern:setMatureMode', input || {}),
@@ -32,6 +36,7 @@ contextBridge.exposeInMainWorld('electron', {
   tavernGetCharacter: (id) => ipcRenderer.invoke('tavern:getCharacter', id || ''),
   tavernSaveCharacter: (input) => ipcRenderer.invoke('tavern:saveCharacter', input || {}),
   tavernToggleFavorite: (input) => ipcRenderer.invoke('tavern:toggleFavorite', input || {}),
+  tavernReorderCharacters: (input) => ipcRenderer.invoke('tavern:reorderCharacters', input || {}),
   tavernTouchCharacter: (input) => ipcRenderer.invoke('tavern:touchCharacter', input || {}),
   tavernCloneCharacter: (input) => ipcRenderer.invoke('tavern:cloneCharacter', input || {}),
   tavernDeleteCharacter: (input) => ipcRenderer.invoke('tavern:deleteCharacter', input || {}),
@@ -59,6 +64,14 @@ contextBridge.exposeInMainWorld('electron', {
   setTitleBarOverlay: (opts) => ipcRenderer.send('set-titlebar-overlay', opts),
   // 启动闪屏交接：boot() 结束（成功或失败）都通知主进程显示主窗、撤掉闪屏（单向 send，无返回值）
   notifyBootDone: (payload) => ipcRenderer.send('app:boot-done', payload || { ok: true }),
+  // 应用内更新（v1.2.0 批次 3）：设置→帮助 显式触发；进度经 updater:event 单向推送
+  updaterCheck: () => ipcRenderer.invoke('updater:check'),
+  updaterDownload: () => ipcRenderer.invoke('updater:download'),
+  updaterInstall: () => ipcRenderer.invoke('updater:install'),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  onUpdaterEvent: (cb) => { const h = (_e, data) => cb(data); ipcRenderer.on('updater:event', h); return () => ipcRenderer.removeListener('updater:event', h); },
+  // 全局快捷键（v1.2.0 批次 6a）：渲染层落盘后通知主进程按新表即时重注册
+  shortcutsSetGlobal: (map) => ipcRenderer.invoke('shortcuts:setGlobal', map || {}),
   showDirDialog: () => ipcRenderer.invoke('dialog:showDir'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   // 本地文件（如用户设置的本地模块）用系统关联程序打开：仅允许绝对路径，且主进程拒绝可执行后缀

@@ -16,6 +16,7 @@
     getCharacter(id) { return call('tavernGetCharacter', { ok: false, character: null, memories: [] }, id || ''); },
     saveCharacter(input) { return call('tavernSaveCharacter', { ok: false }, input || {}); },
     toggleFavorite(input) { return call('tavernToggleFavorite', { ok: false }, input || {}); },
+    reorderCharacters(input) { return call('tavernReorderCharacters', { ok: false }, input || {}); },
     touchCharacter(input) { return call('tavernTouchCharacter', { ok: false }, input || {}); },
     cloneCharacter(input) { return call('tavernCloneCharacter', { ok: false }, input || {}); },
     deleteCharacter(input) { return call('tavernDeleteCharacter', { ok: false }, input || {}); },

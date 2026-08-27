@@ -28,7 +28,6 @@
   let renderedConvId = null;
   let renderedContentStamp = ''; // v1.1.5：内容戳——重进未变化的会话（模块往返）不再整窗重建
   let streamConvId = null;  // 聊天修复 E：当前流式回复所属会话 id（区分“本会话忙碌”与“其它会话忙碌”）
-  let voiceBase = '';       // B5（P2）：语音听写最终文本基线——interim 更新时替换而非重复累加
   // 聊天修复 E：半开连接看门狗——首字节 30s / 流数据空闲 90s 未推进视为连接失效，
   // 抛 STREAM_IDLE_TIMEOUT 由 streamChat 外层 catch 走 saveAnswer 兜底并复位 streaming，杜绝“卡死吞消息”。
   const STREAM_FIRST_BYTE_MS = 30000;
@@ -45,7 +44,6 @@
     return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
   };
   let recognition = null;   // 语音听写实例
-  let listening = false;    // 语音听写状态
   let pendingAttachments = []; // 待发送附件 [{id,name,type,text,size,data?}]
   let messageVisibleCount = 100;
   let messageWindowConvId = '';
@@ -100,33 +98,26 @@
   // All writes for one module are serialized. Streaming checkpoints and the
   // final conversation snapshot otherwise race through separate IPC calls and
   // an older snapshot can overwrite the latest assistant output.
-  const moduleWriteQueues = new Map();
+  const moduleWriteQueue = App.chatStoreCore.createModuleWriteQueue();
 
-  function ensureModuleRuntime() {
-    if (!App.moduleSessions || typeof App.moduleSessions !== 'object') {
-      App.moduleSessions = { status: 'pending', data: {} };
-    }
-    App.moduleSessions.data = App.moduleSessions.data || {};
-    for (const owner of MODULE_OWNERS) {
-      const bucket = App.moduleSessions.data[owner];
-      if (!bucket || typeof bucket !== 'object') App.moduleSessions.data[owner] = { conversations: [], activeId: null };
-      if (!Array.isArray(App.moduleSessions.data[owner].conversations)) App.moduleSessions.data[owner].conversations = [];
-    }
-    return App.moduleSessions;
-  }
+  function ensureModuleRuntime() { return App.chatStoreCore.ensureModuleRuntime(App); }
 
-  function isModuleOwner(owner) { return MODULE_OWNERS.has(String(owner || '')); }
+  function isModuleOwner(owner) { return App.chatStoreCore.isModuleOwner(owner); }
 
-  function ownerForConversation(conv) {
-    if (conv && (conv.tavernCharacterId || conv.originModule === 'tavern')) return 'tavern';
-    if (conv && conv.originModule === 'create') return 'create';
-    return 'default';
-  }
+  function ownerForConversation(conv) { return App.chatStoreCore.ownerForConversation(conv); }
 
   // Module ownership must not depend on the newest marker shape. Older
   // sessions can carry only originModule, while current Tavern sessions
   // also carry tavernCharacterId.
-  function isTavernConv(conv) { return ownerForConversation(conv) === 'tavern'; }
+  function isTavernConv(conv) { return App.chatStoreCore.isTavernConv(conv); }
+
+  // 群聊发送者名色相：按 characterId 稳定散列到 0-359，同一角色恒同色
+  function hueFromString(id) {
+    const s = String(id || '');
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h % 360;
+  }
 
   function currentOwner() {
     if (surfaceState && surfaceState.owner) return surfaceState.owner;
@@ -182,17 +173,9 @@
     return !!conv && activeConversationId(ownerForConversation(conv)) === conv.id;
   }
 
-  function moduleSnapshot(conv) {
-    try { return JSON.parse(JSON.stringify(conv)); } catch (_) { return conv; }
-  }
+  function moduleSnapshot(conv) { return App.chatStoreCore.snapshotOf(conv); }
 
-  function enqueueModuleWrite(owner, operation) {
-    const name = String(owner || '');
-    const previous = moduleWriteQueues.get(name) || Promise.resolve();
-    const next = previous.catch(() => {}).then(operation);
-    moduleWriteQueues.set(name, next.catch(() => {}));
-    return next;
-  }
+  function enqueueModuleWrite(owner, operation) { return moduleWriteQueue.enqueue(owner, operation); }
 
   function persistModuleConversation(owner, conv, options) {
     const name = String(owner || ownerForConversation(conv));
@@ -923,6 +906,12 @@
       wrap.className = 'msg ' + m.role;
       wrap.dataset.index = index;
       if (m.id) wrap.dataset.messageId = m.id;
+      // 沉默提示行（role:'system'，仅群聊产生）：居中灰字，无气泡无操作；出站构建处已过滤不发给模型
+      if (m.role === 'system') {
+        wrap.className = 'msg system-note-row';
+        wrap.innerHTML = '<div class="msg-system-note">' + App.escapeHtml(String(m.content || '')) + '</div>';
+        return wrap;
+      }
       if (m.role === 'assistant') {
         const thinkHtml = m.think
           ? `<div class="think-block" style="display:${(App.state.settings.thinkLevel || 'medium') !== 'off' ? 'block' : 'none'}">
@@ -938,11 +927,24 @@
           ? `<button class="version-switch" data-version="1" title="切换回答版本">${vIdx + 1}/${versions.length}</button>`
           : '';
         const webLabel = m.webSources ? (m.webSources + ' 个') : '多个';
-        const tavern = isTavernConv(App.chat.activeConv()) || isTavernConversation(App.state.activeId);
+        const activeConv = App.chat.activeConv();
+        const tavern = isTavernConv(activeConv) || isTavernConversation(App.state.activeId);
+        // 群聊：按消息归属切换角色头像（色相首字母/自定义头像）；名字行已按用户要求移除（2026-08-26）
+        let avatarHtml = '<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>';
+        if (tavern && activeConv && Array.isArray(activeConv.tavernCharacterIds) && activeConv.tavernCharacterIds.length > 1
+          && m.characterId && App.tavern && App.tavern.characterBrief) {
+          const brief = App.tavern.characterBrief(m.characterId);
+          if (brief) {
+            const hue = hueFromString(m.characterId);
+            avatarHtml = brief.avatar
+              ? `<div class="msg-avatar"><img src="${App.escapeHtml(brief.avatar)}" alt="${App.escapeHtml(brief.name)}"></div>`
+              : `<div class="msg-avatar msg-avatar-initial" style="--sender-hue:${hue}"><span>${App.escapeHtml((brief.name || '?').slice(0, 1).toUpperCase())}</span></div>`;
+          }
+        }
         const webHtml = !tavern && (m.webSources || (App.state.web && m.role === 'assistant'))
           ? '<div class="web-indicator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>基于 ' + webLabel + '搜索来源</div>'
           : '';
-        wrap.innerHTML = `<div class="msg-avatar"><img src="assets/logo.png" alt="糖包"></div>
+        wrap.innerHTML = `${avatarHtml}
           <div class="msg-body">
             <div class="msg-card">
               ${webHtml}
@@ -972,7 +974,10 @@
         const errorHtml = m.error && !displayContent
           ? '<div class="msg-error">' + App.escapeHtml(String(m.error)) + '</div>'
           : '';
-        wrap.querySelector('.bubble').innerHTML = errorHtml || bubbleHtml;
+        // 历史脏数据守卫：已完成且无正文/无思考/无错误的旧空消息显示中性提示，只改显示不动数据
+        const blankNote = !String(displayContent).trim() && !m.think && m.streamStatus !== 'streaming'
+          ? '<div class="msg-system-note">（空回复）</div>' : '';
+        wrap.querySelector('.bubble').innerHTML = errorHtml || blankNote || bubbleHtml;
       } else {
         const imgHtml = (m.attachments && m.attachments.length)
           ? m.attachments.filter(a => a.type === 'image').map(a =>
@@ -1193,7 +1198,34 @@
       return ui;
     },
 
+    // 群聊流式期间把正在发言成员的头像换到流式气泡上（此前一直显示糖包 logo，2026-08-26 用户反馈）。
+    // 仅改 DOM 展示；消息归属仍由 applyMemberTurnResult 写 characterId。
+    setStreamingMemberAvatar(ui, characterId) {
+      try {
+        if (!ui || !ui.root || !characterId) return;
+        const brief = (window.App.tavern && typeof window.App.tavern.characterBrief === 'function')
+          ? window.App.tavern.characterBrief(characterId) : null;
+        if (!brief) return;
+        const holder = ui.root.querySelector('.msg-avatar');
+        if (!holder) return;
+        if (brief.avatar) {
+          holder.classList.remove('msg-avatar-initial');
+          holder.innerHTML = `<img src="${App.escapeHtml(brief.avatar)}" alt="${App.escapeHtml(brief.name)}">`;
+        } else {
+          holder.classList.add('msg-avatar-initial');
+          holder.style.setProperty('--sender-hue', String(hueFromString(characterId)));
+          holder.innerHTML = `<span>${App.escapeHtml(String(brief.name || '?').slice(0, 1).toUpperCase())}</span>`;
+        }
+      } catch (_) {}
+    },
+
     async streamChat(conv, ui, options) {
+      // v1.2.0 批次 5：糖馆群聊接管——轮流调度器逐成员调用本函数（__groupMember 绕过本分支）
+      if (isTavernConv(conv) && !((options || {}).__groupMember)
+        && Array.isArray(conv.tavernCharacterIds) && conv.tavernCharacterIds.length > 1
+        && App.tavern && typeof App.tavern.runGroupTurn === 'function') {
+        return App.tavern.runGroupTurn(conv, ui, options);
+      }
       const streamOwner = ownerForConversation(conv);
       const providerModule = streamOwner === 'tavern' || streamOwner === 'create' ? streamOwner : 'chat';
       // Provider adapters all receive a chat request. The module name selects
@@ -1215,6 +1247,8 @@
       // than silently losing the assistant turn.
       if (!conv.messages.includes(liveMessage)) conv.messages.push(liveMessage);
       if (!liveMessage.id) liveMessage.id = App.uid();
+      // 群聊单成员重跑：占位消息即刻携带归属，中途渲染/持久化都能显示正确头像（2026-08-26）
+      if (options && options.__memberId) liveMessage.characterId = String(options.__memberId);
       streamUi = ui;
       streamUi.convId = conv.id;
       streamUi.messageId = liveMessage.id;
@@ -1259,6 +1293,8 @@
         } else {
           console.warn('[糖馆] 本轮没有人设提示词（角色详情读取失败或会话缺少角色绑定）');
         }
+        // v1.2.0 批次 5：群聊简报（在场成员/近期发言/沉默协议），由 runGroupTurn 每轮刷新
+        if (conv.__groupBrief) systemContent += '\n\n' + conv.__groupBrief;
       }
       // 对话级模型优先（智能体指定），否则用聊天默认模型；联网同理
       const model = (conv.model && s.models.includes(conv.model)) ? conv.model : s.model;
@@ -1272,7 +1308,8 @@
       }
       const web = isTavernConv(conv) ? false : ((conv.web != null) ? conv.web : App.state.web);
       const AGENT_BASE = App.rt.agentBase(); // 本机随机端口，运行时取
-      const allMsgs = conv.messages.filter((item) => item !== liveMessage).map(m => ({ role: m.role, content: isTavernConv(conv) ? String(m.content || '') : App.chat.buildContent(m) }));
+      // role:'system' 为群聊沉默提示行等界面元素，仅本地展示，不进入模型请求
+      const allMsgs = conv.messages.filter((item) => item !== liveMessage && item.role !== 'system').map(m => ({ role: m.role, content: isTavernConv(conv) ? String(m.content || '') : App.chat.buildContent(m) }));
       if (options && options.liveMessage) {
         allMsgs.push({ role: 'assistant', content: App.chat.buildContent(options.liveMessage) });
         allMsgs.push({ role: 'user', content: 'Continue the previous answer. Append only new information; do not repeat the existing answer.' });
@@ -1356,29 +1393,44 @@
             ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : ((lastUserMsg.content && lastUserMsg.content.text) || ''))
             : '';
           let searched = null;
+          let searchFailReason = '';
           try {
-            // 搜索 Key 由后端从密钥库取（ref = 'search'），前端不再经手明文
+            // 搜索 Key 由后端从密钥库取（ref = 'search'），前端不再经手明文；
+            // 12s 超时防阻塞发送（后端最坏 Bing 8s + DDG 重试）
             const r = await fetch(AGENT_BASE + '/api/search', {
               method: 'POST',
               headers: App.rt.authHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ query: lastUserText }),
+              signal: AbortSignal.timeout(12000),
             });
-            const d = await r.json().catch(() => ({ ok: false }));
+            const d = await r.json().catch(() => ({ ok: false, error: '响应不是有效 JSON（HTTP ' + r.status + '）' }));
             if (d && d.ok && Array.isArray(d.results) && d.results.length) searched = d.results;
-          } catch (e) { /* 本地后端不可用，走普通对话 */ }
+            else searchFailReason = (d && d.error) || ('HTTP ' + r.status);
+          } catch (e) {
+            searchFailReason = (e && e.name === 'TimeoutError') ? '搜索超时（12s）' : String((e && e.message) || e);
+          }
           if (searched) {
             const ctx = '【联网搜索结果】\n' + searched.map((x, i) =>
               `${i + 1}. ${x.title || ''}\n${x.url || ''}\n${x.snippet || ''}`).join('\n\n');
             payload.messages[0].content += '\n\n' + ctx;
             webSourcesCount = searched.length;
           } else {
-            App.ui.toast('联网搜索暂不可用（未能获取搜索结果），将按普通对话发送');
+            // 失败原因可见化（2026-08-26）：不再一律「暂不可用」，用户能看到真实原因
+            console.warn('[chat] 联网搜索失败：', searchFailReason);
+            App.ui.toast('联网搜索失败（' + searchFailReason + '），将按普通对话发送');
           }
         }
       }
-      let acc = (options && options.liveMessage && options.liveMessage.content) || '';
-      let thinkAcc = (options && options.liveMessage && options.liveMessage.think) || '';
-      let started = !!(acc || thinkAcc), thinkOpen = false;
+      const streamBuffer = App.chatStreamAccumulator.createStreamAccumulator({
+        initialAcc: (options && options.liveMessage && options.liveMessage.content) || '',
+        initialThink: (options && options.liveMessage && options.liveMessage.think) || '',
+        flushDelayMs: 120,
+        onFlush: () => { try { flushRender(); } catch (e) { console.error('[chat] flush 渲染失败：', e); } },
+      });
+      // v1.2.0 批次 7 第五刀复盘：started 必须是 let——appendDelta 首增量会置 true；
+      // 曾被误改 const 导致补载模块后首个真实流即抛 Assignment to constant variable（2026-08-26）
+      let started = !!(streamBuffer.getAcc() || streamBuffer.getThink());
+      let thinkOpen = false;
       const wantThink = (App.state.settings.thinkLevel || 'medium') !== 'off';
       const providerSequences = { content: -1, reasoning: -1 };
       const seenProviderEvents = new Set();
@@ -1398,8 +1450,8 @@
       };
       let lastPartialPersistAt = 0;
       let pendingPersistBytes = 0;
-      let lastObservedContentLength = String(acc || '').length;
-      let lastObservedThinkLength = String(thinkAcc || '').length;
+      let lastObservedContentLength = String(streamBuffer.getAcc() || '').length;
+      let lastObservedThinkLength = String(streamBuffer.getThink() || '').length;
       const renderedStreamText = { bubble: null, content: '', contentNode: null, thinkBody: null, think: '', thinkNode: null };
       const appendStreamText = (node, value, key) => {
         if (!node) return;
@@ -1424,8 +1476,8 @@
         renderedStreamText[key] = value;
       };
       const updateLiveMessage = (status) => {
-        liveMessage.content = acc;
-        liveMessage.think = thinkAcc;
+        liveMessage.content = streamBuffer.getAcc();
+        liveMessage.think = streamBuffer.getThink();
         liveMessage.streamStatus = status || 'partial';
         liveMessage.updatedAt = Date.now();
         conv.updatedAt = liveMessage.updatedAt;
@@ -1458,9 +1510,6 @@
           } catch (_) {}
         }
       };
-      // 流式渲染节流：把「整段 markdown 重渲染 + 滚动」合并到最多每 ~120ms 一次，
-      // 避免长回复每个 delta 都重解析全文导致 O(n²) 卡顿；流末 flushNow 保证终态正确。
-      let flushTimer = null;
       const flushRender = () => {
         const renderStarted = App.perf && App.perf.begin ? App.perf.begin() : 0;
         let canRender = false;
@@ -1470,38 +1519,32 @@
           if (canRender) {
             // Do not parse the entire growing Markdown document on every delta.
             // The completed message is rendered as Markdown after the stream.
-            appendStreamText(ui.bubble, acc, 'content');
-            if (wantThink && thinkAcc) {
+            appendStreamText(ui.bubble, streamBuffer.getAcc(), 'content');
+            if (wantThink && streamBuffer.getThink()) {
               ui.thinkBlock.style.display = 'block';
-              appendStreamText(ui.thinkBody, thinkAcc, 'think');
+              appendStreamText(ui.thinkBody, streamBuffer.getThink(), 'think');
             }
           }
           persistPartial('partial');
-           if (shouldFollow) App.chat.scrollBottom(true);
+          if (shouldFollow) App.chat.scrollBottom(true);
         } finally {
           if (App.perf) App.perf.measure('streamRenderMs', renderStarted, {
             rendered: canRender,
-            contentLength: acc.length,
-            thinkLength: thinkAcc.length,
+            contentLength: streamBuffer.getAcc().length,
+            thinkLength: streamBuffer.getThink().length,
           });
         }
       };
-      const scheduleFlush = () => {
-        if (flushTimer) return;
-        flushTimer = setTimeout(() => { flushTimer = null; flushRender(); }, 120);
-      };
-      const flushNow = () => {
-        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-        // 聊天修复 A：flush 渲染异常不得阻断消息落库（否则 streaming 卡死吞消息）
-        try { flushRender(); } catch (e) { console.error('[chat] flush 渲染失败：', e); }
-      };
+      // 流式渲染节流（v1.2.0 批次 7 第三刀/第五刀）：合并与累积所有权都在 stream-accumulator 内
+      // （append/appendThink 自动调度，schedule 为透传兜底）；此处不再另建独立调度器。
+      const flushNow = () => { streamBuffer.flushNow(); };
       // 聊天修复 A：流末兜底保存——中断/报错也保留已生成内容（同糖码 finish 无条件保存）
       const saveAnswer = (errText) => {
         try { flushNow(); } catch (e) {}
-        if (!acc && thinkAcc) { acc = thinkAcc; thinkAcc = ''; }
-        if (acc || thinkAcc) {
-          liveMessage.content = acc;
-          liveMessage.think = thinkAcc;
+        streamBuffer.swapThinkIntoAcc();
+        if ((streamBuffer.getAcc() || streamBuffer.getThink())) {
+          liveMessage.content = streamBuffer.getAcc();
+          liveMessage.think = streamBuffer.getThink();
           liveMessage.webSources = webSourcesCount;
           liveMessage.streamStatus = errText ? 'failed' : 'completed';
           liveMessage.error = errText ? String(errText).slice(0, 240) : '';
@@ -1512,15 +1555,17 @@
           liveMessage.streamStatus = 'failed';
           liveMessage.error = String(errText).slice(0, 240);
         } else {
+          // 空结果可读化：不留空气泡；群聊侧 runGroupTurn 按 error 标记转「沉默」提示行
+          liveMessage.content = '⚠️ 模型未返回内容';
           liveMessage.streamStatus = 'failed';
           liveMessage.error = 'model_empty_result';
         }
         conv.updatedAt = Date.now();
         persistPartial(liveMessage.streamStatus, true);
         if (ui && ui.bubble && ui.bubble.isConnected && activeConversationId(streamOwner) === conv.id) {
-          if (acc) {
-            try { ui.bubble.innerHTML = cachedMarkdown(acc, liveMessage.id + ':stream-final'); }
-            catch (_) { ui.bubble.textContent = acc; }
+          if (streamBuffer.getAcc()) {
+            try { ui.bubble.innerHTML = cachedMarkdown(streamBuffer.getAcc(), liveMessage.id + ':stream-final'); }
+            catch (_) { ui.bubble.textContent = streamBuffer.getAcc(); }
             if (errText) ui.bubble.insertAdjacentHTML('beforeend', '<div class="msg-error">' + App.escapeHtml(String(errText).slice(0, 240)) + '</div>');
           } else if (errText) {
             ui.bubble.innerHTML = '<div class="msg-error">' + App.escapeHtml(String(errText).slice(0, 240)) + '</div>';
@@ -1533,8 +1578,8 @@
       };
       const appendDelta = (text, isThink) => {
         if (!started) { ui.bubble.textContent = ''; started = true; }
-        if (isThink) { thinkAcc += text; } else { acc += text; }
-        scheduleFlush();
+        if (isThink) { streamBuffer.appendThink(text); } else { streamBuffer.append(text); }
+        streamBuffer.schedule();
       };
       // 检测并拆分 <think> 标签的文本
       const feedContent = (raw) => {
@@ -1646,31 +1691,33 @@
           }
         }
       } catch (err) {
-        ui.bubble.innerHTML = `<div class="msg-error">网络或 CORS 错误：${App.escapeHtml(String(err.message || err))}</div>`;
-        ui.actions.style.display = 'flex';
-        saveAnswer(err.message || err); // 聊天修复 A：中断保留已生成部分/错误消息
+        // 兜底链必须走完：DOM 展示各自判空，保证 saveAnswer(errText) 一定执行——
+        // 否则异常裸抛到调用方，气泡永远停在空白 streaming 态（2026-08-26 群聊全员秒败根因之一）
+        const errText = String((err && err.message) || err);
+        try { ui.bubble.innerHTML = `<div class="msg-error">网络或 CORS 错误：${App.escapeHtml(errText.slice(0, 240))}</div>`; } catch (_) {}
+        try { ui.actions.style.display = 'flex'; } catch (_) {}
+        saveAnswer(errText); // 聊天修复 A：中断保留已生成部分/错误消息
         return;
       }
       // 安全网：原生推理模型（如 grok）可能把完整回答放在思考通道（reasoning_content
       // 或未闭合 <think>），导致主 content 为空、气泡空白。此时把思考内容兜底为正文。
-      if (!acc && thinkAcc) {
-        acc = thinkAcc;
-        thinkAcc = '';
-        ui.bubble.innerHTML = App.renderMarkdown(acc);
+      if (!streamBuffer.getAcc() && streamBuffer.getThink()) {
+        streamBuffer.swapThinkIntoAcc();
+        ui.bubble.innerHTML = App.renderMarkdown(streamBuffer.getAcc());
       }
       // 聊天修复 A：统一走 saveAnswer 兜底保存（flushNow 已内置 try/catch）
       saveAnswer();
-      if (acc) {
+      if (streamBuffer.getAcc()) {
         try {
-          if (ui.bubble && ui.bubble.isConnected) ui.bubble.innerHTML = cachedMarkdown(acc, liveMessage.id + ':stream-final');
+          if (ui.bubble && ui.bubble.isConnected) ui.bubble.innerHTML = cachedMarkdown(streamBuffer.getAcc(), liveMessage.id + ':stream-final');
         } catch (_) {
-          if (ui.bubble && ui.bubble.isConnected) ui.bubble.textContent = acc;
+          if (ui.bubble && ui.bubble.isConnected) ui.bubble.textContent = streamBuffer.getAcc();
         }
-      } else if (!thinkAcc) {
+      } else if (!streamBuffer.getThink()) {
         ui.bubble.innerHTML = '<div class="msg-error">模型未返回内容，请检查中转站地址和模型名。</div>';
       }
-      if (wantThink && thinkAcc && ui.thinkBody && ui.thinkBody.isConnected) {
-        try { ui.thinkBody.innerHTML = cachedMarkdown(thinkAcc, liveMessage.id + ':stream-think'); } catch (_) { ui.thinkBody.textContent = thinkAcc; }
+      if (wantThink && streamBuffer.getThink() && ui.thinkBody && ui.thinkBody.isConnected) {
+        try { ui.thinkBody.innerHTML = cachedMarkdown(streamBuffer.getThink(), liveMessage.id + ':stream-think'); } catch (_) { ui.thinkBody.textContent = streamBuffer.getThink(); }
         ui.thinkBlock.style.display = 'block';
       }
       ui.actions.style.display = 'flex';
@@ -1879,12 +1926,18 @@
       if (!conv || index < 1 || conv.messages[index].role !== 'assistant') return;
       // B5（P2）：流式进行中禁止 regen 并发——避免两条流互相覆盖（与发送时的 busySame 守卫一致）
       if (streaming) { App.ui.toast('当前回复仍在生成中，请稍候再重新生成'); return; }
+      // v1.2.0：群聊中重新生成只重跑该消息所属成员（__groupMember 绕过整轮轮流接管），不惊动其他成员
+      const groupMemberOwner = (isTavernConv(conv) && Array.isArray(conv.tavernCharacterIds) && conv.tavernCharacterIds.length > 1)
+        ? String((conv.messages[index] && conv.messages[index].characterId) || conv.tavernCharacterId || '')
+        : '';
       // M9：旧回答归档为版本（同一问题多答案可切换对比），新回答成为最新版
       const am = conv.messages[index];
       const oldVersions = (am.versions && am.versions.length)
         ? am.versions.slice()
         : (am.content != null ? [am.content] : []);
-      // remove assistant and all subsequent
+      // 群聊保尾：暂存目标之后的成员发言/沉默行，重生成完成后原样追加——
+      // 此前 slice 截断会把后面的发言一起吞掉（2026-08-26 用户反馈）；单聊保持原「从此处重来」语义
+      const groupTail = groupMemberOwner ? conv.messages.slice(index + 1) : null;
       conv.messages = conv.messages.slice(0, index);
       App.chat.persistConversation(conv);
       App.chat.renderMessages();
@@ -1892,7 +1945,37 @@
       const ui = App.chat.appendAssistant();
       streaming = true; streamConvId = conv.id; App.chat.setSending(true);
       try {
-        await App.chat.streamChat(conv, ui);
+        if (groupMemberOwner) {
+          const prevId = conv.tavernCharacterId;
+          conv.tavernCharacterId = groupMemberOwner;
+          const turnStart = conv.messages.length;
+          if (window.App.chat.setStreamingMemberAvatar) window.App.chat.setStreamingMemberAvatar(ui, groupMemberOwner);
+          try {
+            await App.chat.streamChat(conv, ui, { __groupMember: true, __memberId: groupMemberOwner });
+          } catch (e) {
+            // 与 runGroupTurn 清扫一致：占位转失败可读，不冒充沉默
+            for (const m of conv.messages.slice(turnStart)) {
+              if (m && m.role === 'assistant' && m.streamStatus === 'streaming') {
+                m.streamStatus = 'failed';
+                m.error = m.error || ('member_turn_error: ' + String((e && e.message) || e)).slice(0, 200);
+                if (!String(m.content || '').trim()) m.content = '⚠️ 成员本轮重新生成失败';
+              }
+            }
+          } finally {
+            conv.tavernCharacterId = prevId;
+          }
+          // 单成员后处理与轮内一致（署名/显式沉默/失败可见）
+          try {
+            if (window.App.tavern && typeof window.App.tavern.applyMemberTurnResult === 'function') {
+              const brief = window.App.tavern.characterBrief ? window.App.tavern.characterBrief(groupMemberOwner) : null;
+              window.App.tavern.applyMemberTurnResult(conv, groupMemberOwner, (brief && brief.name) || '角色', turnStart);
+            }
+          } catch (postErr) { console.warn('[chat] 群聊 regen 后处理失败：', postErr); }
+          // 恢复被暂存的后续发言（保尾重生成的关键步骤）
+          if (groupTail && groupTail.length) conv.messages.push(...groupTail);
+        } else {
+          await App.chat.streamChat(conv, ui);
+        }
       } finally {
         // 聊天修复 A：流式异常也必须复位（防 streaming 卡死）
         // 聊天修复 E：只重渲染流归属会话（切走后不打扰当前视图）
@@ -1920,6 +2003,11 @@
     setSending(on) {
       $('sendBtn').disabled = on || (!$('input').value.trim() && !pendingAttachments.length);
       $('input').disabled = on;
+      // 长流式（如群聊整轮多成员）结束时常伴随焦点丢失（surface 搬 DOM/抢焦），输入框已可用
+      // 但焦点停在 body，表现为「打不了字」；仅在无任何元素持焦时还焦，不抢用户主动点击
+      if (!on && document.activeElement === document.body) {
+        try { $('input').focus(); } catch (_) {}
+      }
     },
 
     autoSize() {
@@ -1928,54 +2016,7 @@
       el.style.height = Math.min(el.scrollHeight, 200) + 'px';
     },
 
-    // 语音听写：使用浏览器原生 SpeechRecognition（Chrome/Edge 支持）
-    toggleVoice() {
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) { App.ui.toast('当前浏览器不支持语音输入（建议用 Chrome/Edge）'); return; }
-      if (listening) { if (recognition) recognition.stop(); return; }
-      recognition = new SR();
-      recognition.lang = 'zh-CN';
-      recognition.interimResults = true;
-      recognition.continuous = false;
-      recognition.onstart = () => {
-        listening = true;
-        voiceBase = $('input').value; // B5（P2）：记录开始前已有文本作为最终基线
-        const b = $('micBtn'); if (b) b.classList.add('listening');
-        App.ui.toast('正在聆听…说完点一下麦克风停止');
-      };
-      recognition.onresult = (e) => {
-        // B5（P2）：区分最终/临时结果——interim 每次触发只替换临时段，不再把全部结果反复累加
-        let finalText = '', interimText = '';
-        for (let i = 0; i < e.results.length; i++) {
-          const t = e.results[i][0].transcript;
-          if (e.results[i].isFinal) finalText += t; else interimText += t;
-        }
-        const base = voiceBase;
-        const parts = [];
-        if (base) parts.push(base);
-        if (finalText) parts.push(finalText);
-        if (interimText) parts.push(interimText);
-        $('input').value = parts.join(' ');
-        App.chat.autoSize();
-        App.chat.updateSendEnabled();
-        $('input').focus();
-      };
-      recognition.onend = () => {
-        listening = false;
-        voiceBase = $('input').value; // B5（P2）：结束固化基线，避免下次 interim 重复累加
-        const b = $('micBtn'); if (b) b.classList.remove('listening');
-      };
-      recognition.onerror = (e) => {
-        listening = false;
-        const b = $('micBtn'); if (b) b.classList.remove('listening');
-        if (e && e.error === 'no-speech') return;
-        App.ui.toast('语音识别出错：' + ((e && e.error) || '未知'));
-      };
-      try { recognition.start(); } catch (err) {
-        listening = false;
-        const b = $('micBtn'); if (b) b.classList.remove('listening');
-      }
-    },
+
 
     onShow() {
       // 恢复当前会话的输入框草稿

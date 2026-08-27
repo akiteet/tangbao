@@ -105,6 +105,20 @@
       const m = App.modules.getById(id);
       const wrap = document.getElementById('customView');
       if (!wrap || !m) return;
+      // v1.2.0：视图头部工具行——独立小窗打开（复用 forceEmbed 同款子窗口，按 id 单例聚焦）
+      let bar = wrap.querySelector('.cv-toolbar');
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'cv-toolbar';
+        bar.innerHTML = '<button type="button" class="mini" data-cv-win>⧉ 独立小窗打开</button>';
+        wrap.insertBefore(bar, wrap.firstChild);
+        bar.querySelector('[data-cv-win]').addEventListener('click', async () => {
+          const cur = App.modules.getById(id);
+          if (!cur || !cur.url) return;
+          const r = await App.services.shell.openChildWindow({ id: cur.id, url: cur.url, label: cur.label });
+          if (!r || !r.ok) App.ui.toast((r && r.error) ? ('打开失败：' + r.error) : '打开失败');
+        });
+      }
       // 诊断条：直接把 webview 尺寸/加载状态/错误显示在模块里，免去开 DevTools
       let status = wrap.querySelector('.cv-status');
       if (!status) { status = document.createElement('div'); status.className = 'cv-status'; wrap.appendChild(status); }
