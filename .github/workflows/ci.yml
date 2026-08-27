@@ -103,7 +103,11 @@ jobs:
           node-version: 20
           cache: npm
       - name: Install dependencies
-        run: npm ci
+        # better-sqlite3 在 win32 无 Node 预编译且 runner 的 VS 对 node-gyp 过新；
+        # 本仓约定纯 Node 下 sqlite 用例结构性跳过，原生模块只需 Electron ABI。
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild electron
       - name: Rebuild native dependencies for Electron
         run: npx electron-builder install-app-deps
       - name: Full test and release checks
