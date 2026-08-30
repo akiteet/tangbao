@@ -332,6 +332,16 @@
         .map((m) => m.name));
       const imgModels = imageNames.size ? allImgModels.filter((n) => imageNames.has(n)) : allImgModels;
       const imgSel = (!imageNames.size || imageNames.has(imgProv.model)) ? (imgProv.model || imgModels[0] || '') : (imgModels[0] || '');
+      // v1.2.1（糖绘修复）：自愈——账户存在生图模型、但 providers.image.model 不在其中（含为空）时，
+      // 把 state 拨正为下拉将显示的模型。此前仅显示 imgSel 不改 state，而 generate 用 p.model，
+      // 造成「下拉显示 gpt-image-2 却调用文本模型」。
+      if (imgSel && imageNames.size && !imageNames.has(imgProv.model)) {
+        const imageProv = App.state.settings.providers.image || (App.state.settings.providers.image = { accountId: '__default__' });
+        if (imageProv.model !== imgSel) {
+          imageProv.model = imgSel;
+          App.persist();
+        }
+      }
       const modelOpts = imgModels.length
         ? imgModels.map(m => `<option value="${App.escapeHtml(m)}"${m === imgSel ? ' selected' : ''}>${App.escapeHtml(m)}</option>`).join('')
         : '<option value="" disabled selected>未配置图像模型，请到设置填写</option>';
@@ -744,8 +754,11 @@
       const n = Number(App.image.sel.n) || 1;
       // M12：高级参数（折叠区）——收集 + JSON 预校验
       const adv = App.image.collectAdv();
+      // v1.2.1（糖绘修复）：以可见下拉为准——显示值可能与 state 脱节（历史遗留），入队快照本次所用模型
+      const modelPick = $('imgModel');
+      const visibleModel = modelPick && modelPick.value ? modelPick.value : '';
       // M7：提交任务入队（串行执行；排队/失败可取消、重试）
-      App.image.enqueue({ prompt, finalPrompt, style: styleKey, size, n, refImg, adv });
+      App.image.enqueue({ prompt, finalPrompt, style: styleKey, size, n, refImg, adv, model: visibleModel });
     },
 
     // M12：读取高级参数区（Seed/Guidance/负面词/输出格式/质量/模型专属 JSON）；JSON 非法则 toast 并忽略该项
@@ -819,7 +832,15 @@
       const id = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       const provider = App.getProvider('image');
       const size = App.image.normalizeSizeForProvider(params && params.size, provider);
-      const task = Object.assign({ id, status: 'queued', error: null }, params, { size: size.value });
+      // v1.2.1（糖绘修复）：入队快照本次模型（下拉可见值优先，回退 provider.model），
+      // 并把可见值写回 state 保持持久一致（与 #imgModel change handler 同语义）。
+      const paramsModel = (params && params.model) || '';
+      const taskModel = paramsModel || provider.model || '';
+      if (paramsModel && App.state.settings.providers.image && App.state.settings.providers.image.model !== paramsModel) {
+        App.state.settings.providers.image.model = paramsModel;
+        App.persist();
+      }
+      const task = Object.assign({ id, status: 'queued', error: null }, params, { size: size.value, model: taskModel });
       App.image.tasks[id] = task;
       App.image.queue.push(id);
       App.image.renderQueue();
@@ -854,6 +875,8 @@
       task.startedAt = Date.now();
       App.image.renderQueue();
       const p = App.getProvider('image');
+      // v1.2.1（糖绘修复）：以入队快照的模型为准（所见即所调），state 后续变化不影响本次
+      if (task.model) p.model = task.model;
       task.size = App.image.normalizeSizeForProvider(task.size, p).value;
       const status = $('imgStatus');
       const btn = $('imgGenBtn');

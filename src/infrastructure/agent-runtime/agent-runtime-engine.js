@@ -42,6 +42,12 @@ const { createToolRuntime, TOOL_DEFINITIONS } = require('./tool-runtime'); // �
 const { tokenMatches } = require('../http/request-auth');
 const { runAgent } = require('../../core/agent-runtime/run-agent');
 
+// v1.2.1 批次 12：AI 事件桥——SSE 事件镜像给桌面宠物观察者。
+// setAgentEventObserver 由 main.js 注入（默认 null，零开销）；emitAgentEvent 在 SSE 发送点调用。
+let agentEventObserver = null;
+function setAgentEventObserver(fn) { agentEventObserver = (typeof fn === 'function') ? fn : null; }
+function emitAgentEvent(payload) { if (agentEventObserver) { try { agentEventObserver(payload); } catch (_) {} } }
+
 const MAX_STEPS = 96; // v1.1.0（Fix 3）：48→96，支持请求参数 maxSteps 覆盖（项目可配置 1-200）；预算耗尽前端可「继续任务」接力
 
 // v2（P0-B）：多维运行预算（超任一维度 → budget_exhausted + Checkpoint，可继续）
@@ -90,7 +96,7 @@ const { denialSuggestion, approvalMsg } = require('./approval-messages.js');
 // v2（P1-4）：模块级 run 授权仅作未迁移兼容，正常路径走 runAuthRegistry 按 Run 隔离
 let approvedRun = false;
 
-const TOOL_REGISTRY_VERSION = '1.2.0';
+const TOOL_REGISTRY_VERSION = '1.2.1';
 const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'todo_write', 'propose_memory']);
 const toolRuntime = createToolRuntime({
   version: TOOL_REGISTRY_VERSION,
@@ -106,7 +112,7 @@ const TOOL_NAMES = toolRuntime.toolNames;
 const AgentPrompt = require('../../core/models/agent-prompt');
 const SYSTEM_PROMPT = AgentPrompt.SYSTEM_PROMPT;
 const PROMPT_VERSION = String(AgentPrompt.PROMPT_VERSION || 'legacy/unknown');
-const RUNTIME_VERSION = '1.2.0';
+const RUNTIME_VERSION = '1.2.1';
 
 // ===== 本地访问控制 =====
 // 由主进程在 startAgentServer 时注入：启动令牌 + 唯一允许的来源（静态服务的源）。
@@ -232,9 +238,12 @@ async function readOneFile(fp, rel, args, opts) {
   const slice = lines.slice(offset, end);
   const out = slice.map((ln, i) => `${(offset + i + 1).toString().padStart(String(offset + slice.length).length, ' ')} | ${ln}`).join('\n');
   // v2（补全 2+4）：maxChars 截断 + readFiles 结构化返回（模型知道读取范围/哈希/是否截断/续读起点）
+  // v1.2.1 批次 13c：默认截断 24000 字符（≈6k tokens）——此前整文件全文进上下文且每步全量重发，
+  // 大文件是上下文膨胀与每步延迟的主因之一；模型可用 startLine/endLine / nextStartLine 续读，显式传 maxChars 仍可覆盖。
   let shown = out + `\n（共 ${lines.length} 行，已显示第 ${offset + 1}-${end} 行）`;
   let truncated = false;
-  const maxChars = args.maxChars != null ? Number(args.maxChars) : 0;
+  const READ_FILE_DEFAULT_MAX_CHARS = 24000;
+  const maxChars = args.maxChars != null ? Number(args.maxChars) : READ_FILE_DEFAULT_MAX_CHARS;
   if (maxChars > 0 && shown.length > maxChars) {
     shown = shown.slice(0, maxChars) + `\n…（内容超长，已按 maxChars=${maxChars} 截断，剩余 ${shown.length - maxChars} 字符未显示；可用 startLine/endLine 分段读取）`;
     truncated = true;
@@ -650,7 +659,48 @@ function parseSkillMeta(raw, fallbackName) {
 // 优先级：项目级（.workbuddy/skills/.tangbao-skills/.claude/skills/.codex/skills）> 用户级（注入）> 内置；同名先加载者胜；按 name 排序稳定。
 // opts.includeDisabled=true 时同时返回禁用项（SKILL.md.disabled，enabled:false，供设置面板重新启用）；
 // 默认（注入/list_skills/use_skill 路径）只返回启用项，禁用技能不进注入。
+// v1.2.1 批次 13b：scanSkills 结果缓存——首响应路径（loadSkillGuides，每次 run 组装系统提示时调用）
+// 不再每次重读全部 SKILL.md/listResources/manifest/trust。失效判定 =「目录清单 + 每个 SKILL.md 的 mtime/size 签名」，
+// 技能增删/改名/内容编辑/启停（SKILL.md ↔ SKILL.md.disabled）都会改变签名。仅 opts.useCache 时启用：
+// use_skill/findEnabledSkill/设置面板路径维持实时扫描（信任状态等安全语义不承受缓存窗口）。
+const skillScanCache = new Map(); // cwd -> { signature, out }
+async function skillDirsSignature(cwd) {
+  const parts = [];
+  const dirsGroups = [
+    [path.join(cwd, '.workbuddy', 'skills'), path.join(cwd, '.tangbao-skills'), path.join(cwd, '.claude', 'skills'), path.join(cwd, '.codex', 'skills')],
+    userSkillsDirs,
+    [path.join(__dirname, 'skills')],
+  ];
+  for (const dirs of dirsGroups) {
+    for (const dir of dirs) {
+      let entries;
+      try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch (e) { parts.push('x:' + dir); continue; }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const base = path.join(dir, e.name);
+        let sig = e.name;
+        for (const fname of ['SKILL.md', 'SKILL.md.disabled']) {
+          try { const st = await fsp.stat(path.join(base, fname)); sig += '|' + fname + ':' + st.mtimeMs + ':' + st.size; } catch (e2) {}
+        }
+        parts.push(base + '::' + sig);
+      }
+    }
+  }
+  return parts.join('#');
+}
 async function scanSkills(cwd, opts) {
+  const includeDisabled = !!(opts && opts.includeDisabled);
+  if (includeDisabled || !cwd || !(opts && opts.useCache)) return scanSkillsUncached(cwd, opts);
+  try {
+    const signature = await skillDirsSignature(cwd);
+    const cached = skillScanCache.get(String(cwd));
+    if (cached && cached.signature === signature) return cached.out;
+    const out = await scanSkillsUncached(cwd, opts);
+    skillScanCache.set(String(cwd), { signature, out });
+    return out;
+  } catch (e) { return scanSkillsUncached(cwd, opts); }
+}
+async function scanSkillsUncached(cwd, opts) {
   const out = [];
   const seen = new Set();
   const includeDisabled = !!(opts && opts.includeDisabled);
@@ -720,7 +770,8 @@ async function scanSkills(cwd, opts) {
 // autoTrigger:false（私有清单开关）只关闭关键词自动命中；显式 /skill 气泡与 use_skill 不受影响。
 async function loadSkillGuides(cwd, prompt) {
   const promptLower = String(prompt || '').toLowerCase();
-  const hit = (await scanSkills(cwd)).filter((s) => {
+  // v1.2.1 批次 13b：注入路径走签名缓存（首响应提速）；use_skill 等信任敏感路径不缓存
+  const hit = (await scanSkills(cwd, { useCache: true })).filter((s) => {
     if (s.autoTrigger === false) return false;
     const keys = (s.triggers && s.triggers.length) ? s.triggers : [s.name];
     return keys.some((t) => promptLower.includes(String(t).toLowerCase()));
@@ -752,23 +803,39 @@ let mcpRefreshBusy = 0;
 async function refreshMcpTools(force) {
   const now = Date.now();
   if (!force && now - mcpToolsLoadedAt < 60000) return mcpToolsCache;
-  if (now - mcpRefreshBusy < 5000) return mcpToolsCache;
-  mcpRefreshBusy = now;
+  if (force) {
+    // 预热路径：同步等待刷新（run 开始时调用一次，保证首个请求就带全 MCP 工具）
+    if (now - mcpRefreshBusy < 5000) return mcpToolsCache;
+    mcpRefreshBusy = now;
+    await refreshMcpToolsCache();
+    return mcpToolsCache;
+  }
+  // v1.2.1 批次 13b：stale-while-revalidate——TTL 过期不再内联阻塞 LLM 请求（旧实现在请求前 await
+  // listAllTools，慢 MCP 服务器会把每步首字延迟拖高 30s/服务器），改后台刷新供下一步使用。
+  if (now - mcpRefreshBusy >= 5000) {
+    mcpRefreshBusy = now;
+    void refreshMcpToolsCache();
+  }
+  return mcpToolsCache;
+}
+async function refreshMcpToolsCache() {
   try {
     const mcpMod = require('../../main/main-mcp.js');
     const mcp = mcpMod.getActiveMcp ? mcpMod.getActiveMcp() : null;
     const list = mcp ? await mcp.listAllTools() : [];
-    mcpToolsCache = list.map((t) => ({
+    // v1.2.1 批次 13c：按工具名排序稳定——MCP 服务器返回顺序抖动会改变请求 tools 前缀，击穿供应商隐式前缀缓存
+    const next = list.map((t) => ({
       type: 'function',
       function: {
         name: 'mcp__' + t.serverId + '__' + t.name,
         description: (t.description || 'MCP 工具') + '（来源：MCP server ' + t.serverId + '）',
         parameters: (t.inputSchema && t.inputSchema.type === 'object') ? t.inputSchema : { type: 'object', properties: {} },
       },
-    }));
-    mcpToolsLoadedAt = now;
+    })).sort((a, b) => (a.function.name < b.function.name ? -1 : a.function.name > b.function.name ? 1 : 0));
+    if (JSON.stringify(next) === JSON.stringify(mcpToolsCache)) { mcpToolsLoadedAt = Date.now(); return; }
+    mcpToolsCache = next;
+    mcpToolsLoadedAt = Date.now();
   } catch (_) { /* 保持旧缓存 */ }
-  return mcpToolsCache;
 }
 function providerToolsWithMcp(base) {
   base = base || [];
@@ -1009,15 +1076,17 @@ function waitApproval(emit, runId, command, extra, setPhase, phaseGet, usage) {
   const callId = 'ap_' + Math.random().toString(36).slice(2, 9);
   // v2（P1-6）：审批次数统计
   if (usage) usage.approvals = (usage.approvals || 0) + 1;
+  const approvalStartedAt = Date.now(); // v1.2.1 批次 13a：审批等待时长
   // v2（P1-8）：进入审批 → phase=waiting_approval（落库+事件）；resolve 后恢复原阶段
   const prevPhase = (typeof phaseGet === 'function') ? phaseGet() : null;
   if (typeof setPhase === 'function') { try { setPhase('waiting_approval'); } catch (e) {} }
   emit('require_approval', Object.assign({ runId, callId, command, toolName: extra && extra.toolName }, extra || {}));
+  const settleApprovalTiming = () => { if (usage && usage.timeBreakdown) usage.timeBreakdown.approvalsMs += Date.now() - approvalStartedAt; };
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { approvals.delete(callId); if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } resolve('timeout'); }, APPROVE_TIMEOUT);
+    const timer = setTimeout(() => { approvals.delete(callId); if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } settleApprovalTiming(); resolve('timeout'); }, APPROVE_TIMEOUT);
     // v2（P1-8）：用户审批完成同样恢复原阶段；v2（P1-4）：approvals 条目补 runId 供 approve API 反向定位
     approvals.set(callId, Object.assign({
-      resolve: (v) => { if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } resolve(v); },
+      resolve: (v) => { if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } settleApprovalTiming(); resolve(v); },
       timer,
       runId,
     }, extra || {}));
@@ -1029,13 +1098,15 @@ function waitApproval(emit, runId, command, extra, setPhase, phaseGet, usage) {
 // 且只 emit 自定义事件类型（plan_approval_request / plan_exit_request），不触发 require_approval 全局审批框。
 function waitCardApproval(emit, runId, eventType, callId, command, payload, setPhase, phaseGet, usage) {
   if (usage) usage.approvals = (usage.approvals || 0) + 1;
+  const cardStartedAt = Date.now(); // v1.2.1 批次 13a：审批等待时长
   const prevPhase = (typeof phaseGet === 'function') ? phaseGet() : null;
   if (typeof setPhase === 'function') { try { setPhase('waiting_approval'); } catch (e) {} }
   emit(eventType, Object.assign({ runId, callId, command }, payload || {}));
+  const settleCardTiming = () => { if (usage && usage.timeBreakdown) usage.timeBreakdown.approvalsMs += Date.now() - cardStartedAt; };
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { approvals.delete(callId); if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } resolve('timeout'); }, APPROVE_TIMEOUT);
+    const timer = setTimeout(() => { approvals.delete(callId); if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } settleCardTiming(); resolve('timeout'); }, APPROVE_TIMEOUT);
     approvals.set(callId, Object.assign({
-      resolve: (v) => { if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } resolve(v); },
+      resolve: (v) => { if (typeof setPhase === 'function') { try { setPhase(prevPhase || 'understanding'); } catch (e) {} } settleCardTiming(); resolve(v); },
       timer,
       runId,
     }, payload || {}));
@@ -1194,6 +1265,9 @@ function snapshotChangeset(opts, relPath, oldContent, runId, meta) {
 
 // v1.1.0（优化 Plan 模式）：Plan 模式下禁止的写/命令类工具（与 runTool 内拦截共用，主循环计划批准门也用它）
 const PLAN_BLOCKED_TOOLS = ['write_file', 'create_file', 'delete_file', 'move_file', 'edit_file', 'apply_patch', 'restore_changeset', 'revert_changes', 'copy_skill_asset', 'run_command', 'run_skill_script', 'git_command', 'run_subagent', 'run_tests', 'run_lint', 'run_typecheck', 'run_build', 'skip_verification'];
+// v1.2.1 批次 13c：并行工具白名单——纯本地只读（不触审批、不在 Plan 拒绝清单、无网络外发），
+// 同轮多个此类调用可安全并发；任何其他工具（含 web_search/mcp/写类/命令类）一律走串行路径。
+const PARALLEL_READONLY_TOOLS = new Set(['read_file', 'read_files', 'list_dir', 'glob', 'grep', 'get_repo_map', 'get_file_outline', 'find_symbol', 'find_references']);
 
 async function runTool(name, args, cwd, emit, runId, auto, aborted, opts) {
   opts = opts || {};
@@ -2290,6 +2364,8 @@ async function _connectWithRetry(connectFn, opts) {
       lastErr = e;
       if (attempt < max && _isConnectTimeout(e)) {
         const delay = LLM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        // v1.2.1 批次 13a：重试观测——重试次数计入 usage.llmRetries（数据决定后续是否调参）
+        if (opts && typeof opts.onRetry === 'function') { try { opts.onRetry(attempt, delay); } catch (_) {} }
         console.warn('[LLM] 连接超时，第 ' + attempt + ' 次，' + delay + 'ms 后重试（共 ' + max + ' 次）');
         await new Promise((r) => setTimeout(r, delay));
       } else {
@@ -2310,6 +2386,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   const req = buildRequest(adapter, { apiBase, apiKey, model, messages, tools: providerToolsWithMcp(tools || TOOLS), stream: true, promptCaching: useCaching });
     // v1.1.7（修复 LLM 连接）：连接超时 60s + 自动重试 5 次（指数退避 1s/2s/4s/8s）+ 流式空闲超时 120s
     let res, streamController, unlinkAbort;
+    let connectRetries = 0; // v1.2.1 批次 13a：连接重试观测
     ({ res, streamController, unlinkAbort } = await _connectWithRetry(async () => {
       const streamController = new AbortController();
       const ua = linkAbortSignal(streamController, signal);
@@ -2323,7 +2400,10 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
       }
       clearTimeout(ct);
       return { res: r, streamController, unlinkAbort: ua };
-    }, { maxAttempts: LLM_MAX_RETRY_ATTEMPTS }));
+    }, { maxAttempts: LLM_MAX_RETRY_ATTEMPTS, onRetry: () => { connectRetries++; } }));
+    // v1.2.1 批次 13a：TTFT——首个内容/思考/工具调用事件相对流建立的时间
+    const streamStartedAt = Date.now();
+    let firstEventAt = 0;
     let idleTimer = null;
     const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { streamController.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, LLM_IDLE_TIMEOUT_MS); };
     resetIdle();
@@ -2344,6 +2424,8 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
       try { json = JSON.parse(raw.startsWith('data:') ? raw.slice(5).trim() : raw); } catch (_) {}
       const event = parseSSE(adapter, line, state);
       if (!event) return;
+      // v1.2.1 批次 13a：TTFT 采样（首个内容/思考/工具调用增量）
+      if (!firstEventAt && (event.content || event.reasoning || (event.toolCalls && event.toolCalls.length) || event.toolCall)) firstEventAt = Date.now();
       if (event.content) content += event.content;
       if (event.reasoning) reasoning += event.reasoning;
       const incoming = event.toolCalls || (event.toolCall ? [event.toolCall] : []);
@@ -2376,7 +2458,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
         for (const line of lines) if (line.trim().startsWith('data:')) consume(line);
       }
       if (buffer.trim()) consume(buffer);
-      return { content, reasoning, toolCalls: Array.from(calls.values()), adapterUsage: adapterUsage || { cacheReported: false } };
+      return { content, reasoning, toolCalls: Array.from(calls.values()), adapterUsage: adapterUsage || { cacheReported: false }, ttftMs: firstEventAt ? firstEventAt - streamStartedAt : null, connectRetries };
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
       unlinkAbort();
@@ -2393,6 +2475,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
   Object.assign(payload, cap.buildThinkParamWithSup(sup, thinkLevel, model));
   // v1.1.7（修复 LLM 连接）：连接超时 60s + 自动重试 5 次（指数退避 1s/2s/4s/8s）+ 流式空闲超时 120s
   let res, controller, unlinkAbort;
+  let connectRetries = 0; // v1.2.1 批次 13a：连接重试观测
   ({ res, controller, unlinkAbort } = await _connectWithRetry(async () => {
     const controller = new AbortController();
     const ua = linkAbortSignal(controller, signal);
@@ -2411,7 +2494,10 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
     }
     clearTimeout(ct);
     return { res: r, controller, unlinkAbort: ua };
-  }, { maxAttempts: LLM_MAX_RETRY_ATTEMPTS }));
+  }, { maxAttempts: LLM_MAX_RETRY_ATTEMPTS, onRetry: () => { connectRetries++; } }));
+  // v1.2.1 批次 13a：TTFT——首个内容/思考/工具调用事件相对流建立的时间
+  const streamStartedAt = Date.now();
+  let firstEventAt = 0;
   let idleTimer = null;
   const resetIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => { try { controller.abort(new Error('LLM 流式空闲超过 120 秒，已自动结束当前运行')); } catch (_) {} }, LLM_IDLE_TIMEOUT_MS); };
   resetIdle();
@@ -2446,6 +2532,8 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
           adapterUsage = mergeUsage(adapterUsage, normalizeUsage('openai', json));
         }
         const delta = (json.choices && json.choices[0] && json.choices[0].delta) || {};
+        // v1.2.1 批次 13a：TTFT 采样（首个内容/思考/工具调用增量）
+        if (!firstEventAt && (delta.content || delta.reasoning_content || delta.tool_calls)) firstEventAt = Date.now();
         if (delta.content) content += delta.content;
         if (delta.reasoning_content) reasoning += delta.reasoning_content;
         if (delta.tool_calls) {
@@ -2460,7 +2548,7 @@ async function callLLMStream({ apiBase, apiKey, model, messages, thinkLevel, thi
       }
     }
     const clean = toolCalls.filter(Boolean).map((t) => ({ id: t.id || ('call_' + t.index), name: t.name, arguments: t.arguments }));
-    return { content, reasoning, toolCalls: clean, adapterUsage: adapterUsage || { cacheReported: false } };
+    return { content, reasoning, toolCalls: clean, adapterUsage: adapterUsage || { cacheReported: false }, ttftMs: firstEventAt ? firstEventAt - streamStartedAt : null, connectRetries };
   } finally {
     if (idleTimer) clearTimeout(idleTimer);
     unlinkAbort();
@@ -2523,14 +2611,14 @@ function handleAgent(req, res, body) {
   // v2（P1-4）：runAuth 按 run 隔离注册（并发互不泄漏）；模块级变量保留仅作未迁移兼容
   approvedRun = false;
   approvedFiles.clear();
-  const runAuth = { approvedRun: false, approvedFiles: new Set() };
+  const runAuth = { approvedRun: false, approvedFiles: new Set(), approvedTools: new Set() };
   // v2（P1-6）：前端自动压缩发生 → 压缩次数指标
   const didCompress = !!(body && body.didCompress);
   // v2（P0-B 修复）：运行起始时间局部变量（budgetGuard 时长检查用，避免 startedAt 未定义）
   const runStartedAt = Date.now();
   // v1.1.0（M1）：持久化 Run 的 id 先生成；通过配置校验后再写库，避免留下无效 running 记录。
   let runId = 'run_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const usage = { tokens: 0, toolCalls: 0, steps: 0, repeatedReads: 0, failures: 0, approvals: 0, compressions: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: 0, unrelatedFileWrites: 0, cache: normalizeCacheMetrics({ source: 'unknown' }) };
+  const usage = { tokens: 0, toolCalls: 0, steps: 0, repeatedReads: 0, failures: 0, approvals: 0, compressions: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: 0, unrelatedFileWrites: 0, cache: normalizeCacheMetrics({ source: 'unknown' }), timeBreakdown: { llmMs: 0, toolsMs: 0, approvalsMs: 0, persistMs: 0 }, llmRetries: 0, ttftSum: 0, llmCalls: 0 };
   let budgetHit = null; // v2（P1-1）：费用预算命中标记（避免与收尾步数 blocked 双重触发）
   if (didCompress) usage.compressions = (usage.compressions || 0) + 1; // v2（P1-6）：前端自动压缩计数
   // 1.0.6：请求体不再携带 apiBase/apiKey。渲染进程只给一个密钥引用（ref），
@@ -2636,6 +2724,7 @@ function handleAgent(req, res, body) {
   req.on('close', () => {
     if (responseClosing) return;
     aborted = true;
+    try { flushEvents(); } catch (_) {} // v1.2.1 批次 13c：断连前把已排队事件落库（close 晚于同步装配，无 TDZ）
     try { runAbortLifecycle.abort({ type: 'cancelled', code: 'client_disconnected', message: '客户端已断开连接', recoverable: false }); } catch (_) { try { runAbort.abort(); } catch (_) {} }
     try { killRunJobs(runId); } catch (_) {} // B4（P2）：连接关闭时清理本 Run 的后台 job
     try { killRunSessions(runId); } catch (_) {} // v1.1.2：同时清理本 Run 的长命令 session
@@ -2647,23 +2736,54 @@ function handleAgent(req, res, body) {
   sseHead(res); // SSE 响应头（内部含精确来源 CORS，不再是 '*'）
 
   const emitRaw = (type, data) => {
+    emitAgentEvent(Object.assign({}, data || {}, { type })); // v1.2.1 批次 12：镜像给桌面宠物
     try { res.write('data: ' + JSON.stringify(Object.assign({}, data || {}, { type })) + '\n\n'); } catch (e) {}
   };
-  // 每个事件同步持久化，并保留真实最大序号供 Summary/Checkpoint 覆盖范围使用。
+  // v1.2.1 批次 13c：事件落库合批——原实现每事件同步 INSERT（最终回答按 ~60 字符块 emit，长回答=
+  // 数百次同步插入阻塞主进程事件循环）。改为内存队列 50ms/16 条批量事务写；SSE（emitRaw）保持逐条即时，
+  // 前端流式不受影响。lastEventSeq 仍只在真实落库后推进；checkpoint/终态/收尾路径强制冲刷保证覆盖范围语义。
+  const TERMINAL_EVENT_TYPES = new Set(['done', 'error', 'blocked']);
   let lastEventSeq = 0;
   let eventPersistWarned = false;
+  let persistMsTotal = 0;
+  const eventQueue = [];
+  let eventFlushTimer = null;
+  const warnEventPersist = (e) => {
+    // v1.1.7：落库失败不阻断流式，但首次失败显式告警（便于诊断磁盘/权限问题）
+    if (!eventPersistWarned) {
+      eventPersistWarned = true;
+      console.warn('[agent-runtime] 事件落库失败（仅提示一次）：', e && e.message ? e.message : e);
+    }
+  };
+  const flushEvents = () => {
+    if (eventFlushTimer) { clearTimeout(eventFlushTimer); eventFlushTimer = null; }
+    if (!runStore || !eventQueue.length) return;
+    const batch = eventQueue.splice(0, eventQueue.length);
+    const t0 = Date.now();
+    try {
+      if (typeof runStore.appendAgentEvents === 'function') {
+        const seqs = runStore.appendAgentEvents(runId, batch);
+        if (Array.isArray(seqs) && seqs.length) lastEventSeq = Math.max(lastEventSeq, seqs[seqs.length - 1]);
+      } else {
+        for (const ev of batch) lastEventSeq = runStore.appendAgentEvent(runId, ev.type, ev.data || {}) || lastEventSeq;
+      }
+    } catch (e) { warnEventPersist(e); }
+    persistMsTotal += Date.now() - t0;
+  };
+  const scheduleEventFlush = () => { if (!eventFlushTimer) eventFlushTimer = setTimeout(flushEvents, 50); };
   const emit = (type, data) => {
     emitRaw(type, data);
-    if (runStore) {
-      try { lastEventSeq = runStore.appendAgentEvent(runId, type, data || {}) || lastEventSeq; }
-      catch (e) {
-        // v1.1.7：落库失败不阻断流式，但首次失败显式告警（便于诊断磁盘/权限问题）
-        if (!eventPersistWarned) {
-          eventPersistWarned = true;
-          console.warn('[agent-runtime] 事件落库失败（仅提示一次）：', e && e.message ? e.message : e);
-        }
-      }
+    if (!runStore) return;
+    if (TERMINAL_EVENT_TYPES.has(type)) {
+      // 终态事件：先冲刷既有队列保序，再同步落库本条（崩溃恢复/回放以终态为界）
+      flushEvents();
+      const t0 = Date.now();
+      try { lastEventSeq = runStore.appendAgentEvent(runId, type, data || {}) || lastEventSeq; } catch (e) { warnEventPersist(e); }
+      persistMsTotal += Date.now() - t0;
+      return;
     }
+    eventQueue.push({ type, data: data || {} });
+    if (eventQueue.length >= 16) flushEvents(); else scheduleEventFlush();
   };
   const traceRecorder = new TraceRecorder({ runId, emit });
   const providerId = (() => { try { return detectAdapter(model, apiBase); } catch (_) { return ref || 'unknown'; } })();
@@ -2706,10 +2826,10 @@ function handleAgent(req, res, body) {
     costSamples.push(cost);
     const status = String(item.status || 'completed');
     if (status !== 'completed') recordRuntimeError(item.error || {}, { type: 'model_failure', code: 'llm_call_failed', message: '模型调用失败', recoverable: true });
-    traceRecorder.llm({ callType: item.callType || 'chat', scope: 'agent', modelId: model, provider: providerId, requestId: item.requestId || '', status, startedAt, finishedAt, latencyMs: Math.max(0, finishedAt - startedAt), inputTokens, outputTokens, reasoningTokens, errorType: item.errorType || '' });
+    traceRecorder.llm({ callType: item.callType || 'chat', scope: 'agent', modelId: model, provider: providerId, requestId: item.requestId || '', status, startedAt, finishedAt, latencyMs: Math.max(0, finishedAt - startedAt), ttftMs: item.ttftMs == null ? null : Number(item.ttftMs), inputTokens, outputTokens, reasoningTokens, errorType: item.errorType || '' });
     traceRecorder.cache(cache);
     if (runStore && typeof runStore.recordModelCallMetric === 'function') {
-      try { runStore.recordModelCallMetric({ id: item.id || ('mc_' + runId + '_' + startedAt + '_' + Math.random().toString(36).slice(2, 6)), runId, rootRunId: resumeRootRunId || runId, scope: 'agent', callType: item.callType || 'chat', modelId: model, provider: providerId, accountRef: ref, projectId: body.workspaceId || body.projectId || '', module: 'agent', requestId: item.requestId || '', inputTokens, outputTokens, reasoningTokens, adapterUsage: Object.assign({}, adapterUsage, { inputTokens, outputTokens, reasoningTokens, costUsd: item.costUsd }), cache, costUsd: cost.totalUsd, cost, attribution: { provider: providerId, accountRef: ref, model, module: 'agent', projectId: body.workspaceId || body.projectId || '', runId, rootRunId: resumeRootRunId || runId }, latencyMs: Math.max(0, finishedAt - startedAt), queueWaitMs: item.queueWaitMs == null ? null : Number(item.queueWaitMs), status, errorType: item.errorType || '', startedAt, finishedAt }); } catch (_) {}
+      try { runStore.recordModelCallMetric({ id: item.id || ('mc_' + runId + '_' + startedAt + '_' + Math.random().toString(36).slice(2, 6)), runId, rootRunId: resumeRootRunId || runId, scope: 'agent', callType: item.callType || 'chat', modelId: model, provider: providerId, accountRef: ref, projectId: body.workspaceId || body.projectId || '', module: 'agent', requestId: item.requestId || '', inputTokens, outputTokens, reasoningTokens, adapterUsage: Object.assign({}, adapterUsage, { inputTokens, outputTokens, reasoningTokens, costUsd: item.costUsd }), cache, costUsd: cost.totalUsd, cost, attribution: { provider: providerId, accountRef: ref, model, module: 'agent', projectId: body.workspaceId || body.projectId || '', runId, rootRunId: resumeRootRunId || runId }, latencyMs: Math.max(0, finishedAt - startedAt), ttftMs: item.ttftMs == null ? null : Number(item.ttftMs), queueWaitMs: item.queueWaitMs == null ? null : Number(item.queueWaitMs), status, errorType: item.errorType || '', startedAt, finishedAt }); } catch (_) {}
     }
     return cache;
   };
@@ -2718,6 +2838,7 @@ function handleAgent(req, res, body) {
     const cost = mergeCosts(costSamples);
     usage.cache = cache;
     usage.cost = cost;
+    usage.timeBreakdown.persistMs = persistMsTotal; // v1.2.1 批次 13a：事件落库耗时入分段统计
     if (cost.totalUsd != null) usage.estimatedCost = cost.totalUsd;
     usage.budget = budgetManager.snapshot();
     if (runStore && typeof runStore.upsertAgentRunMetrics === 'function') {
@@ -2732,6 +2853,8 @@ function handleAgent(req, res, body) {
   emit('meta', { runId, cwd, auto, planMode: runPlanMode, permissionMode, role: 'main', promptVersion: PROMPT_VERSION, toolsetVersion, runtimeVersion: RUNTIME_VERSION, provider: providerId, budget: budgetManager.snapshot() });
 
   (async () => {
+    // v1.2.1 批次 13b：MCP 工具预热——首个 LLM 请求就带全工具清单（此后每步走 stale-while-revalidate 不阻塞）
+    try { await refreshMcpTools(true); } catch (_) {}
     // v2（P1-9）：ContextPack 分层组装——buildSection/renderSystem 按优先级排序（内容与 v1.1.0 M6 的 7 段拼接等价）
     const sections = [];
     const addSection = (key, priority, content) => {
@@ -2799,7 +2922,10 @@ function handleAgent(req, res, body) {
         try {
           const mem = await fsp.readFile(mfp, 'utf8');
           if (mem && mem.trim()) {
-            addSection('projectInstructions', 70, '# 项目记忆（来自 ' + mf + '）\n' + mem.trim());
+            // v1.2.1 批次 13b：单文件 48KB 上限——项目记忆全文注入每步重发，超大记忆文件直接拖慢每轮请求
+            let memText = mem.trim();
+            if (memText.length > 49152) memText = memText.slice(0, 49152) + '\n…（项目记忆超长，已截断至 48KB；请精简记忆文件）';
+            addSection('projectInstructions', 70, '# 项目记忆（来自 ' + mf + '）\n' + memText);
             break;
           }
         } catch (e) { /* 文件不存在则跳过 */ }
@@ -2908,6 +3034,7 @@ function handleAgent(req, res, body) {
       eventsToSeq: lastEventSeq, sourceHashes: sourceHashes(), nextStep: (wsState.pendingWork && wsState.pendingWork[0]) || reason || '',
     });
     const saveCheckpoint = (reason) => {
+      flushEvents(); // v1.2.1 批次 13c：checkpoint 覆盖范围 eventsToSeq 依赖已落库事件，先冲刷队列
       if (!runStore || typeof runStore.saveAgentCheckpoint !== 'function') return;
       try { runStore.saveAgentCheckpoint(runId, reason, checkpointState(reason), lastEventSeq); } catch (e) {}
     };
@@ -2951,6 +3078,7 @@ function handleAgent(req, res, body) {
 
     // 后端对最终模型窗口负责：硬阈值使用 WorkingState + Summary + 最近事件安全重建，绝不退化为 system + 最新 user。
     const enforceWindowGuard = (msgs) => {
+      flushEvents(); // v1.2.1 批次 13c：Summary/压缩覆盖范围用 lastEventSeq，先冲刷已排队事件
       const result = ContextManager.enforceWindow(msgs, ctxWin, {
         workingState: wsState, summary: historicalSummary,
         eventRange: { from: historicalSummary && historicalSummary.coveredFromSeq || 0, to: lastEventSeq },
@@ -3051,14 +3179,21 @@ function handleAgent(req, res, body) {
         break;
       }
       const callFinishedAt = Date.now();
+      // v1.2.1 批次 13a：分段耗时——LLM 往返时长/TTFT/连接重试计入 usage
+      usage.timeBreakdown.llmMs += (callFinishedAt - callStartedAt);
+      usage.llmRetries += Number(r.connectRetries || 0);
+      if (r.ttftMs != null) usage.ttftSum += Number(r.ttftMs);
+      usage.llmCalls += 1;
       // v1.1.0（M1）：token 估算累计（字符数/4 近似）；v2（P1-6）：拆分输入/输出并估算费用；
       // v2（P2-7）：adapter 非流式返回真实 usage 时优先使用
-      let inTok = TokenEstimator.estimateTokens(messages); // v3（P4）：前后端统一估算器（原 字符/4 近似）
-      let outTok = Math.ceil((r.content || '').length / 4);
+      // v1.2.1 批次 13c：adapter 已回报真实 usage 时不再做全量 BPE 估算（原实现无条件估算后被覆盖，每步一次纯浪费）
+      let inTok = null, outTok = null;
       if (r.adapterUsage && (r.adapterUsage.inputTokens || r.adapterUsage.outputTokens)) {
-        inTok = r.adapterUsage.inputTokens || inTok;
-        outTok = r.adapterUsage.outputTokens || outTok;
+        inTok = r.adapterUsage.inputTokens != null ? Number(r.adapterUsage.inputTokens) : null;
+        outTok = r.adapterUsage.outputTokens != null ? Number(r.adapterUsage.outputTokens) : null;
       }
+      if (inTok == null) inTok = TokenEstimator.estimateTokens(messages); // v3（P4）：前后端统一估算器（原 字符/4 近似）
+      if (outTok == null) outTok = Math.ceil((r.content || '').length / 4);
       const callCost = estimateCost(model, inTok, outTok, providerId);
       const callCache = cacheForCall(r.adapterUsage, inTok, outTok, callCost, messages);
       const callCostDetail = calculateCost({ provider: providerId, model, usage: { inputTokens: inTok, outputTokens: outTok, reasoningTokens: Number(r.adapterUsage && r.adapterUsage.reasoningTokens || 0) }, cache: callCache, providerCostUsd: r.adapterUsage && r.adapterUsage.costUsd });
@@ -3095,7 +3230,85 @@ function handleAgent(req, res, body) {
         messages.push(asstMsg);
         let stepOk = true;
         let countableExecutionFailure = false;
-        for (const tc of r.toolCalls) {
+        // v1.2.1 批次 13c：只读工具并行执行——一轮 toolCalls 全部属于本地只读白名单（无审批/无 Plan 门/
+        // 参数可解析/无 Skill 声明拒绝/无重复失败拦截）时并行跑；结果仍按原顺序回填（messages/事件/
+        // 预算记账/失败计数），窗口护栏在整批结果落位后统一执行一次。任一条件不满足 → 整轮走原串行路径。
+        let parallelRan = false;
+        if (r.toolCalls.length > 1 && !aborted && !budgetHit && r.toolCalls.every((tc) => {
+          if (!PARALLEL_READONLY_TOOLS.has(tc.name)) return false;
+          try { JSON.parse(tc.arguments || '{}'); } catch (e) { return false; }
+          return SkillContext.attributeTool(wsState.skillContext || [], tc.name, TOOL_NAMES).allowed;
+        })) {
+          parallelRan = true;
+          setPhase('exploring');
+          const dispatched = r.toolCalls.map((tc) => {
+            let pargs = {};
+            try { pargs = tc.arguments ? JSON.parse(tc.arguments) : {}; } catch (e) { pargs = {}; }
+            const attribution = SkillContext.attributeTool(wsState.skillContext || [], tc.name, TOOL_NAMES);
+            traceRecorder.tool({ id: tc.id, name: tc.name, args: pargs, status: 'requested', skillContext: attribution });
+            const toolStartedAt = Date.now();
+            const requestKey = failureSignature(tc.name, pargs, null).replace(/::tool_error$/, '');
+            // context 与下方串行路径 dispatchToolThroughRegistry 入参保持一致（仅 callId/args 随 tc 变化）
+            const p = dispatchToolThroughRegistry(tc.name, pargs, {
+              role: 'main', readOnly: false, cwd, emit, runId, auto, aborted: () => aborted,
+              searchApiKey, approveTools, cmdWhitelist, callId: tc.id, todos, planMode: runPlanMode,
+              signal: runAbort.signal, // v2（脚本隔离）：透传取消信号，SkillRunner 终止整个进程树
+              ws: wsState, usage, runStore, runId, phase: getPhase, setPhase, workspace, // 透传显式状态机供审批暂停/恢复
+              threadId: String(body.threadId || ''), workspaceId: String(body.workspaceId || ''), providerRef: ref, depth: 0, rootRunId: resumeRootRunId || runId, workspaceSnapshot: workspace, workspaceFingerprint: workspace && workspace.fingerprint ? workspace.fingerprint : '', primaryRootId: workspace && workspace.primaryRootId ? workspace.primaryRootId : '', workspace, rootScope, allowedRootIds,
+              permCtx, // v2（权限大改）：permissionMode + 两层规则
+              llm: { apiBase, apiKey, model, thinkLevel, thinkType }, budgetManager, traceRecorder, promptVersion: PROMPT_VERSION, toolsetVersion: TOOL_REGISTRY_VERSION, runtimeVersion: RUNTIME_VERSION,
+            });
+            return { tc, pargs, attribution, toolStartedAt, requestKey, p };
+          });
+          const settled = await Promise.all(dispatched.map((it) => it.p.then(
+            (raw) => ({ raw, finishedAt: Date.now() }),
+            (err) => ({ raw: { ok: false, error: { code: 'tool_failure', message: String((err && err.message) || err), retryable: true } }, finishedAt: Date.now() })
+          )));
+          if (aborted) { emit('error', terminalPayload({ message: '连接已断开' })); return; }
+          for (let pi = 0; pi < dispatched.length; pi++) {
+            const it = dispatched[pi];
+            const out = settled[pi];
+            const toolFinishedAt = out.finishedAt;
+            const toolBudget = recordBudget('tool_call', { durationMs: toolFinishedAt - it.toolStartedAt, processMs: toolFinishedAt - it.toolStartedAt }, { toolName: it.tc.name, callId: it.tc.id });
+            const result = normalizeResult(out.raw);
+            usage.toolCalls++;
+            usage.timeBreakdown.toolsMs += (toolFinishedAt - it.toolStartedAt);
+            if (!result.ok) {
+              const normalizedError = recordRuntimeError(result.error || result, { type: 'tool_failure', code: 'tool_failure', message: result.summary || '工具执行失败', recoverable: true });
+              result.error = Object.assign({}, result.error || {}, normalizedError);
+              usage.failures++; stepOk = false;
+              const errorCode = String(result && result.error && result.error.code || '');
+              const policyFailure = ['phase_restricted', 'not_allowed', 'sandbox_denied', 'approval_denied', 'bad_request'].includes(errorCode);
+              if (!policyFailure) countableExecutionFailure = true;
+              const signature = failureSignature(it.tc.name, it.pargs, result);
+              const repeatCount = (repeatedFailures.get(signature) || 0) + 1;
+              repeatedFailures.set(signature, repeatCount);
+              failedRequests.set(it.requestKey, { count: repeatCount, signature });
+              if (repeatCount >= 2) {
+                result.failureSignature = signature;
+                result.repeatCount = repeatCount;
+                result.recoveryGuidance = repeatCount >= 3
+                  ? '同一操作已连续失败，请停止原样重试；先读取错误涉及的文件/输出，再更换参数、工具或实现方案。'
+                  : '同一操作已重复失败。再次调用前必须先读取相关错误证据，并改变参数、工具或实现方案。';
+              }
+            } else {
+              const recovered = failedRequests.get(it.requestKey);
+              if (recovered) {
+                failedRequests.delete(it.requestKey);
+                repeatedFailures.delete(recovered.signature);
+                result.recoveredFromFailure = true;
+              }
+            }
+            emit('tool_result', terminalPayload({ id: it.tc.id, name: it.tc.name, result, skillContext: it.attribution }));
+            if (!toolBudget.ok) { budgetHit = { reason: toolBudget.error.message, code: toolBudget.error.code }; break; }
+            let modelToolResult = formatToolResult(result);
+            if (result.recoveryGuidance) modelToolResult += '\n[重复失败恢复] ' + result.recoveryGuidance;
+            messages.push({ role: 'tool', tool_call_id: it.tc.id, content: modelToolResult });
+          }
+          const guardAfterBatch = enforceWindowGuard(messages);
+          if (guardAfterBatch.shouldStop) { budgetHit = { reason: '上下文达到紧急阈值' }; }
+        }
+        if (!parallelRan) for (const tc of r.toolCalls) {
           if (aborted) { emit('error', terminalPayload({ message: '连接已断开' })); return; }
           let args = {};
           try { args = tc.arguments ? JSON.parse(tc.arguments) : {}; } catch (e) { args = {}; }
@@ -3389,6 +3602,7 @@ function handleAgent(req, res, body) {
   })
     .finally(() => {
       responseClosing = true;
+      try { flushEvents(); } catch (_) {} // v1.2.1 批次 13c：收尾前落库全部排队事件（含计时入 persistMs）
       try { if (aborted) { killRunJobs(runId); killRunSessions(runId); } } catch (_) {}
       try { persistRunMetrics(); } catch (_) {}
       try { runAbortLifecycle.dispose(); } catch (_) {}
@@ -3438,6 +3652,14 @@ async function onRoute(req, res, url) {
         const auth = runAuthRegistry.get(pending.runId) || null;
         if (auth && decision === 'allow_file' && pending.extraPath) auth.approvedFiles.add(pending.extraPath);
         if (auth && decision === 'allow_run') auth.approvedRun = true;
+        // v1.2.1 批次 6：MCP「本会话不再询问」——按 run 记录工具会话授权（needsApproval 3.5 步读取）
+        if (auth && decision === 'allow_session_tool' && pending && pending.extra && typeof pending.extra.toolName === 'string' && pending.extra.toolName.startsWith('mcp__')) {
+          const rest = String(pending.extra.toolName).slice(5);
+          const sep = rest.indexOf('__');
+          const sid = sep > 0 ? rest.slice(0, sep) : '';
+          const tn = sep > 0 ? rest.slice(sep + 2) : '';
+          if (sid && tn) auth.approvedTools.add('mcp|' + sid + '/' + tn);
+        }
         else if (!auth && decision === 'allow_file' && pending.extraPath) approvedFiles.add(pending.extraPath);
         if (!auth && decision === 'allow_run') approvedRun = true;
         pending.resolve(decision !== 'reject' && decision !== 'reject_rule');
@@ -3607,7 +3829,7 @@ function startAgentServer(port, opts) {
   });
 }
 
-module.exports = { runTool, startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, runAgent, scanSkills, loadSkillGuides, findEnabledSkill, matchRule, needsApproval, sandboxBlocked, approvalMsg, parsePatch, applyPatchToContent, validateExpectedHashes, lineDiff, normalizeResult, formatToolResult };
+module.exports = { runTool, startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, runAgent, scanSkills, loadSkillGuides, findEnabledSkill, matchRule, needsApproval, sandboxBlocked, approvalMsg, parsePatch, applyPatchToContent, validateExpectedHashes, lineDiff, normalizeResult, formatToolResult, setAgentEventObserver };
 
 if (require.main === module) {
   startAgentServer(Number(process.env.PORT) || 3000);

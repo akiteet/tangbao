@@ -39,11 +39,11 @@
 - **糖馆 · 角色**：角色卡、独立会话、世界书与受控检索，适合角色创作与长期设定管理。
 - **自定义模块**：通过 iframe / webview 接入你自己的工具或网页。
 
-### v1.2.0 的三项重点
+### v1.2.1 的三项重点
 
-- **多角色群聊**：角色按顺序协作发言，可识别沉默、保留成员归属，并支持只重新生成指定成员。
-- **MCP 工具扩展**：接入标准 MCP server，将本地或远程工具带入糖码；支持 stdio、HTTP、项目级 `.mcp.json` 与调用审批。
-- **应用内更新**：在设置中检查、下载并安装新版本，减少手动维护成本。
+- **桌面宠物**：常驻桌面的精灵伙伴，跟随糖码的运行状态做出反应；支持固定位置拖动与全屏自由漫游、缩放、自定义导入与移除。
+- **糖码执行提速**：只读操作并行执行、大文件按需截断、事件批量落库，出字更快、步骤更省；新增执行耗时画像（首字延迟与分段耗时）。
+- **全文检索与审批记忆**：会话检索升级 SQLite FTS5 提速；MCP 审批支持「本会话不再询问 / 永久允许」，已授权工具可随时查看与撤销。
 
 ## 适用场景
 
@@ -57,7 +57,7 @@
 
 ### 直接安装
 
-从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.2.0-setup.exe`，运行安装程序即可。
+从 [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest) 下载 `tangbao-1.2.1-setup.exe`，运行安装程序即可。
 
 ### 从源码运行
 
@@ -82,7 +82,7 @@ npm start
 npm run dist
 ```
 
-Windows 安装包输出至 `dist/tangbao-1.2.0-setup.exe`。better-sqlite3 使用 Electron ABI，修改依赖或重新安装后请先运行：
+Windows 安装包输出至 `dist/tangbao-1.2.1-setup.exe`。better-sqlite3 使用 Electron ABI，修改依赖或重新安装后请先运行：
 
 ```bash
 npm run rebuild:electron
@@ -142,10 +142,10 @@ npm run check:sqlite
 npm run dist
 ```
 
-项目采用 Electron 主进程、受限 preload 桥接与原生 HTML/CSS/JS 渲染层。SQLite 数据结构见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)，界面规范见 [docs/UI-SYSTEM.md](docs/UI-SYSTEM.md)，完整更新记录见 [docs/CHANGELOG-v1.2.0.md](docs/CHANGELOG-v1.2.0.md)。
+项目采用 Electron 主进程、受限 preload 桥接与原生 HTML/CSS/JS 渲染层。SQLite 数据结构见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)，界面规范见 [docs/UI-SYSTEM.md](docs/UI-SYSTEM.md)，完整更新记录见 [docs/CHANGELOG-v1.2.1.md](docs/CHANGELOG-v1.2.1.md)。
 
 ## 版本与许可
 
-当前版本为 **v1.2.0**。本版完整更新内容见 [v1.2.0 发布说明](docs/CHANGELOG-v1.2.0.md)；历史版本说明见 [docs/](docs/)。
+当前版本为 **v1.2.1**。本版完整更新内容见 [v1.2.1 发布说明](docs/CHANGELOG-v1.2.1.md)；历史版本说明见 [docs/](docs/)。
 
 糖包以 [MIT License](LICENSE) 发布。

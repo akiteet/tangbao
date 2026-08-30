@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, scanSkills } = require('../infrastructure/agent-runtime/agent-server');
+const { startAgentServer, configureAgentServer, flushActiveAgentRuns, hasActiveAgentRuns, scanSkills, setAgentEventObserver } = require('../infrastructure/agent-runtime/agent-server');
 // 注意：kvstore.js（原 secrets.js）无法被 electron-builder 的 asar 步骤打入 app.asar
 // （app-builder 会确定性地排除该文件），故改为通过 extraResources 以松散资源形式
 // 放到 resources/ 下，打包后从 process.resourcesPath 加载，开发模式仍走本地路径。
@@ -33,11 +33,18 @@ const { createMainShortcuts } = require('./main-shortcuts'); // v1.2.0 批次 6a
 const { createMainTavern } = require('./main-tavern'); // v1.1.8 批次 F：糖馆域工厂
 const { createMainAgentRuns } = require('./main-agent-runs'); // v1.1.8 批次 F：糖码 Run 域工厂
 const { createMainFloat } = require('./main-float'); // v1.1.8 批次 F：浮窗域工厂
+const { createMainPet } = require('./main-pet'); // v1.2.1 批次 12：桌面宠物域工厂
 let createRunStoreProxy; // 由底部 createMainAgentRuns 初始化后赋值，whenReady 构造 runStore 用
 // v1.1.8 批次 F：浮窗三件套由底部 createMainFloat 初始化后赋值（托盘/快捷键/启动重置/主窗关闭钩子使用）
 let toggleFloatWindow;
 let resetFloatWindowOnBoot;
 let closeAllFloatWindows;
+// v1.2.1 批次 12：桌面宠物四件套由底部 createMainPet 初始化后赋值（托盘/启动重置/主窗关闭/AI 事件桥）
+let togglePetWindow;
+let hidePetWindow;
+let resetPetOnBoot;
+let closeAllPetWindows;
+let emitPetAgentEvent;
 let managedSkillRoots; // 由底部 createMainSkills 初始化后赋值，搜索 handler 请求时读取
 // v1.1.8 批次 F：存储域三件套由底部 createMainStorage 初始化后赋值（IPC 请求/退出钩子均在初始化后触发）
 let getStorageService;
@@ -52,6 +59,8 @@ const ModuleSessions = require('../infrastructure/storage/module-sessions');
 // 注册为特权方案（secure + standard + supportFetchAPI），使本地 HTML 的 ES Module / fetch 等同源能力可用。
 protocol.registerSchemesAsPrivileged([
   { scheme: 'tangbao-file', privileges: { secure: true, standard: true, supportFetchAPI: true } },
+  // v1.2.1 批次 12：tangbao-pet:// 伺服桌面宠物资产（内置 + 用户导入），builtin 优先、user 兜底
+  { scheme: 'tangbao-pet', privileges: { secure: true, standard: true, supportFetchAPI: true } },
 ]);
 // fileId → 绝对路径（不透明、不可枚举）；反向表避免同一文件重复注册撑大 Map
 const fileRegistry = new Map();
@@ -467,6 +476,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
+  '.webp': 'image/webp', // v1.2.1 批次 12：桌面宠物精灵图
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
@@ -484,10 +494,10 @@ const CSP_APP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https: http: tangbao-file:",
+  "img-src 'self' data: blob: https: http: tangbao-file: tangbao-pet:",
   "font-src 'self' data:",
   "media-src 'self' blob: https:",
-  "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*",
+  "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* tangbao-pet:",
   "frame-src 'self' tangbao-file: https: http:",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -495,6 +505,16 @@ const CSP_APP = [
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join('; ');
+
+// v1.2.1 批次 12：桌宠页专用 CSP——仅比 CSP_APP 多放行 script-src 'unsafe-eval' 与 connect-src data:。
+// 原因：①Pixi v8 的 WebGL 渲染器用 new Function 编译 shader（dist 构建带 _unsafeEvalCheck），严格 CSP 下初始化抛错；
+// ②Pixi v8 的 Assets.load 会从 blob: URL 建 Worker 解析精灵图——worker-src 不能收紧（CSP_APP 的
+//   "worker-src 'self' blob:" 必须保留，第六轮排查实证：缺它则 Worker 构造被拒 → 精灵图加载失败 → 空画布）；
+//   worker 内还会 fetch data: 占位纹理，故 connect-src 也要 data:。
+// 只对 pet.html 放宽，主应用保持严格：pet.html 是应用自身伺服的可信本地页，sandbox+contextIsolation，攻击面极窄。
+const CSP_PET = CSP_APP
+  .replace("script-src 'self'", "script-src 'self' 'unsafe-eval'")
+  .replace("connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* tangbao-pet:", "connect-src 'self' data: http://127.0.0.1:* ws://127.0.0.1:* tangbao-pet:");
 
 // 本地文件模块（tangbao-file://）用较宽松 CSP：允许文件自身的内联/外链脚本与资源。
 // frame-ancestors 必须写成 http://127.0.0.1:*（不能用 'none'/'self'）：本地文件模块是被主页面用 iframe
@@ -620,7 +640,9 @@ function startStaticServer() {
             return;
           }
           const ext = path.extname(filePath).toLowerCase();
-          res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Security-Policy': CSP_APP });
+          // v1.2.1 批次 12：pet.html 用宽松 CSP（仅多 unsafe-eval，供 Pixi v8 渲染器）；其余页面保持 CSP_APP 严格
+          const csp = urlPath === '/pet.html' ? CSP_PET : CSP_APP;
+          res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Security-Policy': csp });
           res.end(data);
         });
       } catch (e) {
@@ -839,6 +861,8 @@ function createWindow() {
     mainWindow = null;
     // 浮窗依赖主窗落盘（float:sync），主窗关闭时一并关闭所有浮窗，避免孤儿窗口
     try { closeAllFloatWindows(); } catch (_) {}
+    // v1.2.1 批次 12：主窗关闭时一并关闭桌面宠物窗口（宠物窗口无独立持久通道）
+    try { closeAllPetWindows(); } catch (_) {}
   });
 }
 
@@ -1588,10 +1612,14 @@ if (!gotLock) {
       token: LOCAL_TOKEN,
       allowOrigin: `http://127.0.0.1:${appPort}`,
     });
+    // v1.2.1 批次 12：桌面宠物 AI 事件桥——引擎 SSE 事件镜像转发给宠物窗口（有窗才发，无窗零成本）
+    try { setAgentEventObserver((payload) => emitPetAgentEvent(payload)); } catch (_) {}
     createWindow();
     setupUpdater(); // v1.2.0 批次 3：打包环境下启用应用内更新（设置→帮助）
     // 浮窗每次启动默认关闭：清掉上次退出遗留的 open 标记、不自动重建（托盘/主窗入口仍可随时打开）
     try { resetFloatWindowOnBoot(); } catch (_) {}
+    // v1.2.1 批次 12：桌面宠物同样默认关闭（同浮窗裁决），托盘/设置入口可随时打开
+    try { resetPetOnBoot(); } catch (_) {}
     // 托盘图标（复用 app-icon.ico）：右键菜单切换浮窗 / 退出；点击托盘切换浮窗
     try {
       const trayIcon = path.join(__dirname, '..', '..', 'assets', 'app-icon.ico');
@@ -1599,6 +1627,7 @@ if (!gotLock) {
       tray.setToolTip('糖包');
       const trayMenu = Menu.buildFromTemplate([
         { label: '显示/隐藏浮窗', click: () => { toggleFloatWindow(); } },
+        { label: '显示/隐藏桌宠', click: () => { togglePetWindow(); } }, // v1.2.1 批次 12（第六轮反馈改名）
         { type: 'separator' },
         { label: '退出糖包', click: () => { app.quit(); } },
       ]);
@@ -1613,6 +1642,7 @@ if (!gotLock) {
       try {
         const dockMenu = Menu.buildFromTemplate([
           { label: '显示/隐藏浮窗', click: () => { toggleFloatWindow(); } },
+          { label: '显示/隐藏桌宠', click: () => { togglePetWindow(); } }, // v1.2.1 批次 12（第六轮反馈改名）
           { type: 'separator' },
           { label: '退出糖包', click: () => { app.quit(); } },
         ]);
@@ -1685,6 +1715,24 @@ createMainTavern({
   getAppPort: () => appPort,
   LOCAL_TOKEN,
 });
+
+// v1.2.1 批次 12：桌面宠物域拆分模块（透明窗口/漫游/点击穿透/资产协议/AI 事件桥）。
+// 置于 createMainAgentRuns 之前：emitPetAgentEvent 须先赋值，供 agent 事件桥回调引用。
+const _mainPetInit = createMainPet({
+  safeHandle,
+  safeOn,
+  getMainWindow: () => mainWindow,
+  trustWindow,
+  untrustWindow,
+  isAppUrl,
+  isAllowedExternalUrl,
+  getAppPort: () => appPort,
+});
+togglePetWindow = _mainPetInit.togglePetWindow;
+hidePetWindow = _mainPetInit.hidePetWindow;
+resetPetOnBoot = _mainPetInit.resetPetOnBoot;
+closeAllPetWindows = _mainPetInit.closeAllPetWindows;
+emitPetAgentEvent = _mainPetInit.emitAgentEvent;
 
 // v1.1.8（批次 F）：糖码 Run 域拆分模块（运行历史/轨迹导出/受控评测/上下文摘要 IPC）
 const _mainAgentRunsInit = createMainAgentRuns({

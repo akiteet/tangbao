@@ -18,7 +18,7 @@ function fakeDb(columns) {
 }
 
 test('Schema v16 adds version tracking and metric tables', () => {
-  assert.equal(SCHEMA_VERSION, 17);
+  assert.equal(SCHEMA_VERSION, 18);
   const db = fakeDb(['id', 'prompt_version', 'toolset_version', 'runtime_version']);
   MIGRATIONS[15](db);
   assert.ok(db.sql.some((sql) => /CREATE TABLE IF NOT EXISTS agent_run_metrics/.test(sql)));

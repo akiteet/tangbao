@@ -159,9 +159,9 @@ const TABLES = [
 ];
 
 // ===== Schema 版本化迁移（M6） =====
-// 当前版本 = 16。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
+// 当前版本 = 18。MIGRATIONS[i] 表示「从版本 i 升级到 i+1」的迁移函数（参数为 better-sqlite3 的 db）。
 // 新装库 user_version=0 → 顺序执行 MIGRATIONS[0..] 建全表；未来改结构时追加新迁移并把 SCHEMA_VERSION +1。
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 /** 迁移 0（v0→v1）：建全部表。CREATE TABLE IF NOT EXISTS 幂等，可安全作用于已存在的旧库。 */
 function migration_0(db) {
@@ -379,7 +379,7 @@ function migration_11(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_agentruns_parent ON agent_runs(parent_run_id, started_at ASC)');
 }
 
-const MIGRATIONS = [migration_0, migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7, migration_8, migration_9, migration_10, migration_11, migration_12, migration_13, migration_14, migration_15, migration_16];
+const MIGRATIONS = [migration_0, migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7, migration_8, migration_9, migration_10, migration_11, migration_12, migration_13, migration_14, migration_15, migration_16, migration_17];
 
 // v10：迁移 12（v12→v13）：Working State 追加 Skill 工具权限归因上下文（激活来源/包哈希/声明工具），供工具约束与恢复使用。
 function migration_12(db) {
@@ -477,6 +477,22 @@ function migration_16(db) {
   const cols = new Set(db.prepare('PRAGMA table_info(account_models)').all().map((c) => c.name));
   if (!cols.has('image_model')) db.exec('ALTER TABLE account_models ADD COLUMN image_model INTEGER NOT NULL DEFAULT 0');
   if (!cols.has('image_extra')) db.exec('ALTER TABLE account_models ADD COLUMN image_extra TEXT');
+}
+
+// v17：迁移 17（v17→v18）：消息正文 FTS5 全文索引（v1.2.1 批次 5b）。
+// 用 trigram 分词器（支持中文子串 3+ 字符与英文）。注意：trigram 不支持 FTS5 的 delete/update
+// 增量维护（'delete' 特殊语法直接报 SQL logic error），因此不建触发器，改由 sqlite-store 在
+// 写入后标记 fts_dirty、搜索前按需整表重建（ensureFtsFresh）。历史数据一次性回填。
+function migration_17(db) {
+  db.exec(`
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, tokenize='trigram');
+`);
+  // 回填历史数据（迁移经 user_version 门控只执行一次；空表才回填防重复）
+  const cnt = Number(db.prepare('SELECT COUNT(*) AS c FROM messages_fts').get().c) || 0;
+  if (cnt === 0) db.exec('INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages');
+  const maxRow = Number(db.prepare('SELECT COALESCE(MAX(rowid),0) AS r FROM messages').get().r) || 0;
+  db.prepare("INSERT INTO kv_meta(key,value) VALUES('fts_max_rowid',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(maxRow));
+  db.prepare("INSERT INTO kv_meta(key,value) VALUES('fts_dirty','0') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
 }
 
 module.exports = { DDL, TABLES, SCHEMA_VERSION, MIGRATIONS };

@@ -254,6 +254,32 @@ function createStore(options) {
       }, expectedRevision);
       return result.ok ? Object.assign(result, { characterId: imported.character.id }) : result;
     },
+    // v1.2.1 批次 8：合集导入——每卡沿用 importBundle 语义（新 id、sortOrder 追加、memories 重绑），
+    // 但整批共用一次 mutate（一个 revision，原子生效）；无效/超限卡已在 Core.inspectBundleImport 阶段跳过。
+    importBundleAll(bundle, expectedRevision) {
+      const inspected = Core.inspectBundleImport(bundle);
+      if (!inspected.ok) return { ok: false, code: 'tavern_import_bundle_invalid', error: inspected.error };
+      if (!inspected.cards.length) return { ok: false, code: 'tavern_import_bundle_empty', error: '没有可导入的角色卡。', warnings: inspected.warnings };
+      const result = mutate((next) => {
+        for (const card of inspected.cards) {
+          card.character.id = Core.id('char');
+          card.character.createdAt = Date.now();
+          card.character.updatedAt = card.character.createdAt;
+          card.character.sortOrder = nextSortOrder(next.characters);
+          card.memories = card.memories.map((item) => Object.assign({}, item, {
+            id: Core.id('memory'), characterId: card.character.id,
+          }));
+          next.characters.unshift(card.character);
+          next.memories.unshift(...card.memories);
+        }
+      }, expectedRevision);
+      return result.ok ? Object.assign(result, {
+        importedCount: inspected.cards.length,
+        skippedCount: inspected.skipped,
+        warnings: inspected.warnings,
+        characterIds: inspected.cards.map((c) => c.character.id),
+      }) : result;
+    },
     importWorldbook(characterId, bundle, expectedRevision) {
       const target = String(characterId || '');
       const current = load();

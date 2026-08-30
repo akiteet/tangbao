@@ -10,29 +10,6 @@
     },
   };
 
-  function mergeFloatConversations(current, incoming) {
-    const existing = Array.isArray(current) ? current : [];
-    const updates = Array.isArray(incoming) ? incoming : [];
-    const byId = new Map(existing.filter((item) => item && item.id).map((item) => [item.id, item]));
-    const order = existing.map((item) => item && item.id).filter(Boolean);
-    const isNewer = (next, previous) => {
-      if (!previous) return true;
-      const nextAt = Number(next && next.updatedAt) || 0;
-      const previousAt = Number(previous && previous.updatedAt) || 0;
-      if (nextAt !== previousAt) return nextAt > previousAt;
-      const nextCount = Array.isArray(next && next.messages) ? next.messages.length : 0;
-      const previousCount = Array.isArray(previous && previous.messages) ? previous.messages.length : 0;
-      return nextCount >= previousCount;
-    };
-    for (const next of updates) {
-      if (!next || !next.id) continue;
-      const previous = byId.get(next.id);
-      if (isNewer(next, previous)) byId.set(next.id, next);
-      if (!previous) order.push(next.id);
-    }
-    return order.map((id) => byId.get(id)).filter(Boolean);
-  }
-
   const isModuleConversation = (item) => !!(item && (
     item.tavernCharacterId
     || item.originModule === 'tavern'
@@ -79,22 +56,6 @@
       tavern: source.filter((item) => item && (item.tavernCharacterId || item.tangguanCharacterId || item.originModule === 'tavern' || item.originModule === 'tangguan')),
       create: source.filter((item) => item && item.originModule === 'create'),
     };
-  }
-
-  function applyFloatStateSnapshot(payload) {
-    const state = payload && payload.state && typeof payload.state === 'object' ? payload.state : payload;
-    if (!state || typeof state !== 'object') return false;
-    const safeState = Object.assign({}, state);
-    const split = splitLegacyModuleSessions(safeState.conversations);
-    safeState.conversations = split.normal;
-    if (safeState.activeId && !safeState.conversations.some((item) => item && item.id === safeState.activeId)) {
-      safeState.activeId = safeState.conversations[0] ? safeState.conversations[0].id : null;
-    }
-    const result = App.loadStateFromRaw ? App.loadStateFromRaw(JSON.stringify(safeState), { persist: false }) : { ok: false };
-    if (!result || !result.ok) return false;
-    if (App.chat && App.chat.onShow) App.chat.onShow();
-    if (App.ui && App.ui.renderSidebar) App.ui.renderSidebar();
-    return true;
   }
 
   async function initializeModuleSessions() {

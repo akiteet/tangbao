@@ -429,3 +429,80 @@ test('Tavern library cards stay compact and ignore malformed sessions', () => {
   // v1.2.0 群聊独立：指针校正改用归属判定（单角色 + 群聊归首位角色），isValidSession 只做单角色展示过滤
   assert.match(view, /if \(!belongsToCharacter\(active, selected\.id\)\) restoreConversation\(selected\.id\)/);
 });
+
+// ---- v1.2.1 批次 8：角色卡合集（全部导出 → 重导入回环） ----
+test('tavern bundle export → import round trip keeps cards, worldbook, and assigns new ids', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tangbao-tavern-bundle-'));
+  try {
+    const store = Infra.createStore({ filePath: path.join(dir, 'library.json') });
+    assert.equal(store.saveCharacter({ id: 'char-a', name: 'Alice', description: 'First card', greeting: 'Hi' }, 0).ok, true);
+    assert.equal(store.saveMemory('char-a', { id: 'memory-a', content: 'Alice fact', keywords: ['alice'] }, 1).ok, true);
+    assert.equal(store.saveCharacter({ id: 'char-b', name: 'Bob', description: 'Second card' }, 2).ok, true);
+    const state = store.load();
+    assert.equal(state.characters.length, 2);
+
+    const bundle = Core.exportAllBundle(state.characters, state.memories);
+    assert.equal(bundle.format, 'tangbao-character-bundle');
+    assert.equal(bundle.count, 2);
+    const serialized = JSON.parse(JSON.stringify(bundle)); // 模拟落盘往返
+    assert.ok(Core.isBundleImport(serialized));
+    assert.ok(!Core.isBundleImport({ format: 'tangbao-character', characters: [] }));
+
+    const inspected = Core.inspectBundleImport(serialized);
+    assert.equal(inspected.ok, true);
+    assert.equal(inspected.count, 2);
+    assert.equal(inspected.skipped, 0);
+
+    // 重导入到全新库：新 id 防覆盖、memories 重绑到新 characterId、世界书内容保留
+    const target = Infra.createStore({ filePath: path.join(dir, 'library-2.json') });
+    const result = target.importBundleAll(serialized, 0);
+    assert.equal(result.ok, true);
+    assert.equal(result.importedCount, 2);
+    const reloaded = target.load();
+    assert.equal(reloaded.characters.length, 2);
+    const alice = reloaded.characters.find((c) => c.name === 'Alice');
+    assert.ok(alice && alice.id !== 'char-a');
+    const aliceMem = reloaded.memories.filter((m) => m.characterId === alice.id);
+    assert.equal(aliceMem.length, 1);
+    assert.equal(aliceMem[0].content, 'Alice fact');
+    assert.ok(reloaded.characters.every((c) => Number(c.sortOrder) > 0));
+
+    // revision 冲突整批拒绝（原子性）
+    const conflict = target.importBundleAll(serialized, 99);
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.code, 'tavern_revision_conflict');
+
+    // 无效条目与超 256KB 单卡跳过、不阻断整批；空合集拒绝
+    const bigAvatar = 'data:image/png;base64,' + 'A'.repeat(300 * 1024);
+    const mixed = { format: 'tangbao-character-bundle', version: 1, characters: [
+      serialized.characters[0],
+      null,
+      { name: 'BigAvatar', avatar: bigAvatar },
+    ] };
+    const inspectedMixed = Core.inspectBundleImport(mixed);
+    assert.equal(inspectedMixed.count, 1);
+    assert.equal(inspectedMixed.skipped, 2);
+    assert.ok(inspectedMixed.warnings.length >= 2);
+    const emptyResult = target.importBundleAll({ format: 'tangbao-character-bundle', version: 1, characters: [] }, null);
+    assert.equal(emptyResult.ok, false);
+    assert.equal(emptyResult.code, 'tavern_import_bundle_empty');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('tavern bundle export/import wiring across main/preload/service/view (static assertions)', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../../src/main/main-tavern.js'), 'utf8');
+  assert.match(main, /tavern:exportAllCharacters/, '导出全部 IPC');
+  assert.match(main, /isBundleImport\(parsed\)/, '预览/导入自动识别合集');
+  assert.match(main, /MAX_BUNDLE_IMPORT_FILE_BYTES/, '合集文件上限放宽到 30MB');
+  assert.match(main, /importBundleAll\(pending\.bundle/, '预览导入走合集通道');
+  assert.match(main, /tavern_library_empty/, '空库导出显式报错');
+  const pre = fs.readFileSync(path.join(__dirname, '../../src/preload/preload.js'), 'utf8');
+  assert.match(pre, /tavernExportAllCharacters/, 'preload 暴露导出全部');
+  const svc = fs.readFileSync(path.join(__dirname, '../../src/application/services/tavern.js'), 'utf8');
+  assert.match(svc, /exportAllCharacters/, 'service 方法存在');
+  const view = fs.readFileSync(path.join(__dirname, '../../src/renderer/views/tavern/tavern.js'), 'utf8');
+  assert.match(view, /data-tg-export-all/, '库底栏导出全部按钮');
+  assert.match(view, /preview\.bundle/, '导入确认框合集分支');
+});

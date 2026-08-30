@@ -13,6 +13,7 @@ Thumbs.db
 
 # 临时调试脚本（_ 前缀）与 Python 缓存，避免误入库
 _*.cjs
+_*.json
 _*.py
 __pycache__/
 *.pyc
@@ -36,7 +37,10 @@ outputs/
 糖包v1.1.8实施计划.md
 
 # 内部交接文档与临时备份（不入库）
+HANDOFF.md
 HANDOFF-*.md
+# v1.1.6~1.2.1 实施计划文档（不入库）
+糖包v*.md
 styles.css.pre-*.bak
 
 # agent 拆分前备份（不入库）

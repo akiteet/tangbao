@@ -104,9 +104,72 @@ test('⑩第十轮反馈：MCP 编辑器接线 + 快捷键指南补全 + 键盘�
   assert.ok(pre.includes('mcpListTools'), 'preload 暴露 mcpListTools');
   const sc = read('src/renderer/components/shortcuts.js');
   assert.ok(sc.includes('sc.palette'), '帮助面板含命令面板键位行');
-  assert.ok(sc.includes('shortcuts.global.floatToggle'), '帮助面板含全局浮窗键行');
+  assert.ok(sc.includes("'floatToggle'"), '全局浮窗键行仍在（GLOBAL_IDS）');
   const i18n = read('src/renderer/components/i18n.js');
   assert.ok(i18n.includes("'sc.zoom'"), '缩放键位词条已入双语词典');
   const main = read('src/main/main.js');
   assert.ok(main.includes('before-input-event') && main.includes('attachZoomShortcuts'), '主进程为可信窗口挂键盘缩放');
+});
+
+test('糖绘生图模型显示与调用一致（2026-08-28）：render 自愈 + 入队快照可见下拉', () => {
+  const img = read('src/renderer/views/images/image.js');
+  // 第一层：render 自愈——存在生图模型但 providers.image.model 不在其中（含为空）时拨正 state
+  assert.ok(img.includes('imageNames.has(imgProv.model)') && img.includes('imageProv.model = imgSel'), 'render 自愈把 state 拨正为下拉显示模型');
+  assert.ok(img.includes('if (imageProv.model !== imgSel)'), '仅在值变化时 persist（收敛不重复写盘）');
+  // 第二层：generate 以可见下拉为准 + enqueue 快照 + runTask 以快照为准
+  assert.ok(img.includes("const visibleModel = modelPick && modelPick.value ? modelPick.value : ''"), 'generate 读 #imgModel 当前值');
+  assert.ok(img.includes('model: taskModel'), 'enqueue 快照本次模型到 task');
+  assert.ok(img.includes('taskModel = paramsModel || provider.model'), '快照回退 provider.model');
+  assert.ok(img.includes('if (task.model) p.model = task.model'), 'runTask 以入队快照模型为准（所见即所调）');
+});
+
+test('批次 1：app.js 浮窗合并/快照函数无重复定义（死代码清理防回潮）', () => {
+  const app = read('src/renderer/app.js');
+  const countFn = (name) => (app.match(new RegExp('function\\s+' + name + '\\s*\\(')) || []).length;
+  assert.equal(countFn('applyFloatStateSnapshot'), 1, 'applyFloatStateSnapshot 只保留带守卫的存活版本');
+  assert.equal(countFn('mergeFloatConversations'), 1, 'mergeFloatConversations 只保留一份定义');
+  assert.ok(app.includes('__applyingFloatState'), '存活版本保留浮窗防环守卫');
+  assert.ok(app.includes('splitLegacyModuleSessions'), 'splitLegacyModuleSessions 仍被其他逻辑使用');
+});
+
+test('批次 2：糖馆编辑器焦点守护（异步回流不再把焦点丢回 BODY）', () => {
+  const tavern = read('src/renderer/views/tavern/tavern.js');
+  assert.ok(tavern.includes('function startEditorFocusKeeper') && tavern.includes('function stopEditorFocusKeeper'), '焦点守护器存在');
+  assert.ok(tavern.includes('document.activeElement === document.body'), '仅当焦点掉回 body 时才还焦（不抢用户主动聚焦）');
+  assert.ok(tavern.includes("if (kind === 'editor') startEditorFocusKeeper()"), 'switchDrawer 打开编辑器时启动守护');
+  assert.match(tavern, /requestAnimationFrame\(focusNameWhenReady\);\r?\n           startEditorFocusKeeper\(\)/, '新建角色后衔接既有重试并启动守护');
+  assert.match(tavern, /stopEditorFocusKeeper\(\);\r?\n    render\(\)/, '关抽屉时停止守护');
+});
+
+test('批次 3：快捷键 id/键位统一 core 词表 + 设置卡可录入改键', () => {
+  const sc = read('src/renderer/components/shortcuts.js');
+  // id 统一：分发层不再有私有 snake_case id
+  assert.doesNotMatch(sc, /new_chat|local_search|open_settings/, '分发层不再用私有 snake_case 动作 id');
+  assert.ok(sc.includes("id: 'newChat'") && sc.includes("id: 'search'") && sc.includes("id: 'settings'"), '动作 id 与 core 词表一致');
+  // 键位 settings 驱动 + 冲突检查 + 全局即时重注册
+  assert.ok(sc.includes('function appMap()') && sc.includes('settings.shortcuts'), '分发层从 settings.shortcuts.app 读键位');
+  assert.ok(sc.includes("combo === 'Ctrl+K'"), 'Ctrl+K 恒让给命令面板');
+  assert.ok(sc.includes('shortcutsSetGlobal'), '全局改键经 shortcutsSetGlobal 即时重注册');
+  assert.ok(sc.includes('function resetAll'), '提供恢复默认');
+  assert.ok(sc.includes("'与「' + conflict + '」冲突"), '同命名空间冲突拒绝');
+  // 设置卡接线（防「死的卡片」复发）
+  const html = read('index.html');
+  assert.ok(html.includes('id="shortcutEditRows"'), '设置→帮助 快捷键卡有录入容器');
+  assert.ok(html.includes('id="shortcutReset"'), '设置卡有恢复默认按钮');
+  const i18n = read('src/renderer/components/i18n.js');
+  assert.ok(i18n.includes("'sc.mainToggle'") && i18n.includes("'sc.global'"), '新词条已入双语词典');
+});
+
+test('批次 6：MCP 审批记忆接线（弹窗按钮 + 引擎会话授权 + 设置撤销卡）', () => {
+  const ap = read('src/renderer/views/agent/agent-approvals.js');
+  assert.ok(ap.includes('allow_session_tool') && ap.includes('allow_mcp_rule'), '审批弹窗提供「本会话不再询问 / 永久允许此工具」');
+  assert.ok(ap.includes('ruleTool = \'mcp\''), 'MCP 规则形状修正（总是允许写 tool=mcp + pattern=server/tool）');
+  const engine = read('src/infrastructure/agent-runtime/agent-runtime-engine.js');
+  assert.ok(engine.includes("decision === 'allow_session_tool'") && engine.includes("approvedTools.add('mcp|'"), '引擎审批回调写入会话级工具授权');
+  const ad = read('src/infrastructure/agent-runtime/approval-decision.js');
+  assert.ok(ad.includes('auth.approvedTools') && ad.includes("toolName === 'mcp'"), 'needsApproval 3.5 步 + MCP 默认审批');
+  const ui = read('src/renderer/components/ui.js');
+  assert.ok(ui.includes('renderMcpAllowed') && ui.includes('data-mcp-revoke'), '设置卡渲染 MCP 已授权清单 + 撤销');
+  const html = read('index.html');
+  assert.ok(html.includes('id="mcpAllowedList"'), '设置卡 DOM 存在（防「死的卡片」）');
 });

@@ -553,6 +553,245 @@
       if (clearBtn) clearBtn.disabled = !on;
     },
 
+    // v1.2.1 批次 6：MCP 已授权工具清单渲染 + 撤销（全局权限规则 tool=mcp 允许项）
+    renderMcpAllowed() {
+      const box = $('mcpAllowedList');
+      if (!box) return;
+      const rules = (App.state.settings.permissionRules || []).filter((r) => r && r.tool === 'mcp' && r.allow !== false);
+      if (!rules.length) { box.textContent = '暂无——审批 MCP 工具时点「永久允许此工具」会记录到这里。'; return; }
+      box.innerHTML = rules.map((r) => {
+        const pattern = String(r.pattern || '');
+        const label = pattern.includes('/') ? 'mcp__' + pattern.replace(/\//g, '__') : (pattern || '（全量）');
+        return '<div class="sc-row" style="margin:2px 0"><span class="sc-label">' + App.escapeHtml(label) + '</span><span class="sc-controls"><button type="button" class="btn-ghost mini" data-mcp-revoke="' + App.escapeHtml(String(r.id || '')) + '">撤销</button></span></div>';
+      }).join('');
+      box.querySelectorAll('[data-mcp-revoke]').forEach((b) => b.addEventListener('click', () => {
+        const id = b.dataset.mcpRevoke;
+        const rulesList = App.state.settings.permissionRules || [];
+        const next = rulesList.filter((x) => !(x && x.id === id));
+        if (next.length !== rulesList.length) {
+          App.state.settings.permissionRules = next;
+          App.persist();
+          App.ui.renderMcpAllowed();
+          App.ui.toast('已撤销该 MCP 工具的永久授权');
+        }
+      }));
+    },
+
+    // v1.2.1 批次 12：桌面宠物设置卡（开关/选择/缩放/漫游/置顶/导入）
+    renderPetSettings() {
+      const toggle = $('petToggle');
+      const gallery = $('petGallery');
+      const roamMode = $('petRoamMode');
+      const scale = $('petScale');
+      const aot = $('petAlwaysOnTop');
+      const importBtn = $('petImport');
+      if (!toggle && !select) return;
+      const pet = App.state.settings.pet || {};
+
+      // 绑定（一次性）
+      if (toggle && !toggle._petBound) {
+        toggle._petBound = true;
+        toggle.addEventListener('change', () => {
+          const on = !!toggle.checked;
+          App.state.settings.pet = Object.assign({}, App.state.settings.pet, { enabled: on });
+          App.persist();
+          if (window.electron) {
+            const action = on ? (window.electron.petShow || (() => Promise.resolve())) : (window.electron.petHide || (() => Promise.resolve()));
+            // 第六轮反馈：开关状态以主进程 pet-state 为准（此前渲染层持久值会在启动重置后说谎）
+            Promise.resolve(action()).catch(() => {}).then(() => {
+              if (!window.electron.petState) return null;
+              return window.electron.petState().catch(() => null);
+            }).then((r) => {
+              const actual = !!(r && r.ok && r.state && r.state.enabled);
+              if (toggle.checked !== actual) toggle.checked = actual;
+              App.ui.toast(actual ? '已打开桌宠（找不到时点「复位位置」）' : '已隐藏桌宠');
+            });
+          }
+        });
+      }
+      // 第十三轮：画廊点击选中（所有已添加宠物可视化预览/选择）
+      // 第十四轮反馈：卡片上的「×」移除导入宠物（内置无此按钮），确认后删除并回退选中
+      if (gallery && !gallery._petBound) {
+        gallery._petBound = true;
+        gallery.addEventListener('click', (e) => {
+          const del = e.target.closest('[data-pet-del]');
+          if (del) {
+            e.stopPropagation();
+            const pid = String(del.dataset.petDel || '');
+            if (!pid) return;
+            if (!window.confirm('确定移除此桌宠吗？导入的素材文件夹将从本机删除。')) return;
+            if (!window.electron || !window.electron.petDelete) { App.ui.toast('移除暂不可用'); return; }
+            Promise.resolve(window.electron.petDelete(pid)).then((r) => {
+              if (r && r.ok) {
+                App.ui.toast('已移除桌宠');
+                if (r.petId) {
+                  App.state.settings.pet = Object.assign({}, App.state.settings.pet, { petId: r.petId });
+                  App.persist();
+                }
+                App.ui.renderPetSettings();
+              } else {
+                App.ui.toast(r && r.error ? String(r.error) : '移除失败');
+              }
+            }).catch(() => App.ui.toast('移除失败'));
+            return;
+          }
+          const card = e.target.closest('.pet-gal-card');
+          if (!card || !card.dataset.petId) return;
+          const id = card.dataset.petId;
+          App.state.settings.pet = Object.assign({}, App.state.settings.pet, { petId: id });
+          App.persist();
+          if (window.electron && window.electron.petSetPet) window.electron.petSetPet(id).catch(() => {});
+          gallery.querySelectorAll('.pet-gal-card').forEach((el) => el.classList.toggle('active', el.dataset.petId === id));
+        });
+        gallery.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          const card = e.target.closest('.pet-gal-card');
+          if (!card || card.querySelector('[data-pet-del]:focus')) return;
+          e.preventDefault();
+          card.click();
+        });
+      }
+      if (scale && !scale._petBound) {
+        scale._petBound = true;
+        scale.addEventListener('input', () => {
+          const v = Number(scale.value) || 1;
+          App.state.settings.pet = Object.assign({}, App.state.settings.pet, { scale: v });
+          App.persist();
+          if (window.electron && window.electron.petSetScale) window.electron.petSetScale(v).catch(() => {});
+        });
+      }
+      if (aot && !aot._petBound) {
+        aot._petBound = true;
+        aot.addEventListener('change', () => {
+          const on = !!aot.checked;
+          App.state.settings.pet = Object.assign({}, App.state.settings.pet, { alwaysOnTop: on });
+          App.persist();
+          if (window.electron && window.electron.petSetAlwaysOnTop) window.electron.petSetAlwaysOnTop(on).catch(() => {});
+        });
+      }
+      // 第十二/十三轮：位置模式选择（fixed 固定位置 / free 自由漫游；settings + 主进程 pet-state 双写）
+      if (roamMode && !roamMode._petBound) {
+        roamMode._petBound = true;
+        roamMode.addEventListener('change', () => {
+          const mode = roamMode.value === 'fixed' ? 'fixed' : 'free';
+          App.state.settings.pet = Object.assign({}, App.state.settings.pet, { roamMode: mode });
+          App.persist();
+          if (window.electron && window.electron.petSetRoamMode) window.electron.petSetRoamMode(mode).catch(() => {});
+        });
+      }
+      if (importBtn && !importBtn._petBound) {
+        importBtn._petBound = true;
+        importBtn.addEventListener('click', async () => {
+          if (!window.electron || !window.electron.petImport) { App.ui.toast('宠物导入暂不可用'); return; }
+          const r = await window.electron.petImport().catch(() => null);
+          if (r && r.canceled) return;
+          if (r && r.ok) {
+            App.ui.toast('已导入宠物' + (r.petId ? '：' + r.petId : ''));
+            App.ui.renderPetSettings(); // 重新列出宠物
+            if (r.petId) { App.state.settings.pet = Object.assign({}, App.state.settings.pet, { petId: r.petId }); App.persist(); }
+          } else {
+            App.ui.toast(r && r.error ? String(r.error) : '宠物导入失败');
+          }
+        });
+      }
+
+      // 填充宠物列表（主进程列内置+用户导入）——每次刷新都重拉（第十一轮：原 options.length===0 守卫
+      // 导致列表只在首次为空时拉取，导入的新宠物永远不会出现在下拉框）
+      // 第十三轮：画廊（所有已添加宠物：首帧静态图 + 名称，点击选中）
+      if (gallery && window.electron && window.electron.petList) {
+        window.electron.petList().then((r) => {
+          if (!r || !r.ok || !Array.isArray(r.pets)) return;
+          App.ui.renderPetGallery(r.pets, pet.petId);
+        }).catch(() => {});
+      }
+
+      // 回填当前值（enabled 以主进程 pet-state 为准：启动默认关后渲染层持久值可能是旧的）
+      if (toggle) toggle.checked = false;
+      if (scale) scale.value = String(Number.isFinite(pet.scale) ? pet.scale : 1);
+      if (roamMode) roamMode.value = (pet.roamMode === 'fixed') ? 'fixed' : 'free';
+      if (aot) aot.checked = pet.alwaysOnTop !== false;
+      if (window.electron && window.electron.petState) {
+        window.electron.petState().then((r) => {
+          if (r && r.ok && r.state && toggle) toggle.checked = !!r.state.enabled;
+        }).catch(() => {});
+      }
+      // 复位位置（第六轮反馈：宠物遗留坐标落在角落难找，一键回屏幕右下角）
+      const resetPos = $('petResetPos');
+      if (resetPos && !resetPos._petBound) {
+        resetPos._petBound = true;
+        resetPos.addEventListener('click', () => {
+          if (window.electron && window.electron.petResetPosition) {
+            window.electron.petResetPosition().then(() => {
+              if (window.electron.petState) window.electron.petState().catch(() => null);
+              App.ui.toast('桌宠已复位到屏幕右下角');
+            }).catch(() => App.ui.toast('复位失败'));
+          }
+        });
+      }
+    },
+
+    // v1.2.1 批次 9：界面语言切换（settings.locale + App.i18n.setLocale 即时生效）
+    renderLanguageSetting() {
+      const select = $('languageSelect');
+      if (!select) return;
+      if (!select._langBound) {
+        select._langBound = true;
+        select.addEventListener('change', () => {
+          const l = select.value === 'en' ? 'en' : 'zh';
+          if (App.i18n && App.i18n.setLocale) App.i18n.setLocale(l);
+          App.ui.toast(l === 'en' ? 'Language: English' : '语言：中文');
+        });
+      }
+      const current = (App.i18n && App.i18n.getLocale) ? App.i18n.getLocale() : ((App.state.settings && App.state.settings.locale) || 'zh');
+      select.value = current === 'en' ? 'en' : 'zh';
+    },
+
+    // 第十三轮：桌宠画廊（所有已添加宠物：首帧静态图 + 名称，点击选中高亮；首帧按 meta 格子规格裁剪）
+    renderPetGallery(pets, selectedId) {
+      const gallery = $('petGallery');
+      if (!gallery) return;
+      const render = (list) => {
+        const arr = Array.isArray(list) ? list : [];
+        if (!arr.length) { gallery.innerHTML = '<div class="pet-gal-empty">还没有桌宠，点「导入桌宠」添加</div>'; return; }
+        gallery.innerHTML = arr.map((p) => {
+          const id = String(p.id || '');
+          const name = App.escapeHtml(p.displayName || p.id || '');
+          // 第十四轮反馈：导入的宠物（location==='user'）带移除按钮；内置宠物不可删
+          const del = p.location === 'user'
+            ? '<span class="pet-gal-del" role="button" data-pet-del="' + App.escapeHtml(id) + '" title="移除此桌宠">×</span>'
+            : '';
+          return '<div class="pet-gal-card' + (id === String(selectedId) ? ' active' : '') + '" role="button" tabindex="0" data-pet-id="' + App.escapeHtml(id) + '" title="' + name + '">'
+            + '<img alt="" data-pet-file="' + App.escapeHtml(p.spritesheetFile || 'spritesheet.webp') + '" data-pet-loc="' + (p.location === 'user' ? 'user' : 'builtin') + '" data-cell-w="' + (Math.round(Number(p.cellWidth)) || 192) + '" data-cell-h="' + (Math.round(Number(p.cellHeight)) || 208) + '">'
+            + '<span>' + name + '</span>' + del + '</div>';
+        }).join('');
+        gallery.querySelectorAll('img').forEach((imgEl) => {
+          const card = imgEl.closest('.pet-gal-card');
+          const pid = card && card.dataset.petId;
+          const loc = imgEl.dataset.petLoc;
+          const file = imgEl.dataset.petFile;
+          const cellW = Number(imgEl.dataset.cellW) || 192;
+          const cellH = Number(imgEl.dataset.cellH) || 208;
+          const url = loc === 'user'
+            ? 'tangbao-pet://' + encodeURIComponent(String(pid)) + '/' + file
+            : '/assets/pets/' + encodeURIComponent(String(pid)) + '/' + file;
+          const image = new Image();
+          image.onload = () => {
+            try {
+              const cv = document.createElement('canvas');
+              cv.width = cellW;
+              cv.height = cellH;
+              cv.getContext('2d').drawImage(image, 0, 0, cellW, cellH, 0, 0, cellW, cellH);
+              imgEl.src = cv.toDataURL();
+            } catch (_) { imgEl.remove(); }
+          };
+          image.onerror = () => { imgEl.remove(); };
+          image.src = url;
+        });
+      };
+      if (Array.isArray(pets)) render(pets);
+      else if (window.electron && window.electron.petList) window.electron.petList().then((r) => render(r && r.ok ? r.pets : [])).catch(() => {});
+    },
+
     refreshSettingsUI() {
       const s = App.state.settings;
       const apiModuleSel = $('apiModuleSel');
@@ -565,6 +804,8 @@
       App.ui.renderModelProfiles();
       App.ui.refreshModelMetrics();
       App.ui.syncPerfToggle(); // v1.1.6：每次打开/刷新设置面板时同步性能诊断开关与按钮态
+      App.ui.renderPetSettings(); // v1.2.1 批次 12：桌面宠物设置卡
+      App.ui.renderLanguageSetting(); // v1.2.1 批次 9：界面语言切换
       const pr = App.state.settings.prompts || {};
       const DP = App.DEFAULT_PROMPTS;
       if ($('pChat')) { $('pChat').value = pr.chat || ''; $('pChat').placeholder = DP.chat; }
@@ -597,6 +838,8 @@
         const list = ((App.state.settings.mcp || {}).servers) || [];
         $('mcpServersJson').value = Array.isArray(list) && list.length ? JSON.stringify(list, null, 2) : '';
       }
+      // v1.2.1 批次 6：MCP 已授权工具清单（全局权限规则 tool=mcp 的允许项，可撤销）
+      App.ui.renderMcpAllowed();
       {
         const list = $('visionChipList');
         const inp = $('visionInput');
@@ -1315,6 +1558,17 @@
       $('expandBtn').addEventListener('click', () => $('app').classList.remove('collapsed'));
       $('themeBtn').addEventListener('click', () => App.ui.toggleTheme());
       $('settingsBtn').addEventListener('click', () => App.ui.openSettings());
+      // v1.2.1 批次 12：顶栏桌面宠物快速开关（点按显隐，同步 settings.pet.enabled）
+      const petToggleBtn = $('petToggleBtn');
+      if (petToggleBtn) petToggleBtn.addEventListener('click', () => {
+        if (!window.electron || typeof window.electron.petToggle !== 'function') { App.ui.toast('桌面宠物暂不可用'); return; }
+        window.electron.petToggle().then((r) => {
+          const on = !!(r && r.visible);
+          App.state.settings.pet = Object.assign({}, App.state.settings.pet, { enabled: on });
+          App.persist();
+          App.ui.toast(on ? '已打开桌面宠物' : '已隐藏桌面宠物');
+        }).catch(() => App.ui.toast('桌面宠物操作失败'));
+      });
 
       const notificationBtn = $('notificationBtn');
       const notificationPopover = $('notificationPopover');

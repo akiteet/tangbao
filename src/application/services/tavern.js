@@ -25,6 +25,7 @@
     previewWorldbookImport(input) { return call('tavernPreviewWorldbookImport', { ok: false }, input || {}); },
     importWorldbook(input) { return call('tavernImportWorldbook', { ok: false }, input || {}); },
     exportCharacter(input) { return call('tavernExportCharacter', { ok: false }, input || {}); },
+    exportAllCharacters(input) { return call('tavernExportAllCharacters', { ok: false }, input || {}); },
     listMemory(input) { return call('tavernListMemory', { ok: false, items: [] }, input || {}); },
     saveMemory(input) { return call('tavernSaveMemory', { ok: false }, input || {}); },
     deleteMemory(input) { return call('tavernDeleteMemory', { ok: false }, input || {}); },

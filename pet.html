@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>糖包 · 桌面宠物</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+    #pet-stage { position: absolute; inset: 0; }
+    #pet-stage canvas { display: block; width: 100%; height: 100%; }
+    /* v1.2.1 第九轮：app-region 原生拖动在「透明窗 + 点击穿透切换」组合下实测失灵（浮窗不透明、无穿透切换所以可行），
+       回退 JS 拖动——升级为绝对坐标(screenX)+rAF 合帧（pet:moveTo），窗口尺寸随缩放动态变化。 */
+    /* 聊天气泡：DOM 叠加在宠物上方 */
+    .pet-bubble {
+      position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%) translateY(4px);
+      max-width: 168px; padding: 6px 9px; border-radius: 10px;
+      background: rgba(30, 30, 34, 0.92); color: #f2f3f5;
+      font: 12px/1.45 system-ui, "Microsoft YaHei", sans-serif;
+      opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease;
+      word-break: break-all; text-align: left; z-index: 5;
+    }
+    .pet-bubble.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    /* 右键菜单 */
+    .pet-menu {
+      position: absolute; min-width: 120px; padding: 4px; border-radius: 8px;
+      background: rgba(30, 30, 34, 0.94); color: #eef0f2;
+      font: 12px system-ui, "Microsoft YaHei", sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.28);
+      z-index: 10; user-select: none;
+    }
+    .pet-menu button {
+      display: block; width: 100%; text-align: left; border: 0; background: transparent;
+      color: inherit; font: inherit; padding: 6px 10px; border-radius: 5px; cursor: pointer;
+    }
+    .pet-menu button:hover { background: rgba(255,255,255,.10); }
+    .pet-menu .sep { height: 1px; margin: 3px 4px; background: rgba(255,255,255,.12); }
+  </style>
+</head>
+<body>
+  <div id="pet-stage"></div>
+  <script type="module" src="src/renderer/pet/pet.js"></script>
+</body>
+</html>

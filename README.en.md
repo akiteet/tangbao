@@ -39,11 +39,11 @@ Tangbao does not lock you to a single model or cloud platform. Connect OpenAI, D
 - **Tangguan · Characters**: Manage character cards, isolated conversations, worldbooks, and controlled retrieval for long-running creative work.
 - **Custom modules**: Bring your own tools or web pages into the workspace through iframe / webview.
 
-### Three v1.2.0 highlights
+### Three v1.2.1 highlights
 
-- **Multi-character group chat**: Characters take turns, support explicit silence, preserve member attribution, and allow one member to be regenerated without rerunning the entire group.
-- **MCP tool extensions**: Connect standard MCP servers and bring local or remote tools into Tangma, with stdio, HTTP, project-level `.mcp.json`, and approval controls.
-- **In-app updates**: Check, download, and install new versions from Settings with less manual maintenance.
+- **Desktop pet**: A sprite companion living on your desktop that reacts to Tangma's activity; fixed position with dragging or full-screen free roaming, scaling, and custom import/removal.
+- **Faster Tangma execution**: Read-only operations run in parallel, large files are truncated on demand, and events are written in batches — quicker first response with fewer wasted steps; new execution timing profile (first-token latency and per-phase durations).
+- **Full-text search & approval memory**: Conversation search upgrades to SQLite FTS5; MCP approvals support "don't ask again this session / always allow", with authorized tools reviewable and revocable at any time.
 
 ## Designed For
 
@@ -57,7 +57,7 @@ Tangbao does not lock you to a single model or cloud platform. Connect OpenAI, D
 
 ### Install the application
 
-Download `tangbao-1.2.0-setup.exe` from [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest), then run the installer.
+Download `tangbao-1.2.1-setup.exe` from [GitHub Releases](https://github.com/akiteet/tangbao/releases/latest), then run the installer.
 
 ### Run from source
 
@@ -82,7 +82,7 @@ The Tangma local backend starts with the application. Use `npm run server` only 
 npm run dist
 ```
 
-The Windows installer is written to `dist/tangbao-1.2.0-setup.exe`. better-sqlite3 uses the Electron ABI; after changing dependencies or reinstalling them, run:
+The Windows installer is written to `dist/tangbao-1.2.1-setup.exe`. better-sqlite3 uses the Electron ABI; after changing dependencies or reinstalling them, run:
 
 ```bash
 npm run rebuild:electron
@@ -142,10 +142,10 @@ npm run check:sqlite
 npm run dist
 ```
 
-The application uses an Electron main process, a restricted preload bridge, and a vanilla HTML/CSS/JS renderer. See [docs/DATA_MODEL.md](docs/DATA_MODEL.md) for the SQLite schema, [docs/UI-SYSTEM.md](docs/UI-SYSTEM.md) for interface conventions, and [docs/CHANGELOG-v1.2.0.md](docs/CHANGELOG-v1.2.0.md) for the complete release record.
+The application uses an Electron main process, a restricted preload bridge, and a vanilla HTML/CSS/JS renderer. See [docs/DATA_MODEL.md](docs/DATA_MODEL.md) for the SQLite schema, [docs/UI-SYSTEM.md](docs/UI-SYSTEM.md) for interface conventions, and [docs/CHANGELOG-v1.2.1.md](docs/CHANGELOG-v1.2.1.md) for the complete release record.
 
 ## Version & License
 
-The current version is **v1.2.0**. Read the [v1.2.0 release notes](docs/CHANGELOG-v1.2.0.md) for the complete update; historical release notes are available in [docs/](docs/).
+The current version is **v1.2.1**. Read the [v1.2.1 release notes](docs/CHANGELOG-v1.2.1.md) for the complete update; historical release notes are available in [docs/](docs/).
 
 Tangbao is released under the [MIT License](LICENSE).

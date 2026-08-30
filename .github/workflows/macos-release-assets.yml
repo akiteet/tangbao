@@ -6,12 +6,12 @@ on:
       source_ref:
         description: Release tag or commit to package
         required: true
-        default: v1.2.0
+        default: v1.2.1
         type: string
       release_tag:
         description: Existing GitHub Release to receive the assets
         required: true
-        default: v1.2.0
+        default: v1.2.1
         type: string
 
 permissions:
@@ -67,7 +67,7 @@ jobs:
       - name: Upload macOS release assets
         uses: actions/upload-artifact@v4
         with:
-          name: tangbao-v1.2.0-macos-${{ matrix.arch }}
+          name: tangbao-v1.2.1-macos-${{ matrix.arch }}
           path: |
             dist/tangbao-*.dmg
             dist/tangbao-*.zip

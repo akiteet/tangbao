@@ -99,8 +99,18 @@ safeHandle('tavern:previewImport', async (_e, input) => {
       filePath = picked.filePaths[0];
     }
     const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > TavernCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tavern_import_too_large', error: 'Character card JSON must be no larger than 5MB.' };
+    // 批次 8：合集文件（全部导出）放宽到 30MB；单卡仍 5MB——解析后再按格式分流
+    if (!stat.isFile() || stat.size > TavernCore.MAX_BUNDLE_IMPORT_FILE_BYTES) return { ok: false, code: 'tavern_import_too_large', error: 'Character card JSON must be no larger than 5MB (30MB for bundles).' };
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (TavernCore.isBundleImport(parsed)) {
+      const inspected = TavernCore.inspectBundleImport(parsed);
+      if (!inspected.count) return { ok: false, code: 'tavern_import_bundle_empty', error: '没有可导入的角色卡。', warnings: inspected.warnings };
+      const previewId = 'tgb_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
+      tavernImportPreviews.set(previewId, { bundle: parsed, isBundle: true, expiresAt: Date.now() + 10 * 60 * 1000 });
+      for (const [key, value] of tavernImportPreviews) if (!value || value.expiresAt < Date.now()) tavernImportPreviews.delete(key);
+      return { ok: true, preview: true, previewId, bundle: true, count: inspected.count, skipped: inspected.skipped, names: inspected.cards.map((c) => c.name), warnings: inspected.warnings };
+    }
+    if (stat.size > TavernCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tavern_import_too_large', error: 'Character card JSON must be no larger than 5MB.' };
     const preview = TavernCore.inspectImport(parsed);
     if (preview.tooLarge) return { ok: false, code: 'tavern_card_too_large', error: 'Character card JSON must be no larger than 256KB.', bytes: preview.bytes, maxBytes: preview.maxBytes };
     const previewId = 'tgp_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
@@ -116,6 +126,7 @@ safeHandle('tavern:importCharacter', async (_e, input) => {
       const pending = tavernImportPreviews.get(String(opts.previewId));
       if (!pending || pending.expiresAt < Date.now()) return { ok: false, code: 'tavern_import_preview_expired', error: 'Import preview expired. Please choose the file again.' };
       tavernImportPreviews.delete(String(opts.previewId));
+      if (pending.isBundle) return getTavernStore().importBundleAll(pending.bundle, opts.expectedRevision);
       return getTavernStore().importBundle(pending.bundle, opts.expectedRevision);
     }
     let filePath = String(opts.filePath || '');
@@ -125,8 +136,10 @@ safeHandle('tavern:importCharacter', async (_e, input) => {
       filePath = picked.filePaths[0];
     }
     const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > TavernCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tavern_import_too_large', error: 'Character card JSON must be no larger than 5MB.' };
+    if (!stat.isFile() || stat.size > TavernCore.MAX_BUNDLE_IMPORT_FILE_BYTES) return { ok: false, code: 'tavern_import_too_large', error: 'Character card JSON must be no larger than 5MB (30MB for bundles).' };
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (TavernCore.isBundleImport(parsed)) return getTavernStore().importBundleAll(parsed, opts.expectedRevision);
+    if (stat.size > TavernCore.MAX_IMPORT_FILE_BYTES) return { ok: false, code: 'tavern_import_too_large', error: 'Character card JSON must be no larger than 5MB.' };
     const preview = TavernCore.inspectImport(parsed);
     if (preview.tooLarge) return { ok: false, code: 'tavern_card_too_large', error: 'Character card JSON must be no larger than 256KB.', bytes: preview.bytes, maxBytes: preview.maxBytes };
     return getTavernStore().importBundle(parsed, opts.expectedRevision);
@@ -213,6 +226,21 @@ safeHandle('tavern:exportCharacter', async (_e, input) => {
     writeStateFileAtomic(picked.filePath, JSON.stringify(TavernCore.exportBundle(item.character, item.memories), null, 2));
     return { ok: true, filePath: picked.filePath };
   } catch (error) { return { ok: false, code: 'tavern_export_failed', error: error.message || String(error) }; }
+});
+// v1.2.1 批次 8：全部导出——整库 characters+memories 打包为合集 JSON（重导入走 tavern:previewImport 自动识别）
+safeHandle('tavern:exportAllCharacters', async () => {
+  try {
+    const state = getTavernStore().load();
+    const characters = Array.isArray(state.characters) ? state.characters : [];
+    if (!characters.length) return { ok: false, code: 'tavern_library_empty', error: '角色库是空的，没有可导出的角色卡。' };
+    const bundle = TavernCore.exportAllBundle(characters, state.memories);
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const picked = await dialog.showSaveDialog(mainWindow(), { title: '导出全部角色卡', defaultPath: `tangbao-characters-${stamp}.json`, filters: [{ name: '角色卡合集 JSON', extensions: ['json'] }] });
+    if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+    const content = JSON.stringify(bundle, null, 2);
+    writeStateFileAtomic(picked.filePath, content);
+    return { ok: true, filePath: picked.filePath, count: bundle.count, bytes: Buffer.byteLength(content, 'utf8') };
+  } catch (error) { return { ok: false, code: 'tavern_export_all_failed', error: error.message || String(error) }; }
 });
 safeHandle('tavern:listMemory', (_e, input) => {
   try { const opts = input && typeof input === 'object' ? input : {}; return getTavernStore().listMemory(opts.characterId, opts); }

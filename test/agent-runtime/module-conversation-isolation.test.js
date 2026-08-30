@@ -205,7 +205,6 @@ test('failed migration still partitions module records in renderer memory', () =
   const app = read('src/renderer/app.js');
   assert.match(app, /function splitLegacyModuleSessions\(conversations\)/);
   assert.match(app, /App\.state\.conversations = split\.normal/);
-  assert.match(app, /safeState\.conversations = split\.normal/);
   assert.match(app, /App\.moduleSessions\.status = 'failed'/);
 });
 

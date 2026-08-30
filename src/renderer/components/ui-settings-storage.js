@@ -313,7 +313,9 @@
         const cacheText = cache.hitRate == null ? 'Cache 未知' : 'Cache ' + (cache.hitRate * 100).toFixed(1) + '%';
         const tokens = item.inputTokens == null && item.outputTokens == null ? 'Token 未知' : (item.inputTokens == null ? '?' : item.inputTokens) + '/' + (item.outputTokens == null ? '?' : item.outputTokens) + ' tok';
         const cost = item.costUsd == null ? '成本未知' : '$' + item.costUsd;
-        const latency = item.firstByteLatencyMs == null && item.responseLatencyMs == null ? (item.latencyMs == null ? '延迟未知' : item.latencyMs + ' ms') : '首字节 ' + (item.firstByteLatencyMs == null ? '未知' : item.firstByteLatencyMs + ' ms') + ' · 完整 ' + (item.responseLatencyMs == null ? '未知' : item.responseLatencyMs + ' ms');
+        // v1.2.1 批次 13a：糖码 agent 调用回报 TTFT（首字延迟）；聊天路径沿用 firstByteLatencyMs
+        const fb = item.ttftMs != null ? item.ttftMs : item.firstByteLatencyMs;
+        const latency = fb == null && item.responseLatencyMs == null ? (item.latencyMs == null ? '延迟未知' : item.latencyMs + ' ms') : '首字 ' + (fb == null ? '未知' : fb + ' ms') + ' · 完整 ' + (item.responseLatencyMs == null ? '未知' : item.responseLatencyMs + ' ms');
         return `<div class="model-metric-row"><b>${App.escapeHtml(item.callType || item.scope || 'model')}</b><span>${App.escapeHtml(item.modelId || '未知模型')} · ${App.escapeHtml(item.status || 'unknown')}</span><em>${tokens} · ${cacheText} · ${cost} · ${latency}</em></div>`;
       }).join('');
     },

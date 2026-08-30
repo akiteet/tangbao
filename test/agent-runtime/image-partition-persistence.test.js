@@ -90,7 +90,7 @@ test('v1.1.8 生图模型的协议/策略/尺寸配置归一化后同样保留',
 });
 
 test('Schema v17 adds image partition columns to account_models', () => {
-  assert.equal(SCHEMA_VERSION, 17);
+  assert.equal(SCHEMA_VERSION, 18);
   const executed = [];
   const names = new Set(['account_id', 'name', 'context_window', 'caps']);
   const db = {

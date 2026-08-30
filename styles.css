@@ -408,6 +408,37 @@ img { max-width: 100%; }
    避免模型多时弹窗向下超出视口、滚轮落到消息区导致输入框错位上移 */
 .model-dropdown { min-width: 200px; max-height: 134px; overflow-y: auto; }
 .model-dropdown button.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+/* v1.2.1 批次 12：快捷短语弹窗——按钮在底部输入栏，通用 .dropdown 的 top:38px 向下弹会超出窗口底部被截断，
+   故改为向上弹 + 限高滚动（短语多时在弹窗内滚动，不盖输入框不错位）；
+   反馈修复：通用 .dropdown 的 right:0 会让弹窗自按钮向左伸 210px+，窗口较窄时左缘越出窗口被 .app 的
+   overflow:hidden 裁掉——改锚按钮左缘向右上展开（输入区空间充足，永不受窗口宽度影响） */
+.snippet-dropdown { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; min-width: 210px; max-height: 320px; overflow-y: auto; }
+.snippet-item { display: block; width: 100%; text-align: left; padding: var(--sp-2) var(--sp-3); background: transparent; border: none; border-radius: var(--radius-md); color: var(--text); font-size: var(--fs-base); cursor: pointer; }
+.snippet-item:hover { background: var(--hover-bg); }
+.snippet-item small { display: block; margin-top: 2px; color: var(--text-secondary); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snippet-empty { padding: var(--sp-2) var(--sp-3); color: var(--text-secondary); font-size: var(--fs-sm); }
+/* v1.2.1 第八轮：桌宠面板单行式——sc-controls 内控件宽度约束 */
+.sc-controls input[type="range"] { width: 150px; }
+.sc-controls select { max-width: 150px; }
+/* v1.2.1 第十二轮：桌宠预览（静态首帧 + 名称，横向单行） */
+.pet-preview { display: flex; align-items: center; gap: 12px; }
+.pet-preview img { width: 72px; height: 78px; object-fit: contain; background: var(--hover-bg); border-radius: var(--radius-md); flex: 0 0 auto; }
+.pet-preview-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pet-preview-info b { font-size: var(--fs-base); }
+.pet-preview-info small { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* v1.2.1 第十三轮：桌宠画廊（所有已添加宠物，横排小卡，点击选中高亮） */
+.pet-gallery { display: flex; gap: 10px; overflow-x: auto; padding: 2px; }
+.pet-gal-card { position: relative; flex: 0 0 auto; width: 88px; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 6px; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; transition: border-color var(--dur-fast, .15s) ease; }
+.pet-gal-card img { width: 72px; height: 78px; object-fit: contain; background: var(--hover-bg); border-radius: var(--radius-sm); }
+.pet-gal-card span { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); color: var(--text-secondary); }
+.pet-gal-card.active { border-color: var(--primary); }
+.pet-gal-card.active span { color: var(--primary); font-weight: 600; }
+/* 第十四轮反馈：导入宠物的移除按钮（悬停卡片浮现；内置宠物不渲染）。选择器带 .pet-gal-card
+   前缀以压过 .pet-gal-card span 的通配文字规则（同元素上的字号/颜色须以本规则为准） */
+.pet-gal-card .pet-gal-del { position: absolute; top: 2px; right: 3px; width: 18px; height: 18px; max-width: none; padding: 0; line-height: 16px; text-align: center; border-radius: 50%; border: 1px solid var(--border); background: var(--panel-bg); color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast, .15s) ease; }
+.pet-gal-card:hover .pet-gal-del, .pet-gal-card .pet-gal-del:focus { opacity: 1; }
+.pet-gal-card .pet-gal-del:hover { background: var(--danger-badge-bg, #fdecec); border-color: var(--danger, #d64545); color: var(--danger, #d64545); }
+.pet-gal-empty { color: var(--text-secondary); font-size: var(--fs-sm); padding: 4px 0; }
 
 .chat-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; position: relative; }
 .view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -3940,3 +3971,13 @@ button.chip:hover, button.pill-chip:hover { background: var(--active-bg); border
 .fk-chip input { position: absolute; opacity: 0; pointer-events: none; }
 .fk-chip:hover { border-color: var(--accent); color: var(--text); }
 .fk-chip:has(input:checked) { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* v1.2.1 批次 3：快捷键设置卡（可点击录入改键） */
+.shortcut-rows { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.sc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sc-label { font-size: var(--fs-sm); color: var(--text-secondary); }
+.sc-controls { display: inline-flex; align-items: center; gap: 6px; }
+.sc-key { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--fs-xs); padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-bg); color: var(--text); cursor: pointer; transition: border-color var(--dur-fast) var(--ease-smooth); }
+.sc-key:hover { border-color: var(--accent); }
+.sc-clear { border: none; background: none; color: var(--text-tertiary); cursor: pointer; padding: 2px 4px; font-size: var(--fs-sm); }
+.sc-clear:hover { color: var(--danger); }

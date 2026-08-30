@@ -44,6 +44,8 @@
           }).join('')}</div>`).join('') : '';
       // v2（UX）：影响文件与 Skill 来源上下文（渐进披露：默认一行，可展开）
       const toolLabel = (extra && extra.toolName) ? '<span class="agent-approval-bar-tag">' + App.escapeHtml(String(extra.toolName).replace(/_/g, ' ')) + '</span>' : '';
+      // v1.2.1 批次 6：MCP 工具识别（mcp__<serverId>__<tool>）——提供「本会话不再询问 / 永久允许此工具」
+      const isMcp = !!(extra && typeof extra.toolName === 'string' && extra.toolName.startsWith('mcp__'));
       const fileHint = (extra && (extra.filePath || extra.extraPath))
         ? '<div class="agent-approval-bar-meta">影响文件：<code>' + App.escapeHtml(String(extra.filePath || extra.extraPath)) + '</code></div>' : '';
       const attr = App.agent._lastAttribution;
@@ -68,6 +70,8 @@
         <div class="agent-approval-bar-ops">
           <button class="btn-primary mini" data-ap="allow_once" title="仅批准本次操作">批准</button>
           <button class="btn-ghost mini" data-ap="allow_run" title="本次任务内不再逐次询问">本任务免问</button>
+          ${isMcp ? '<button class="btn-ghost mini" data-ap="allow_session_tool" title="本次任务内该 MCP 工具不再询问">本会话不再询问</button>' +
+                    '<button class="btn-ghost mini" data-ap="allow_mcp_rule" title="永久允许该 MCP 工具（写入全局权限规则，可在 设置→提示词 撤销）">永久允许此工具</button>' : ''}
           ${App.agent.activeProject() && App.agent.activeProject().cwd
             ? '<button class="btn-ghost mini" data-ap="allow_rule" title="写入项目权限规则：该工具/命令总是允许（保存到 .tangbao/permissions.json）">总是允许</button>' +
               '<button class="btn-ghost mini danger" data-ap="reject_rule" title="写入项目权限规则：该工具/命令总是拒绝">总是拒绝</button>'
@@ -97,13 +101,37 @@
             if (!reason) { App.ui.toast('已按「拒绝」处理（未填写原因）'); }
           }
           bar.remove();
+          // v1.2.1 批次 6：MCP「永久允许此工具」——写全局权限规则（tool=mcp, pattern=serverId/toolName）+ 持久化，本次按批准处理
+          if (decision === 'allow_mcp_rule' && isMcp) {
+            const rest = String(extra.toolName).slice(5);
+            const sep = rest.indexOf('__');
+            const sid = sep > 0 ? rest.slice(0, sep) : '';
+            const tn = sep > 0 ? rest.slice(sep + 2) : '';
+            if (sid && tn) {
+              const settings = App.state.settings;
+              settings.permissionRules = Array.isArray(settings.permissionRules) ? settings.permissionRules : [];
+              settings.permissionRules.push({ id: App.uid(), tool: 'mcp', pattern: sid + '/' + tn, path: '', allow: true, force: false, scope: 'global' });
+              App.persist();
+              App.ui.toast('已永久允许 MCP 工具：' + sid + '/' + tn + '（可在 设置→提示词 撤销）');
+            }
+            decision = 'allow_once';
+          }
           // v2（权限大改）+G17（B1）：总是允许/总是拒绝/本任务免问——写项目规则（<cwd>/.tangbao/permissions.json）并即时生效
           if (decision === 'allow_rule' || decision === 'reject_rule' || decision === 'allow_run') {
             const proj = App.agent.activeProject();
             const tool = (extra && extra.toolName) ? extra.toolName : 'run_command';
-            const pattern = (tool === 'run_command' || tool === 'git_command') ? String(command || '') : '';
+            // v1.2.1 批次 6：MCP 规则形状修正——needsApproval 对 MCP 传 tool='mcp'/command=serverId/toolName，
+            // 此前写 { tool:'mcp__server__tool' } 永远匹配不上（总是允许对 MCP 静默失效）
+            let ruleTool = tool;
+            let pattern = (tool === 'run_command' || tool === 'git_command') ? String(command || '') : '';
+            if (typeof tool === 'string' && tool.startsWith('mcp__')) {
+              const rest = tool.slice(5);
+              const sep = rest.indexOf('__');
+              ruleTool = 'mcp';
+              pattern = sep > 0 ? rest.slice(0, sep) + '/' + rest.slice(sep + 2) : String(command || '').replace(/\s*\/\s*/g, '/');
+            }
             if (proj && proj.cwd) {
-              const rule = { id: App.uid(), tool, pattern, path: '', allow: decision !== 'reject_rule', force: false, scope: 'project' };
+              const rule = { id: App.uid(), tool: ruleTool, pattern, path: '', allow: decision !== 'reject_rule', force: false, scope: 'project' };
               const rules = [].concat(Array.isArray(proj.permissionRules) ? proj.permissionRules : [], [rule]);
               try {
                 await fetch(agentBase() + '/api/permissions', {

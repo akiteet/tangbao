@@ -62,7 +62,7 @@ class RoleRegistry {
 
   snapshot() {
     const roles = this.list().map((role) => ({ name: role.name, version: role.version, promptVersion: role.promptVersion, readOnly: role.readOnly, capabilities: role.capabilities.slice(), tools: role.tools.slice() }));
-    return { version: '1.2.0', fingerprint: crypto.createHash('sha256').update(stable(roles)).digest('hex'), roles };
+    return { version: '1.2.1', fingerprint: crypto.createHash('sha256').update(stable(roles)).digest('hex'), roles };
   }
 }
 

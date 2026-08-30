@@ -10,6 +10,8 @@
       return fn ? fn(input) : fallback;
     } catch (_) { return fallback; }
   };
+  // v1.2.1 批次 9：i18n 词条（tt = tavern translate；词典缺失时回落中文原词）
+  const tt = (key, fallback) => (App.i18n && typeof App.i18n.t === 'function') ? App.i18n.t(key, fallback) : fallback;
 
   let characters = [];
   let selectedId = '';
@@ -512,13 +514,14 @@
       return `<div class="tg-library-collapsed" aria-label="角色库已收起">
         <button type="button" class="tg-library-collapse-btn" data-tg-library-toggle aria-label="展开角色库" title="展开角色库"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button type="button" class="tg-library-collapsed-tab" data-tg-library-expand aria-label="展开角色库" title="角色库">角色</button>
-        <button type="button" class="tg-library-collapsed-tab" data-tg-library-expand aria-label="展开会话栏" title="会话">会话</button>
+        <button type="button" class="tg-library-collapsed-tab" data-tg-library-expand aria-label="展开会话栏" title="会话">${esc(tt('tg.libraryExpand', '会话'))}</button>
       </div>`;
     }
-    const tabsRow = (activeTab) => `<div class="tg-library-tabs"><button type="button" class="${activeTab === 'characters' ? 'active' : ''}" data-tg-library-tab="characters">角色</button><button type="button" class="${activeTab === 'sessions' ? 'active' : ''}" data-tg-library-tab="sessions">会话</button><button type="button" class="${activeTab === 'groups' ? 'active' : ''}" data-tg-library-tab="groups">群聊</button></div>`;
+    const tabsRow = (activeTab) => `<div class="tg-library-tabs"><button type="button" class="${activeTab === 'characters' ? 'active' : ''}" data-tg-library-tab="characters">${esc(tt('tg.tab.characters', '角色'))}</button><button type="button" class="${activeTab === 'sessions' ? 'active' : ''}" data-tg-library-tab="sessions">${esc(tt('tg.tab.sessions', '会话'))}</button><button type="button" class="${activeTab === 'groups' ? 'active' : ''}" data-tg-library-tab="groups">${esc(tt('tg.tab.groups', '群聊'))}</button></div>`;
     const headActions = `<span class="tg-library-head-actions"><button type="button" class="icon-btn tg-desktop-only" data-tg-library-toggle aria-label="收起角色库" title="收起角色库"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button type="button" class="icon-btn tg-mobile-only" data-tg-library-close aria-label="关闭">×</button></span>`;
     // v1.2.0：操作按钮在角色/会话/群聊三 tab 统一渲染；点击走视图根节点委托，无需新增绑定
-    const libraryFooter = `<div class="tg-library-footer"><button type="button" class="btn-ghost" data-tg-new>＋ 新建角色</button><button type="button" class="btn-ghost" data-tg-new-group>＋ 新建群聊</button><button type="button" class="btn-ghost" data-tg-import>导入角色卡</button></div>`;
+    // v1.2.1 批次 8：加「导出全部」（整库角色卡合集 JSON，可重导入）
+    const libraryFooter = `<div class="tg-library-footer"><button type="button" class="btn-ghost" data-tg-new>${esc(tt('tg.new', '＋ 新建角色'))}</button><button type="button" class="btn-ghost" data-tg-new-group>${esc(tt('tg.newGroup', '＋ 新建群聊'))}</button><button type="button" class="btn-ghost" data-tg-import>${esc(tt('tg.import', '导入角色卡'))}</button><button type="button" class="btn-ghost" data-tg-export-all>${esc(tt('tg.exportAll', '导出全部'))}</button></div>`;
     const search = $('tgDrawerLibrarySearch') || $('tgLibrarySearch');
     const query = String((search && search.value) || '').trim().toLowerCase();
     if (activeLibraryTab === 'groups') {
@@ -588,7 +591,7 @@
       return;
     }
     if (!selected) {
-      welcome.innerHTML = `<div class="tg-empty-state"><div class="tg-empty-mark">馆</div><h2>从一个角色开始</h2><p>创建或导入角色卡，开始一段沉浸式会话。</p><div><button type="button" class="btn-primary" data-tg-open-editor>新建角色</button><button type="button" class="btn-ghost" data-tg-import>导入角色卡</button></div></div>`;
+      welcome.innerHTML = `<div class="tg-empty-state"><div class="tg-empty-mark">馆</div><h2>${esc(tt('tg.emptyTitle', '从一个角色开始'))}</h2><p>${esc(tt('tg.emptyDesc', '创建或导入角色卡，开始一段沉浸式会话。'))}</p><div><button type="button" class="btn-primary" data-tg-open-editor>${esc(tt('tg.emptyNew', '新建角色'))}</button><button type="button" class="btn-ghost" data-tg-import>${esc(tt('tg.emptyImport', '导入角色卡'))}</button></div></div>`;
       return;
     }
     const greeting = selected.greeting || selected.firstMessage || '你好，今天想从哪里开始？';
@@ -604,6 +607,7 @@
     editorAvatarOverride = null;
     editorBase = kind === 'editor' ? cloneEditorValue(selected) : null;
     render();
+    if (kind === 'editor') startEditorFocusKeeper();
     editorSnapshot = kind === 'editor' ? editorSignature() : '';
   }
 
@@ -658,7 +662,28 @@
     cancelEditorDirtyCheck();
     editorDirty = false;
     editorBase = null;
+    stopEditorFocusKeeper();
     render();
+  }
+
+  // v1.2.1（批次 2）：编辑器焦点守护——render() 整体重建抽屉，异步回流（如 loadCharacters /
+  // 抽屉切换）会把刚聚焦的 tgName 节点换掉，焦点掉回 BODY（探针实测：新建后 600~1500ms 偶发）。
+  // 保护窗口内仅当焦点掉回 body 时把焦点还给 tgName，绝不抢用户主动聚焦的其他元素。
+  let editorFocusKeeperTimer = null;
+  function startEditorFocusKeeper() {
+    stopEditorFocusKeeper();
+    const until = Date.now() + 3000;
+    editorFocusKeeperTimer = setInterval(() => {
+      if (activeDrawer !== 'editor' || Date.now() > until) { stopEditorFocusKeeper(); return; }
+      const el = document.getElementById('tgName');
+      if (!el) return;
+      if (document.activeElement === document.body || document.activeElement === document.documentElement) {
+        try { el.focus(); } catch (_) {}
+      }
+    }, 250);
+  }
+  function stopEditorFocusKeeper() {
+    if (editorFocusKeeperTimer) { clearInterval(editorFocusKeeperTimer); editorFocusKeeperTimer = null; }
   }
 
   function render() {
@@ -1314,6 +1339,7 @@
              requestAnimationFrame(() => setTimeout(focusNameWhenReady, 60));
            };
            requestAnimationFrame(focusNameWhenReady);
+           startEditorFocusKeeper();
          });
          return;
        }
@@ -1363,12 +1389,33 @@
         try {
           const preview = await Promise.resolve(call('previewImport', { ok: false }, {}));
           if (!preview || !preview.ok) { if (!(preview && preview.canceled)) App.ui.toast((preview && preview.error) || '角色卡预览失败'); return; }
+          // v1.2.1 批次 8：合集（全部导出文件）分支——确认张数后整批导入
+          if (preview.bundle) {
+            const names = (preview.names || []).slice(0, 8).join('、');
+            const warning = (preview.warnings || []).join('\n');
+            const more = preview.count > 8 ? ` 等 ${preview.count} 张` : '';
+            const skipNote = preview.skipped ? `\n（跳过 ${preview.skipped} 张无效或超限卡）` : '';
+            if (!window.confirm(`导入角色卡合集：${names}${more}？${skipNote}${warning ? `\n\n${warning}` : ''}`)) return;
+            const result = await Promise.resolve(call('importCharacter', { ok: false }, { previewId: preview.previewId, expectedRevision: revision }));
+            if (result && result.ok) { App.ui.toast(`已导入 ${result.importedCount != null ? result.importedCount : preview.count} 张角色卡`); await loadCharacters(); }
+            else App.ui.toast((result && result.error) || '角色卡导入失败');
+            return;
+          }
           const cardData = preview.character || {};
           const warning = (preview.warnings || []).join('\n');
           if (!window.confirm(`导入“${cardData.name || '未命名角色'}”及 ${(preview.memories || []).length} 条世界书？${warning ? `\n\n${warning}` : ''}`)) return;
           const result = await Promise.resolve(call('importCharacter', { ok: false }, { previewId: preview.previewId, expectedRevision: revision }));
           if (result && result.ok) { App.ui.toast('角色卡已导入'); await loadCharacters(result.characterId); }
           else App.ui.toast((result && result.error) || '角色卡导入失败');
+        } finally { button.disabled = false; }
+        return;
+      }
+      if (target.closest('[data-tg-export-all]')) {
+        const button = target.closest('[data-tg-export-all]'); button.disabled = true;
+        try {
+          const result = await Promise.resolve(call('exportAllCharacters', { ok: false }, {}));
+          if (result && result.ok) App.ui.toast(`已导出 ${result.count} 张角色卡`);
+          else if (!result || !result.canceled) App.ui.toast((result && result.error) || '导出失败');
         } finally { button.disabled = false; }
         return;
       }
@@ -1594,4 +1641,14 @@
       return prompt;
     },
   };
+
+  // v1.2.1 批次 9：语言切换时重渲染糖馆视图（动态模板里的词条才会跟着换）
+  try {
+    document.addEventListener('i18n:changed', () => {
+      try {
+        const viewEl = document.querySelector('.view[data-view="tavern"]');
+        if (typeof render === 'function' && viewEl && !viewEl.hidden) render();
+      } catch (_) {}
+    });
+  } catch (_) {}
 })();

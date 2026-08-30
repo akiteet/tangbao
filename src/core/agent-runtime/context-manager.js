@@ -162,9 +162,30 @@ function rebuildSafeMessages(messages, options) {
   return { messages: rebuilt, summary, tokenCount: TokenEstimator.estimateTokens(rebuilt) };
 }
 
+// v1.2.1 批次 13c：窗口护栏增量估算——护栏每步前后各调一次（每个工具结果后还会再调），
+// 旧实现每次对整份 messages 全量 JSON+BPE 计数（大上下文一次上百 ms 纯 CPU 串行阻塞）。
+// 消息数组只会尾部追加（压缩重建时整体缩短→缓存自然失效），追加部分按消息逐条求和：
+// 与整包 JSON 计数的差异仅为每条 1-2 个 JSON 分隔符 token，对 72%/88%/97% 压力阈值判定无影响。
+const _windowTokenMemo = new WeakMap(); // messages 数组引用 -> { count, tokens }
+function estimateWindowTokens(messages) {
+  const arr = Array.isArray(messages) ? messages : null;
+  if (!arr) return TokenEstimator.estimateTokens(messages);
+  const cached = _windowTokenMemo.get(arr);
+  if (cached && arr.length > cached.count) {
+    let add = 0;
+    for (let i = cached.count; i < arr.length; i++) add += TokenEstimator.estimateTokens(arr[i]);
+    const tokens = cached.tokens + add;
+    _windowTokenMemo.set(arr, { count: arr.length, tokens });
+    return tokens;
+  }
+  const tokens = TokenEstimator.estimateTokens(arr);
+  _windowTokenMemo.set(arr, { count: arr.length, tokens });
+  return tokens;
+}
+
 function enforceWindow(messages, contextWindow, options) {
   const budget = budgetForModel(contextWindow, options);
-  const beforeTokens = TokenEstimator.estimateTokens(messages);
+  const beforeTokens = estimateWindowTokens(messages);
   const pressure = decidePressure(beforeTokens, budget);
   if (pressure === 'normal' || pressure === 'precompress') return { triggered: false, pressure, messages, budget, beforeTokens, afterTokens: beforeTokens };
   const opts = Object.assign({}, options || {});

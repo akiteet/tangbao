@@ -11,6 +11,10 @@ const FORMAT = 'tangbao-character';
 const VERSION = 1;
 const MAX_CARD_BYTES = 256 * 1024;
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
+// v1.2.1 批次 8：全量导出合集格式。多卡 + 头像 dataURL 体量远超单卡，文件读取上限放宽到 30MB；
+// 单卡 256KB 闸（MAX_CARD_BYTES）在合集导入时逐卡照常生效，超限卡跳过不阻断整批。
+const BUNDLE_FORMAT = 'tangbao-character-bundle';
+const MAX_BUNDLE_IMPORT_FILE_BYTES = 30 * 1024 * 1024;
 
 const PRESET_LIST = [
   {
@@ -415,6 +419,34 @@ function inspectImport(input) {
   return { character: imported.character, memories: imported.memories, warnings, mature: warnings.some((item) => /mature/i.test(item)), bytes, maxBytes: MAX_CARD_BYTES, tooLarge };
 }
 
+// ---- v1.2.1 批次 8：角色卡合集（全部导出 / 重导入回环） ----
+function isBundleImport(input) {
+  return !!(input && typeof input === 'object' && input.format === BUNDLE_FORMAT && Array.isArray(input.characters));
+}
+
+function exportAllBundle(characters, memories) {
+  const allMemories = Array.isArray(memories) ? memories : [];
+  const cards = (Array.isArray(characters) ? characters : []).map((item) => exportBundle(item, allMemories.filter((m) => m && m.characterId === (item && item.id))));
+  return { format: BUNDLE_FORMAT, version: 1, exportedAt: Date.now(), count: cards.length, characters: cards };
+}
+
+function inspectBundleImport(input) {
+  if (!isBundleImport(input)) return { ok: false, error: 'Not a tangbao character bundle.' };
+  const warnings = [];
+  const cards = [];
+  let skipped = 0;
+  for (const item of input.characters) {
+    if (!item || typeof item !== 'object') { skipped++; warnings.push('跳过 1 个无效条目。'); continue; }
+    try {
+      const imported = importBundle(item);
+      const bytes = characterCardBytes(imported.character, imported.memories);
+      if (bytes > MAX_CARD_BYTES) { skipped++; warnings.push(`「${imported.character.name || '未命名角色'}」超过单卡 256KB 上限，导入时跳过。`); continue; }
+      cards.push({ character: imported.character, memories: imported.memories, bytes, name: imported.character.name || '' });
+    } catch (_) { skipped++; warnings.push('跳过 1 个无法解析的角色卡。'); }
+  }
+  return { ok: true, count: cards.length, skipped, cards, warnings };
+}
+
 function characterCardBytes(character, memories) {
   const card = normalizeCharacter(character);
   const book = (Array.isArray(memories) ? memories : []).map((item) => normalizeMemory(item, card.id));
@@ -424,8 +456,10 @@ function characterCardBytes(character, memories) {
 module.exports = {
   FORMAT,
   VERSION,
+  BUNDLE_FORMAT,
   MAX_CARD_BYTES,
   MAX_IMPORT_FILE_BYTES,
+  MAX_BUNDLE_IMPORT_FILE_BYTES,
   PRESETS,
   id,
   normalizeCharacter,
@@ -434,10 +468,13 @@ module.exports = {
   retrieveMemories,
   formatContext,
   exportBundle,
+  exportAllBundle,
   importWorldbook,
   inspectWorldbookImport,
   importBundle,
   inspectImport,
+  isBundleImport,
+  inspectBundleImport,
   characterCardBytes,
   tokenize,
   stableHash,

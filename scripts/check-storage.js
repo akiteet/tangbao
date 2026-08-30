@@ -25,7 +25,7 @@ function main() {
     assert(typeof dataLocation.verifyMigration === 'function', 'verifyMigration is missing');
     assert(typeof dataLocation.cleanupPreview === 'function', 'cleanupPreview is missing');
     assert(typeof dataLocation.cleanupLegacy === 'function', 'cleanupLegacy is missing');
-    assert(SCHEMA_VERSION === 17, 'Schema must remain v17'); // v1.1.8：image_model/image_extra 列迁移后守卫随版本推进
+    assert(SCHEMA_VERSION === 18, 'Schema must remain v18'); // v1.2.1：FTS5 全文索引（messages_fts）迁移后守卫随版本推进
     const unknown = normalizeCacheMetrics({ source: 'unknown', dataOrigin: 'unknown' });
     assert(unknown.cacheReadTokens === null && unknown.hitRate === null, 'unknown cache metrics must remain null');
     console.log(JSON.stringify({ ok: true, schemaVersion: SCHEMA_VERSION, recordsRoot: info.recordsRoot, totalBytes: info.totalBytes }, null, 2));

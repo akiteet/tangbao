@@ -512,6 +512,7 @@
         doc: { summary: '', points: '', translate: '', outline: '' }, // 糖读分析提示
       },
       floatKit: { welcome: false, think: false, web: false, modelSelect: false, images: false, attachments: false, menu: false, ctxBar: false, msgActions: false, disclaimer: false }, // v1.2.0：浮窗装配（true=显示该块；默认全关=极简形态）
+      promptSnippets: [], // v1.2.1 批次 7：提示词快捷短语库 [{ id, title, content }]，全模块共用
       appearance: { mode: 'system', accent: '', radius: '' }, // 外观主题：mode=light|dark|system
       enabledModules: ['chat', 'image', 'doc', 'create', 'tavern', 'agent'], // 启用的内置模块
       customModules: [],         // 用户自定义模块 [{ id, label, url, forceEmbed, hidden }]
@@ -530,6 +531,8 @@
       mcp: { servers: [] },
       // v1.2.0 批次 6a：快捷键（app=应用内组合键，global=全局加速键；默认值在 ShortcutsCore，归一化时回填）
       shortcuts: { app: {}, global: {} },
+      // v1.2.1 批次 12：桌面宠物（主窗设置卡可见；实际开关/位置由主进程 pet-state.json 记忆，此处仅为 UI 展示/归一化）
+      pet: { enabled: false, petId: 'fat-guga', scale: 1, roamMode: 'free', alwaysOnTop: true },
     },
     agentThreads: [],            // 糖码多会话线程：[{ id, projectId, title, updatedAt, history:[{role, content}] }]，持久化
     activeThreadId: null,        // 当前激活的糖码会话线程 id
@@ -699,6 +702,12 @@
         translate: psPrompts.doc.translate || '', outline: psPrompts.doc.outline || '',
       } : { summary: '', points: '', translate: '', outline: '' },
     };
+    // v1.2.1 批次 7：提示词快捷短语库归一化（白名单 {id,title,content}；漏字段会被剥离——v1.1.6 教训适用）
+    ns.settings.promptSnippets = (Array.isArray(ps.promptSnippets) ? ps.promptSnippets : [])
+      .filter((s) => s && typeof s === 'object')
+      .slice(0, 100)
+      .map((s) => ({ id: String(s.id || App.uid()).slice(0, 64), title: String(s.title || '').slice(0, 80), content: String(s.content || '').slice(0, 8000) }))
+      .filter((s) => s.title || s.content);
     // 外观主题
     const psAp = (ps.appearance && typeof ps.appearance === 'object') ? ps.appearance : {};
     ns.settings.appearance = {
@@ -719,6 +728,16 @@
       ctxBar: psKit.ctxBar === true,
       msgActions: psKit.msgActions === true,
       disclaimer: psKit.disclaimer === true,
+    };
+    // v1.2.1 批次 12：桌面宠物设置归一化（enabled/petId/scale/roamMode/alwaysOnTop；
+    // roamMode 第十三轮：'free' 全屏漫游 | 'fixed' 固定位置，兼容旧布尔 roam 迁移）
+    const psPet = (ps.pet && typeof ps.pet === 'object') ? ps.pet : {};
+    ns.settings.pet = {
+      enabled: psPet.enabled === true,
+      petId: typeof psPet.petId === 'string' && psPet.petId ? String(psPet.petId).slice(0, 64) : 'fat-guga',
+      scale: Math.min(2.5, Math.max(0.4, Number.isFinite(Number(psPet.scale)) ? Number(psPet.scale) : 1)),
+      roamMode: psPet.roamMode === 'fixed' ? 'fixed' : (psPet.roam === false ? 'fixed' : 'free'),
+      alwaysOnTop: psPet.alwaysOnTop !== false,
     };
     // 模块开关 / 自定义模块（保留用户自定义顺序，仅过滤非法 id）
     const allBuiltin = ['chat', 'image', 'doc', 'create', 'tavern', 'agent'];

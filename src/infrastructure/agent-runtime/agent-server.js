@@ -26,6 +26,7 @@ module.exports = {
   applyPatchToContent: runtime.applyPatchToContent,
   validateExpectedHashes: runtime.validateExpectedHashes,
   lineDiff: runtime.lineDiff,
+  setAgentEventObserver: runtime.setAgentEventObserver, // v1.2.1 批次 12：桌面宠物 AI 事件桥
 };
 
 if (require.main === module) {

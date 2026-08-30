@@ -109,6 +109,8 @@ function createApprovalDecision(deps) {
     const auth = (permCtx && permCtx.runAuth) ? permCtx.runAuth : null;
     if (auth ? auth.approvedRun : getFallbackRunApproved()) return false;
     if (filePath && (auth ? auth.approvedFiles.has(filePath) : getFallbackApprovedFiles().has(filePath))) return false;
+    // 3.5 会话级工具授权（v1.2.1 批次 6：MCP「本会话不再询问」按 run 隔离；键 = toolName|command）
+    if (auth && auth.approvedTools && auth.approvedTools.has(toolName + '|' + String(command || ''))) return false;
     // 4. reject 规则（项目→全局）命中 → 审批/拒绝（G17 B2：过期/model 级规则由 matchRule 内部判定）
     if (permCtx) {
       const allRules = (permCtx.projectRules || []).concat(permCtx.globalRules || []);
@@ -132,6 +134,17 @@ function createApprovalDecision(deps) {
       for (const r of permCtx.projectRules || []) { if (r.allow === true && matchRule(r, toolName, command, filePath, permCtx.model)) return false; }
       for (const r of permCtx.globalRules || []) { if (r.allow === true && matchRule(r, toolName, command, filePath, permCtx.model)) return false; }
     }
+    // v1.2.1 批次 13：旧「总是允许」规则形状兼容——批次 6 之前写入的 {tool:'mcp__server__tool'}
+    // 与 needsApproval 传参 tool='mcp' 永远匹配不上，老用户已授权的工具会静默失效、每次重新弹审批。
+    if (toolName === 'mcp' && permCtx) {
+      const cmdStr = String(command || '');
+      const slash = cmdStr.indexOf('/');
+      if (slash > 0) {
+        const legacyId = 'mcp__' + cmdStr.slice(0, slash) + '__' + cmdStr.slice(slash + 1);
+        const legacyAllow = (permCtx.projectRules || []).concat(permCtx.globalRules || []).some((r) => r && r.allow === true && r.tool === legacyId);
+        if (legacyAllow) return false;
+      }
+    }
     // 旧 cmdWhitelist 兼容（未迁移时的旧字段）
     if ((toolName === 'run_command' || toolName === 'git_command') && Array.isArray(cmdWhitelist) && cmdWhitelist.length) {
       const cmdLower = String(command || '').toLowerCase().trim();
@@ -151,13 +164,17 @@ function createApprovalDecision(deps) {
     if (mode === 'acceptEdits') {
       if (TOOL_RISK.workspace_write.includes(toolName)) return false; // 编辑自动
       if (toolName === 'run_command' || toolName === 'git_command' || toolName === 'run_tests' || toolName === 'run_lint' || toolName === 'run_typecheck' || toolName === 'run_build' || toolName === 'run_skill_script') return true;
+      // v1.2.1 批次 6：MCP 外部工具默认需审批（此前 classifyRisk 把它归 read_only，审批从不触发）
+      if (toolName === 'mcp') return true;
       return false;
     }
-    if (mode === 'auto' || mode === 'sandbox') { // v2（P2-6）：sandbox 同 auto——危险命令已由第 5 步拦截；网络/越界由 runTool 硬拒
-      // 风险已被第 5 步拦截；auto/sandbox 默认放行
+    if (mode === 'auto') {
+      // 完全自主：不审批（auto 为全自主语义，MCP 同放行）
+    } else if (mode === 'sandbox') {
+      if (toolName === 'mcp') return true; // 沙箱内 MCP 外部调用默认需审批
     } else if (mode === 'default') {
       if (TOOL_RISK.workspace_write.includes(toolName) || TOOL_RISK.process_execution.includes(toolName)
-        || toolName === 'git_command' || toolName === 'run_subagent') return true;
+        || toolName === 'git_command' || toolName === 'run_subagent' || toolName === 'mcp') return true;
     }
     // 10. approveTools 兼容（旧字段强制审批）
     if (Array.isArray(approveTools) && approveTools.includes(toolName)) return true;

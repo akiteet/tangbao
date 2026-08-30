@@ -1,23 +1,24 @@
 # 糖包数据模型（Data Model）
 
-> 本文档描述糖包 **v1.2.0** 的持久化结构（Schema v16 / 23 张表），面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
-> 配套阅读：[v1.2.0 发布说明](./CHANGELOG-v1.2.0.md)与[跨模块历史成果](./CROSS_MODULE.md)。
+> 本文档描述糖包 **v1.2.1** 的持久化结构（Schema v18 / 24 张表），面向开发者，以及想理解「我的数据到底存在哪、长什么样」的用户。
+> 配套阅读：[v1.2.1 发布说明](./CHANGELOG-v1.2.1.md)与[跨模块历史成果](./CROSS_MODULE.md)。
 
 ---
 
 ## 1. 概览
 
-糖包的数据以 **SQLite（better-sqlite3）为权威源**，另有两份辅助持久化：`state.json`（可读双写副本，便于查看与备份）与 `workspaces.json`（工作区注册表）；API 密钥一律存操作系统密钥库（`secrets/kvstore.js`），明文绝不落盘。
+糖包的数据以 **SQLite（better-sqlite3）为权威源**，另有两份辅助持久化：`state.json`（可读双写副本，便于查看与备份）与 `workspaces.json`（工作区注册表）；桌宠状态单独存于 `pet-state.json`；API 密钥一律存操作系统密钥库（`secrets/kvstore.js`），明文绝不落盘。
 
 | 载体 | 路径 | 角色 |
 |---|---|---|
 | SQLite 数据库 | `activeRoot/tangbao-data/tangbao.db` | **权威源**：对话、消息、账户、项目、糖码运行等全部结构化数据 |
 | 状态双写副本 | `activeRoot/tangbao-data/state.json` | 便于人工查看/备份的只读副本，由主进程随状态变化刷新 |
 | 工作区注册表 | `activeRoot/workspaces.json` | `workspaceId ↔ { cwd, name }` 映射 |
+| 桌宠状态 | `activeRoot/tangbao-data/pet-state.json` | 桌宠开关/选择/缩放/位置模式与位置记忆（开关真相信主进程，启动默认关） |
 | 密钥库 | `activeRoot/tangbao-data/secrets.json` | API Key 等敏感值，`safeStorage` 加密（Windows DPAPI / macOS Keychain / Linux libsecret） |
 | localStorage | 渲染进程 | **已废弃**（v1.0.6 之前的主存储；v1.0.7 起不再作为数据源） |
 
-- 数据库 Schema 版本：**`SCHEMA_VERSION = 16`**（`src/core/schemas/db-schema.js`），通过 SQLite `PRAGMA user_version` 顺序执行迁移（见第 5 节）。
+- 数据库 Schema 版本：**`SCHEMA_VERSION = 18`**（`src/core/schemas/db-schema.js`），通过 SQLite `PRAGMA user_version` 顺序执行迁移（见第 5 节）。
 - 任何位置都不存 API Key 明文。
 
 ### 1.1 数据目录布局
@@ -28,7 +29,7 @@
 
 ---
 
-## 2. 表清单（23 张）
+## 2. 表清单（24 张）
 
 ### 2.1 核心业务表（14 张，migration0 建表）
 
@@ -73,6 +74,12 @@
 | `agent_run_metrics` | run_id, root_run_id, steps, tool_calls, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, queue_wait_ms, process_ms, recovery_rate, error_breakdown_json | Agent Run 汇总指标、缓存与成本影响 |
 | `model_call_metrics` | id, run_id, root_run_id, scope, call_type, model_id, provider, request_id, input_tokens, output_tokens, cache_json, cost_usd, latency_ms, queue_wait_ms, status, error_type | Chat / Agent / Image / Documents / Workflow / Cache Probe 的统一模型调用指标 |
 
+### 2.5 全文检索（1 张虚拟表，migration17 / Schema v18；刻意不进 `TABLES`）
+
+| 表 | 关键列 | 职责 |
+|---|---|---|
+| `messages_fts` | content（FTS5 trigram 虚拟表） | 会话消息全文索引：搜索前按需整表重建（kv_meta `fts_dirty` 标脏），短查询与通配符语义回退 LIKE |
+
 ---
 
 ## 3. 糖码运行数据的用途
@@ -87,7 +94,7 @@
 
 ## 4. 迁移机制
 
-- 版本号：`SCHEMA_VERSION = 16`（`src/core/schemas/db-schema.js`）。
+- 版本号：`SCHEMA_VERSION = 18`（`src/core/schemas/db-schema.js`）。
 - 启动时读取 `PRAGMA user_version`，按 `MIGRATIONS[当前..]` 顺序执行，每步在事务内提交并 `user_version + 1`（`src/infrastructure/storage/sqlite-store.js`）。
 - 迁移历史要点：
   - `0 → 1`：建全部核心表（DDL 幂等）
@@ -105,6 +112,8 @@
   - `13 → 14`：多根工作区（projects.roots_json / primary_root_id，agent_runs 快照与指纹，changesets.root_id）
   - `14 → 15`：Continuation 谱系（continued_from_run_id / root_run_id / continuation_index / root_scope_json + thread 草稿任务范围）
   - `15 → 16`：Run 版本追踪（prompt_version / toolset_version / runtime_version）与运行、模型调用指标表
+  - `16 → 17`：账户模型分区落库（account_models.image_model / image_extra）
+  - `17 → 18`：`messages_fts` 全文索引虚拟表（FTS5 trigram）+ kv_meta 标记（`fts_max_rowid` / `fts_dirty`，写入标脏、搜索前按需整表重建）
 
 ---
 

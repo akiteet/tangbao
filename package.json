@@ -1,6 +1,6 @@
 {
   "name": "tangbao-web",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "糖包 Tangbao — 本地优先、私密可控的 AI 工作空间",
   "author": "Tangbao Project",
@@ -24,6 +24,7 @@
     "rebuild:electron": "node scripts/rebuild-better-sqlite3-electron.js",
     "check:ui": "node scripts/check-ui-consistency.js && electron scripts/ui-smoke-app",
     "check:release": "node scripts/check-release.js",
+    "check:package": "node scripts/check-package.js",
     "check:ui-consistency": "node scripts/check-ui-consistency.js"
   },
   "build": {
@@ -39,6 +40,7 @@
       "src/**/*",
       "index.html",
       "splash.html",
+      "pet.html",
       "styles.css",
       "assets/**/*",
       "vendor/**/*",

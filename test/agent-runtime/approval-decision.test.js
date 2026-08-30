@@ -91,3 +91,29 @@ test('第六刀导出面：工厂产物包含全部迁移符号且 TOOL_RISK 枚
   }
   assert.deepEqual(Object.keys(TOOL_RISK), ['read_only', 'workspace_write', 'process_execution', 'network_access', 'destructive', 'git']);
 });
+
+test('批次6：MCP 默认需审批（default/acceptEdits/sandbox），auto 自主放行', () => {
+  const base = { approvedRun: false, approvedFiles: new Set() };
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', false, [], [], null, { mode: 'default', runAuth: base }), true, 'default 模式 MCP 默认需审批');
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', false, [], [], null, { mode: 'acceptEdits', runAuth: base }), true, 'acceptEdits 模式 MCP 默认需审批');
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', false, [], [], null, { mode: 'sandbox', runAuth: base }), true, 'sandbox 模式 MCP 默认需审批');
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', true, [], [], null, { mode: 'auto', runAuth: base }), false, 'auto 模式 MCP 免审批（全自主语义）');
+});
+
+test('批次6：MCP 会话级工具授权（本会话不再询问）——approvedTools 命中即放行', () => {
+  const perm = { mode: 'default', runAuth: { approvedRun: false, approvedFiles: new Set(), approvedTools: new Set(['mcp|filesystem/read_file']) } };
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', false, [], [], null, perm), false, '命中已授权 MCP 工具应放行');
+  assert.equal(needsApproval('mcp', 'filesystem/other_tool', false, [], [], null, perm), true, '未授权 MCP 工具仍应审批');
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', false, [], [], null, { mode: 'default', runAuth: { approvedRun: false, approvedFiles: new Set() } }), true, '无 approvedTools 时仍应审批');
+});
+
+test('批次6：全局 allow 规则放行 MCP（永久允许此工具 → 规则引擎放行）', () => {
+  const perm = {
+    mode: 'default',
+    runAuth: { approvedRun: false, approvedFiles: new Set() },
+    projectRules: [],
+    globalRules: [{ tool: 'mcp', pattern: 'filesystem/read_file', allow: true, scope: 'global' }],
+  };
+  assert.equal(needsApproval('mcp', 'filesystem/read_file', false, [], [], null, perm), false, '全局 allow 规则命中应放行');
+  assert.equal(needsApproval('mcp', 'filesystem/other', false, [], [], null, perm), true, '未命中规则的 MCP 工具仍审批');
+});

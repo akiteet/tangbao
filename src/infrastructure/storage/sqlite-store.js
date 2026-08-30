@@ -28,10 +28,12 @@ const stmt = {};
 const j = (v) => (v === undefined ? null : JSON.stringify(v));
 const u = (s) => { if (s == null) return null; try { return JSON.parse(s); } catch (_) { return null; } };
 
-function packTelemetry(cache, cost, attribution) {
+function packTelemetry(cache, cost, attribution, timing) {
   const payload = cache && typeof cache === 'object' ? Object.assign({}, cache) : {};
   if (cost) payload.cost = normalizeCost(cost);
   if (attribution) payload.attribution = normalizeAttribution(attribution);
+  // v1.2.1 批次 13a：TTFT 进遥测 JSON（不新增列/不迁移 schema）
+  if (timing && typeof timing === 'object' && timing.ttftMs != null) payload.timing = { ttftMs: Number(timing.ttftMs) };
   return Object.keys(payload).length ? payload : null;
 }
 
@@ -44,6 +46,7 @@ function unpackTelemetry(value) {
     cache: cache && typeof cache === 'object' ? cache : null,
     cost: payload.cost ? normalizeCost(payload.cost) : null,
     attribution: payload.attribution ? normalizeAttribution(payload.attribution) : null,
+    timing: payload.timing && typeof payload.timing === 'object' ? payload.timing : null,
   };
 }
 
@@ -357,6 +360,7 @@ function listConversations(limit) { return stmt.listConv.all(limit || 200); }
 function deleteConversation(id) {
   stmt.delMsgByConv.run(id);
   stmt.delConv.run(id);
+  markFtsDirty();
 }
 function touchConversation(id, title, updatedAt) {
   stmt.touchConv.run({ id, title: title || '', updated_at: Number(updatedAt) || Date.now() });
@@ -382,8 +386,29 @@ function replaceMessages(convId, msgs) {
     });
   });
   run(convId, msgs || []);
+  markFtsDirty();
 }
 function getMessages(convId) { return stmt.getMsg.all(convId); }
+
+// v1.2.1 批次 5b：FTS5 按需重建（trigram 不支持增量 delete/update，故不用触发器）。
+// 任何写入 messages 的路径调用 markFtsDirty；searchLocal 走 FTS 前若脏则整表重建。
+function markFtsDirty() {
+  try {
+    db.prepare("INSERT INTO kv_meta(key,value) VALUES('fts_dirty','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
+  } catch (_) {}
+}
+function ensureFtsFresh() {
+  try {
+    const dirty = db.prepare("SELECT value FROM kv_meta WHERE key='fts_dirty'").get();
+    if (dirty && dirty.value === '1') {
+      db.exec('DELETE FROM messages_fts');
+      db.exec('INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages');
+      const maxRow = Number(db.prepare('SELECT COALESCE(MAX(rowid),0) AS r FROM messages').get().r) || 0;
+      db.prepare("UPDATE kv_meta SET value=? WHERE key='fts_max_rowid'").run(String(maxRow));
+      db.prepare("UPDATE kv_meta SET value='0' WHERE key='fts_dirty'").run();
+    }
+  } catch (_) {}
+}
 
 function upsertAccount(a) {
   const now = Date.now();
@@ -739,6 +764,28 @@ function appendAgentEvent(runId, type, payload, seq) {
   return next;
 }
 
+// v1.2.1 批次 13c：事件合批落库——单事务写入一批事件（引擎 emit 队列 50ms/16 条冲刷一次），
+// 返回各事件 seq（与 appendAgentEvent 的逐条语义一致：seq 按 run 内递增）。
+function appendAgentEvents(runId, events) {
+  if (!db || !Array.isArray(events) || !events.length) return [];
+  const runKey = String(runId || '');
+  const write = db.transaction((items) => {
+    const seqs = [];
+    for (const ev of items) {
+      const next = (stmt.maxEventSeq.get(runKey) || { m: 0 }).m + 1;
+      stmt.insEvent.run({
+        id: 'ev_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        run_id: runKey, seq: next, type: String((ev && ev.type) || ''),
+        payload_json: (ev && ev.data) != null ? JSON.stringify(ev.data) : null,
+        created_at: Date.now(),
+      });
+      seqs.push(next);
+    }
+    return seqs;
+  });
+  try { return write(events); } catch (_) { return null; }
+}
+
 function listAgentEvents(runId) {
   try {
     return stmt.listEvents.all(String(runId || '')).map((row) => ({
@@ -956,11 +1003,12 @@ function recordModelCallMetric(metric) {
     rootRunId: m.rootRunId || m.runId,
   });
   const id = String(m.id || 'mc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  const timing = m.ttftMs != null ? { ttftMs: Number(m.ttftMs) } : null; // v1.2.1 批次 13a
   stmt.insModelCallMetric.run({
     id, run_id: String(m.runId || ''), root_run_id: String(m.rootRunId || m.runId || ''), scope: String(m.scope || 'agent'), call_type: String(m.callType || 'chat'),
     model_id: String(m.modelId || ''), provider: String(m.provider || m.providerRef || ''), request_id: String(m.requestId || ''),
     input_tokens: usage.inputTokens == null ? null : usage.inputTokens, output_tokens: usage.outputTokens == null ? null : usage.outputTokens, reasoning_tokens: usage.reasoningTokens == null ? null : usage.reasoningTokens,
-    cache_json: packTelemetry(usage.cache, cost, attribution) ? JSON.stringify(packTelemetry(usage.cache, cost, attribution)) : null, cost_usd: cost.totalUsd,
+    cache_json: packTelemetry(usage.cache, cost, attribution, timing) ? JSON.stringify(packTelemetry(usage.cache, cost, attribution, timing)) : null, cost_usd: cost.totalUsd,
     latency_ms: m.latencyMs == null ? null : Number(m.latencyMs), queue_wait_ms: m.queueWaitMs == null ? null : Number(m.queueWaitMs),
     status: String(m.status || 'completed'), error_type: String(m.errorType || ''), started_at: Number(m.startedAt) || Date.now(), finished_at: Number(m.finishedAt) || Date.now(),
   });
@@ -974,7 +1022,7 @@ function listModelCallMetrics(runId) {
       return {
       id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type, modelId: row.model_id, provider: row.provider,
       requestId: row.request_id, inputTokens: row.input_tokens == null ? null : row.input_tokens, outputTokens: row.output_tokens == null ? null : row.output_tokens, reasoningTokens: row.reasoning_tokens == null ? null : row.reasoning_tokens,
-      cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution, costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
+      cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution, costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, ttftMs: telemetry.timing ? telemetry.timing.ttftMs : null, status: row.status, errorType: row.error_type,
       startedAt: row.started_at, finishedAt: row.finished_at,
       };
     });
@@ -990,7 +1038,7 @@ function listModelCallMetricsByRoot(rootRunId) {
       return {
       id: row.id, runId: row.run_id, rootRunId: row.root_run_id, scope: row.scope, callType: row.call_type, modelId: row.model_id, provider: row.provider,
       requestId: row.request_id, inputTokens: row.input_tokens == null ? null : row.input_tokens, outputTokens: row.output_tokens == null ? null : row.output_tokens, reasoningTokens: row.reasoning_tokens == null ? null : row.reasoning_tokens,
-      cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution, costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, status: row.status, errorType: row.error_type,
+      cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution, costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd, latencyMs: row.latency_ms, queueWaitMs: row.queue_wait_ms, ttftMs: telemetry.timing ? telemetry.timing.ttftMs : null, status: row.status, errorType: row.error_type,
       startedAt: row.started_at, finishedAt: row.finished_at,
       };
     });
@@ -1007,7 +1055,7 @@ function modelCallMetricFromRow(row) {
     reasoningTokens: row.reasoning_tokens == null ? null : row.reasoning_tokens,
     cache: telemetry.cache, cost: telemetry.cost, attribution: telemetry.attribution,
     costUsd: row.cost_usd == null ? (telemetry.cost && telemetry.cost.totalUsd) : row.cost_usd,
-    latencyMs: row.latency_ms == null ? null : row.latency_ms, queueWaitMs: row.queue_wait_ms == null ? null : row.queue_wait_ms,
+    latencyMs: row.latency_ms == null ? null : row.latency_ms, queueWaitMs: row.queue_wait_ms == null ? null : row.queue_wait_ms, ttftMs: telemetry.timing ? telemetry.timing.ttftMs : null,
     status: row.status, errorType: row.error_type, startedAt: row.started_at, finishedAt: row.finished_at,
   };
 }
@@ -1083,6 +1131,9 @@ function listModelCallMetricsSummary(options) {
   const since = days > 0 ? Date.now() - days * 86400000 : 0;
   try {
     const where = since > 0 ? 'WHERE started_at >= ' + Number(since) : '';
+    // v1.2.1 批次 13a：平均 TTFT 从遥测 JSON 提取（JSON1 不可用时降级为不含该列）
+    let ttftExpr = '';
+    try { db.prepare("SELECT json_extract('{}', '$.timing') AS v").get(); ttftExpr = ", CAST(AVG(json_extract(cache_json,'$.timing.ttftMs')) AS INTEGER) AS avgTtftMs"; } catch (_) {}
     const items = db.prepare(`
       SELECT COALESCE(NULLIF(model_id,''),'unknown') AS model,
              COUNT(*) AS calls,
@@ -1090,7 +1141,7 @@ function listModelCallMetricsSummary(options) {
              SUM(COALESCE(input_tokens,0)) AS inTokens,
              SUM(COALESCE(output_tokens,0)) AS outTokens,
              SUM(COALESCE(reasoning_tokens,0)) AS thinkTokens,
-             CAST(AVG(COALESCE(latency_ms,0)) AS INTEGER) AS avgMs
+             CAST(AVG(COALESCE(latency_ms,0)) AS INTEGER) AS avgMs${ttftExpr}
       FROM model_call_metrics ${where}
       GROUP BY model_id
       ORDER BY calls DESC, model ASC LIMIT 100`).all();
@@ -1131,12 +1182,28 @@ function searchLocal(query, options) {
     params.push(...values);
   };
   try {
-      add('conversation', `SELECT c.id,c.title,c.updated_at,
-        CASE WHEN c.title LIKE ? ESCAPE '\\' THEN c.title ELSE COALESCE(m.content,'') END AS snippet,
-        NULL AS thread_id, NULL AS project_id
-        FROM conversations c LEFT JOIN messages m ON m.conv_id=c.id
-        WHERE c.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\'
-        GROUP BY c.id`, [like, like, like]);
+      // v1.2.1 批次 5b：消息正文走 FTS5（trigram，3+ 字符中文/英文子串），标题仍用 LIKE。
+      // 短查询（<3 字符）或含 FTS 特殊字符时回退全 LIKE，保证 1-2 字中文与通配符语义不回归。
+      let ftsOk = false;
+      try { ftsOk = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'").get(); } catch (_) {}
+      const ftsEligible = ftsOk && text.length >= 3 && !/[\\%_"']/.test(text);
+      if (ftsEligible) {
+        ensureFtsFresh(); // 有消息写入后先按需重建，再走 MATCH
+        const match = '"' + text.replace(/"/g, '""') + '"';
+        add('conversation', `SELECT c.id,c.title,c.updated_at,
+          CASE WHEN c.title LIKE ? ESCAPE '\\' THEN c.title ELSE COALESCE(m.content,'') END AS snippet,
+          NULL AS thread_id, NULL AS project_id
+          FROM conversations c LEFT JOIN messages m ON m.conv_id=c.id
+          WHERE c.title LIKE ? ESCAPE '\\' OR m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)
+          GROUP BY c.id`, [like, like, match]);
+      } else {
+        add('conversation', `SELECT c.id,c.title,c.updated_at,
+          CASE WHEN c.title LIKE ? ESCAPE '\\' THEN c.title ELSE COALESCE(m.content,'') END AS snippet,
+          NULL AS thread_id, NULL AS project_id
+          FROM conversations c LEFT JOIN messages m ON m.conv_id=c.id
+          WHERE c.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\'
+          GROUP BY c.id`, [like, like, like]);
+      }
       add('document', `SELECT id,name,created_at,
         CASE WHEN name LIKE ? ESCAPE '\\' THEN name ELSE COALESCE(text,'') END AS snippet,
         NULL AS thread_id, NULL AS project_id
@@ -1335,7 +1402,7 @@ const StorageService = {
   clearAll, transaction,
   // v1.1.0（M1）：Agent Run 持久化
   createAgentRun, updateAgentRun, listAgentRuns, getAgentRun, listAgentRunTree,
-   appendAgentEvent, listAgentEvents, listAgentEventsPage, listAgentTracePage,
+   appendAgentEvent, appendAgentEvents, listAgentEvents, listAgentEventsPage, listAgentTracePage,
   upsertAgentRunMetrics, getAgentRunMetrics, aggregateAgentRunMetrics, recordModelCallMetric, listModelCallMetrics, listModelCallMetricsByRoot, listModelCallMetricsPage, listModelCallMetricsFiltered, searchLocal, exportAgentTrace,
   listModelCallMetricsSummary,
   upsertWorkingState, getWorkingState,

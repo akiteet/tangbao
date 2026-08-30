@@ -21,6 +21,7 @@ const TESTS = [
   'test/agent-runtime/schema-migration-real.test.js', // v1.2.0 批次 2：迁移真 SQLite 幂等
   'test/agent-runtime/fulltext-search.test.js', // v1.2.0 批次 4b：消息正文全文检索 + 片段窗口化
   'test/agent-runtime/usage-metrics-summary.test.js', // v1.2.0 批次 5：用量成本仪表盘聚合
+  'test/agent-runtime/fts5-search.test.js', // v1.2.1 批次 5b：FTS5 全文索引（迁移 17 + 触发器同步 + MATCH 加速）
 ];
 
 function main() {

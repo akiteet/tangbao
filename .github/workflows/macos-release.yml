@@ -11,7 +11,7 @@ on:
       release_tag:
         description: Existing GitHub Release to receive the installers
         required: true
-        default: v1.2.0
+        default: v1.2.1
         type: string
       upload_release:
         description: Upload installers to the existing release
