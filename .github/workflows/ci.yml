@@ -38,7 +38,10 @@ jobs:
       # npm ci 已安装依赖；这些检查只验证语法、评测清单和静态运行时锚点。
       - name: Syntax check all JS
         run: |
-          find src test scripts -name '*.js' 2>/dev/null | xargs -r -n1 node --check
+          find src test scripts -name '*.js' -not -path 'src/renderer/pet/*' 2>/dev/null | xargs -r -n1 node --check
+          # 桌宠渲染层是 ES module（.js 后缀）：node 18 无模块语法自动识别，显式按 module 检查
+          for f in src/renderer/pet/*.js; do [ -e "$f" ] || continue; node --input-type=module --check - < "$f"; done
+          find vendor -name '*.mjs' 2>/dev/null | while read -r f; do node --input-type=module --check - < "$f"; done
           node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('pkg JSON OK')"
       - name: Eval task set readable
         run: node scripts/bench.js --list
